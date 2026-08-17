@@ -450,10 +450,23 @@ tr.row-flash {
 /* link column preview: the text acts as the normal click-to-edit trigger
    (same as text/phone/company), the 🔗 icon is a second, independent
    click target that opens the URL — stopPropagation on the icon itself is
-   what keeps "open" from also triggering "select/edit this cell". */
-.cell-link {
+   what keeps "open" from also triggering "select/edit this cell".
+
+   This inner wrapper is deliberately NOT named .cell-link — that class is
+   already the *cell's own* `cell-${column.type}` class (see the
+   min/max-width rule above, which needs to keep targeting the actual
+   <td>). Naming the inner div the same thing put `display: flex` directly
+   on the <td> itself via class collision, not just on this wrapper — the
+   exact "display: flex on a <td> silently breaks table-layout: fixed"
+   trap documented elsewhere in this file (the Calls tab hit the same
+   thing), and it broke this column's *row height*, not just column
+   width: rows with a link cell measured visibly shorter than their own
+   <tr>, desyncing every row below the first one in a real table. */
+.cell-link-inner {
   display: flex;
-  align-items: stretch;
+  align-items: center;
+  height: 100%;
+  overflow: hidden;
 }
 
 .cell-link-text {
@@ -511,6 +524,15 @@ tr.row-flash {
 .cell-empty {
   color: var(--text-muted);
   font-style: italic;
+}
+
+/* Search box match highlighting (utils/highlight.tsx) — the app's own
+   accent color instead of <mark>'s default browser yellow, matching the
+   same "accent at low opacity" language as .cell-in-range. */
+.cell-highlight {
+  background: rgba(47, 111, 237, 0.22);
+  color: inherit;
+  border-radius: 2px;
 }
 
 .date-cell {

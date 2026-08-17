@@ -14,6 +14,7 @@ import { combineDateTime, getDatePart, getTimePart } from '../../utils/date';
 import { getLatestNoteText } from '../../utils/noteHistory';
 import { getContactsSummary } from '../../utils/contacts';
 import { ensureProtocol } from '../../utils/link';
+import { highlightMatches } from '../../utils/highlight';
 import { EXCEL_CELL_LIMIT } from '../../constants';
 
 interface DataCellProps {
@@ -34,6 +35,10 @@ interface DataCellProps {
   /** note/contact only — opens CellHoverEditor for this cell. Named for
    * what it does, not how it's triggered; see the click handler below. */
   onOpenEditor: (anchor: HTMLElement) => void;
+  /** The active search box query, trimmed — only ever set on rows the
+   * search has already matched, so this just highlights *where* the match
+   * is within that row's cells. Undefined/empty means no active search. */
+  highlightQuery?: string;
 }
 
 function DataCellImpl({
@@ -45,6 +50,7 @@ function DataCellImpl({
   onSelect,
   onExtend,
   onOpenEditor,
+  highlightQuery,
 }: DataCellProps) {
   const updateCell = useTableStore((s) => s.updateCell);
   const showToast = useToastStore((s) => s.show);
@@ -220,7 +226,11 @@ function DataCellImpl({
           className={`cell-preview ${color ? '' : 'cell-preview-hoverable'}`}
           tabIndex={-1}
         >
-          {previewText || <span className="cell-empty">{column.type === 'note' ? '+ note' : '+ contact'}</span>}
+          {previewText ? (
+            highlightQuery ? highlightMatches(previewText, highlightQuery) : previewText
+          ) : (
+            <span className="cell-empty">{column.type === 'note' ? '+ note' : '+ contact'}</span>
+          )}
         </button>
       </td>
     );
@@ -275,9 +285,13 @@ function DataCellImpl({
     const href = storedValue ? ensureProtocol(storedValue) : null;
     return (
       <td className={cellClassName} style={cellStyle} onMouseDown={onSelect} onMouseEnter={onExtend}>
-        <div className="cell-link">
+        <div className="cell-link-inner">
           <button type="button" className={`cell-preview cell-link-text ${color ? '' : 'cell-preview-hoverable'}`} tabIndex={-1}>
-            {storedValue || <span className="cell-empty">+ link</span>}
+            {storedValue ? (
+              highlightQuery ? highlightMatches(storedValue, highlightQuery) : storedValue
+            ) : (
+              <span className="cell-empty">+ link</span>
+            )}
           </button>
           {href && (
             <a
@@ -300,7 +314,7 @@ function DataCellImpl({
   return (
     <td className={cellClassName} style={cellStyle} onMouseDown={onSelect} onMouseEnter={onExtend}>
       <button type="button" className={`cell-preview ${color ? '' : 'cell-preview-hoverable'}`} tabIndex={-1}>
-        {storedValue}
+        {highlightQuery ? highlightMatches(storedValue, highlightQuery) : storedValue}
       </button>
     </td>
   );
@@ -320,13 +334,17 @@ function DataCellImpl({
 // compared: they're fresh closures every render (they close over this
 // cell's row/col index), but behave identically to the previous render's
 // closures whenever the compared props are unchanged, so skipping
-// re-render on their identity alone is safe.
+// re-render on their identity alone is safe. highlightQuery IS compared —
+// unlike the callbacks, its value actually changes what gets rendered
+// (which substring, if any, is wrapped in <mark>), so a stale skip here
+// would leave old highlights on screen after the search box changes.
 export const DataCell = memo(DataCellImpl, (prev, next) => {
   return (
     prev.row === next.row &&
     prev.column === next.column &&
     prev.selected === next.selected &&
     prev.editable === next.editable &&
-    prev.inRange === next.inRange
+    prev.inRange === next.inRange &&
+    prev.highlightQuery === next.highlightQuery
   );
 });

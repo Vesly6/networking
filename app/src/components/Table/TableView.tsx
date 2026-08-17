@@ -163,6 +163,7 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const tableScrollRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   // Mirrors of isRowRangeDragging/isColRangeDragging, kept in sync so the
   // mouseup effect below (registered once, empty deps) can read a
@@ -609,6 +610,25 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [undo, redo]);
 
+  // Ctrl/Cmd+F jumps into the app's own search box instead of the
+  // browser's native find — which, against this row-virtualized table,
+  // mostly fails anyway: native find can only match text actually in the
+  // DOM, and almost all rows in a real-sized table aren't mounted at any
+  // given moment. Always intercepted while this view is mounted (not
+  // gated by withinTableFocus() like undo/redo) — there's nothing else on
+  // this screen a native browser find would usefully serve instead.
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
   const applyColor = (color: string | null) => {
     if (!rangeBounds) return;
     const { minR, maxR, minC, maxC } = rangeBounds;
@@ -955,11 +975,15 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
           }}
         />
         <input
+          ref={searchInputRef}
           className="search-input"
           type="search"
-          placeholder="Search the whole table…"
+          placeholder="Search the whole table… (Ctrl/Cmd+F)"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') e.currentTarget.blur();
+          }}
         />
         <button type="button" title="Undo (Ctrl+Z)" disabled={!canUndo} onClick={undo}>
           ↶
@@ -1284,6 +1308,7 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
                         onSelect={(e) => handleCellMouseDown(index, colIndex, false, e)}
                         onExtend={(e) => handleCellMouseEnter(index, colIndex, e)}
                         onOpenEditor={(anchor) => openCellEditor(row.id, col.id, anchor)}
+                        highlightQuery={search.trim() || undefined}
                       />
                     ))}
                   </tr>
