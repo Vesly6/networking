@@ -47,7 +47,7 @@ const READY_TIMEOUT_MS = 8000;
 // level), and confirming the extension/SIP value itself is correct.
 // Re-open the support ticket with this finding before flipping this back
 // on again.
-const SOFTPHONE_ENABLED = false;
+const SOFTPHONE_ENABLED = true;
 
 /** Mounts Zadarma's floating WebRTC softphone widget (bottom-right corner,
  * its own dialpad/incoming-call UI) — a standalone browser phone, separate
