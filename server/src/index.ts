@@ -4,6 +4,7 @@ import cors from 'cors';
 import { ZadarmaApiError, getStatistics, requestRecording, requestCallback, getWebrtcKey } from './zadarma.js';
 import { TranscriptionError, transcribeFromUrl } from './elevenlabs.js';
 import { ContactParseError, parseContactText, SummarizeError, summarizeCall } from './openai.js';
+import { AuthError, checkCredentials, issueToken, requireAuth } from './auth.js';
 
 const PORT = Number(process.env.PORT) || 4000;
 // Binds 127.0.0.1 by default — deliberately not reachable from the local
@@ -34,6 +35,33 @@ function asyncHandler(fn: (req: Request, res: Response) => Promise<void>) {
 app.get('/health', (_req, res) => {
   res.json({ ok: true });
 });
+
+// Single shared account (this is a one-operator tool, not multi-tenant) —
+// checkCredentials() accepts either AUTH_PASSWORD or AUTH_RECOVERY_PASSWORD
+// for the same username. Logging in with the recovery password still
+// issues a normal token (there's no separate "reset flow" that mutates
+// server state — see CLAUDE.md for why, given this runs on a free-tier
+// host with no persistent disk); the frontend just tells the user to
+// update AUTH_PASSWORD in the hosting dashboard when `viaRecovery` comes
+// back true, the same place every other secret in this app already lives.
+app.post(
+  '/api/auth/login',
+  asyncHandler(async (req, res) => {
+    const username = typeof req.body?.username === 'string' ? req.body.username : '';
+    const password = typeof req.body?.password === 'string' ? req.body.password : '';
+    const match = checkCredentials(username, password);
+    if (!match) {
+      res.status(401).json({ error: 'Incorrect username or password' });
+      return;
+    }
+    res.json({ token: issueToken(username), viaRecovery: match === 'recovery' });
+  }),
+);
+
+// Everything below requires a valid session token — a visitor who never
+// loads the frontend at all (hits these routes directly) is blocked here
+// too, not just by the login screen.
+app.use(requireAuth);
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
 
@@ -161,6 +189,11 @@ app.post(
 );
 
 app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+  if (err instanceof AuthError) {
+    console.error('Auth config error:', err.message);
+    res.status(500).json({ error: err.message });
+    return;
+  }
   if (err instanceof ZadarmaApiError) {
     console.error('Zadarma API error:', err.message, err.raw);
     res.status(502).json({ error: err.message });

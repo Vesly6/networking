@@ -1,3 +1,5 @@
+import { getAuthToken, notifyUnauthorized } from './authToken';
+
 // Shared by every feature that talks to the proxy server (calls, contacts
 // AI-parsing, click-to-call) — one place for the base URL and the
 // "can't reach it" error message, so every caller fails the same way.
@@ -12,9 +14,11 @@ const LOCAL_API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:40
 const IS_LOCAL_DEFAULT = !import.meta.env.VITE_API_BASE_URL;
 
 export async function localApiRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const token = getAuthToken();
+  const headers = { ...(init?.headers ?? {}), ...(token ? { Authorization: `Bearer ${token}` } : {}) };
   let res: Response;
   try {
-    res = await fetch(`${LOCAL_API_BASE}${path}`, init);
+    res = await fetch(`${LOCAL_API_BASE}${path}`, { ...init, headers });
   } catch {
     throw new Error(
       IS_LOCAL_DEFAULT
@@ -22,6 +26,7 @@ export async function localApiRequest<T>(path: string, init?: RequestInit): Prom
         : `Could not reach the server at ${LOCAL_API_BASE}`,
     );
   }
+  if (res.status === 401) notifyUnauthorized();
   const body = await res.json().catch(() => ({}));
   if (!res.ok) {
     throw new Error(body.error ?? `Request failed (${res.status})`);

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useWorkspaceStore } from '../../store/useWorkspaceStore';
+import { useAuthStore } from '../../store/useAuthStore';
 import { confirmDeleteTable } from '../../utils/confirmDeleteTable';
 import { countRowsForTable } from '../../db/db';
 
@@ -12,6 +13,7 @@ export function WorkspaceView({ onOpenTable }: WorkspaceViewProps) {
   const createTable = useWorkspaceStore((s) => s.createTable);
   const renameTable = useWorkspaceStore((s) => s.renameTable);
   const deleteTable = useWorkspaceStore((s) => s.deleteTable);
+  const logout = useAuthStore((s) => s.logout);
 
   const [rowCounts, setRowCounts] = useState<Record<string, number>>({});
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -40,9 +42,14 @@ export function WorkspaceView({ onOpenTable }: WorkspaceViewProps) {
     <div className="workspace-view">
       <div className="workspace-header">
         <h2>Workspace</h2>
-        <button type="button" className="primary" onClick={handleCreate}>
-          + New table
-        </button>
+        <div className="workspace-header-actions">
+          <button type="button" className="primary" onClick={handleCreate}>
+            + New table
+          </button>
+          <button type="button" onClick={logout}>
+            Log out
+          </button>
+        </div>
       </div>
 
       {tables.length === 0 ? (

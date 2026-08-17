@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTableStore } from './store/useTableStore';
 import { useWorkspaceStore } from './store/useWorkspaceStore';
+import { useAuthStore } from './store/useAuthStore';
 import { TableView } from './components/Table/TableView';
 import { CalendarView } from './components/Calendar/CalendarView';
 import { WorkspaceView } from './components/Workspace/WorkspaceView';
@@ -9,6 +10,7 @@ import { Toast } from './components/Toast';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { Softphone } from './components/Softphone';
 import { SheetTabs } from './components/SheetTabs';
+import { LoginScreen } from './components/LoginScreen';
 import { getNextActionColumn } from './utils/row';
 import { isOverdue, isDueToday } from './utils/date';
 import './App.css';
@@ -16,6 +18,11 @@ import './App.css';
 type Tab = 'table' | 'calendar' | 'calls';
 
 function App() {
+  const token = useAuthStore((s) => s.token);
+  const logout = useAuthStore((s) => s.logout);
+  const loggedInViaRecovery = useAuthStore((s) => s.loggedInViaRecovery);
+  const dismissRecoveryNotice = useAuthStore((s) => s.dismissRecoveryNotice);
+
   const workspaceReady = useWorkspaceStore((s) => s.ready);
   const initWorkspace = useWorkspaceStore((s) => s.init);
   const tables = useWorkspaceStore((s) => s.tables);
@@ -72,6 +79,14 @@ function App() {
     setFocusRowId(rowId);
   }, []);
 
+  // Gated before workspace loading even starts — nothing in this app is
+  // meant to be reachable without logging in first, and checking here
+  // (rather than after workspaceReady) avoids a flash of "Loading…" before
+  // the login form appears on a fresh visit.
+  if (!token) {
+    return <LoginScreen />;
+  }
+
   if (!workspaceReady) {
     return (
       <div className="app-loading">
@@ -90,6 +105,15 @@ function App() {
           time you go back to the workspace list and open a table again. */}
       <Softphone />
       <ConfirmDialog />
+      {loggedInViaRecovery && (
+        <div className="recovery-banner">
+          Logged in with your recovery password — update your main password in Render's dashboard (AUTH_PASSWORD) when
+          you get a chance.
+          <button type="button" onClick={dismissRecoveryNotice}>
+            Dismiss
+          </button>
+        </div>
+      )}
       {!activeTable ? (
         <div className="app">
           <WorkspaceView onOpenTable={setActiveTable} />
@@ -148,6 +172,9 @@ function App() {
                 Calls
               </button>
             </nav>
+            <button type="button" className="logout-btn" onClick={logout}>
+              Log out
+            </button>
           </header>
 
           <main className="app-main">
