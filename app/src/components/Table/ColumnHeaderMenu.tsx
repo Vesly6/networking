@@ -1,5 +1,6 @@
 import type { Column } from '../../types';
 import { useTableStore } from '../../store/useTableStore';
+import { confirmDialog } from '../../store/useConfirmStore';
 import { ContextMenu } from '../ContextMenu';
 
 interface ColumnHeaderMenuProps {
@@ -51,10 +52,12 @@ export function ColumnHeaderMenu({ x, y, columns, targetIds, onSort, onClose }: 
       <button
         type="button"
         className="context-menu-item context-menu-danger"
-        onClick={() => {
-          if (window.confirm(`Delete ${count > 1 ? `these ${count} columns` : 'this column'}? Data will be lost.`)) {
-            run(() => removeColumns(targetIds));
-          }
+        onClick={async () => {
+          const ok = await confirmDialog({
+            message: `Delete ${count > 1 ? `these ${count} columns` : 'this column'}? Data will be lost.`,
+            danger: true,
+          });
+          if (ok) run(() => removeColumns(targetIds));
         }}
       >
         Delete column{plural}

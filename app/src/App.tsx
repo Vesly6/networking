@@ -6,7 +6,9 @@ import { CalendarView } from './components/Calendar/CalendarView';
 import { WorkspaceView } from './components/Workspace/WorkspaceView';
 import { CallsView } from './components/Calls/CallsView';
 import { Toast } from './components/Toast';
+import { ConfirmDialog } from './components/ConfirmDialog';
 import { Softphone } from './components/Softphone';
+import { SheetTabs } from './components/SheetTabs';
 import { getNextActionColumn } from './utils/row';
 import { isOverdue, isDueToday } from './utils/date';
 import './App.css';
@@ -87,6 +89,7 @@ function App() {
           down and reconnecting the widget (burning a fresh 72h key) every
           time you go back to the workspace list and open a table again. */}
       <Softphone />
+      <ConfirmDialog />
       {!activeTable ? (
         <div className="app">
           <WorkspaceView onOpenTable={setActiveTable} />
@@ -161,6 +164,7 @@ function App() {
             )}
           </main>
 
+          <SheetTabs />
           <Toast />
         </div>
       )}

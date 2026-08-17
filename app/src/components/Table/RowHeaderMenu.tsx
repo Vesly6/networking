@@ -1,5 +1,6 @@
 import type { Row } from '../../types';
 import { useTableStore } from '../../store/useTableStore';
+import { confirmDialog } from '../../store/useConfirmStore';
 import { ContextMenu } from '../ContextMenu';
 
 interface RowHeaderMenuProps {
@@ -60,10 +61,12 @@ export function RowHeaderMenu({ x, y, rows, targetIds, insertEnabled, onClose }:
       <button
         type="button"
         className="context-menu-item context-menu-danger"
-        onClick={() => {
-          if (window.confirm(`Delete ${count > 1 ? `these ${count} rows` : 'this row'}?`)) {
-            run(() => removeRows(targetIds));
-          }
+        onClick={async () => {
+          const ok = await confirmDialog({
+            message: `Delete ${count > 1 ? `these ${count} rows` : 'this row'}?`,
+            danger: true,
+          });
+          if (ok) run(() => removeRows(targetIds));
         }}
       >
         Delete row{plural}

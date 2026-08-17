@@ -79,6 +79,64 @@
   border-color: var(--border);
 }
 
+/* Excel-style sheet tabs, bottom of the window — a faster way to reach
+   useWorkspaceStore's table list than going back to the Workspace screen.
+   overflow-x: auto (not wrap) so a long list of tables scrolls
+   horizontally instead of growing the bar to multiple rows, matching
+   Excel's own behavior. */
+.sheet-tabs {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.35rem 0.6rem;
+  border-top: 1px solid var(--border-strong);
+  background: var(--bg-alt);
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+
+.sheet-tab,
+.sheet-tab-input {
+  flex-shrink: 0;
+  font-size: 0.8rem;
+  padding: 0.3em 0.7em;
+  border-radius: 5px;
+  white-space: nowrap;
+}
+
+.sheet-tab {
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+}
+.sheet-tab:hover {
+  background: var(--bg-hover);
+}
+.sheet-tab-active {
+  background: var(--bg);
+  color: var(--text);
+  font-weight: 600;
+  border-color: var(--border);
+}
+
+.sheet-tab-input {
+  border: 1px solid var(--accent);
+  width: 10ch;
+}
+
+.sheet-tab-add {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-weight: 600;
+  padding: 0.3em 0.6em;
+}
+.sheet-tab-add:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
 .tab-badge {
   background: var(--accent);
   color: var(--accent-contrast);
@@ -383,9 +441,36 @@ tr.row-flash {
 .cell-text,
 .cell-phone,
 .cell-company,
-.cell-note {
+.cell-note,
+.cell-link {
   min-width: 140px;
   max-width: 280px;
+}
+
+/* link column preview: the text acts as the normal click-to-edit trigger
+   (same as text/phone/company), the 🔗 icon is a second, independent
+   click target that opens the URL — stopPropagation on the icon itself is
+   what keeps "open" from also triggering "select/edit this cell". */
+.cell-link {
+  display: flex;
+  align-items: stretch;
+}
+
+.cell-link-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.cell-link-open {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  padding: 0 0.5em;
+  text-decoration: none;
+  color: var(--text-muted);
+}
+.cell-link-open:hover {
+  color: var(--accent);
 }
 
 .cell-preview {
@@ -853,6 +938,16 @@ tr.row-drop-end td {
   font-size: 1.05rem;
 }
 
+.confirm-dialog {
+  max-width: 380px;
+}
+
+.confirm-dialog-message {
+  margin: 0;
+  font-size: 0.9rem;
+  white-space: pre-line;
+}
+
 .csv-import-mapping-hint {
   margin: 0;
   font-size: 0.82rem;
@@ -953,6 +1048,14 @@ tr.row-drop-end td {
   padding: 0;
   display: flex;
   flex-direction: column;
+  /* maxHeight is set inline (CellHoverEditor.tsx's place()) to the actual
+     remaining room below the popup's top, not a fixed vh guess — a
+     position:fixed element can't be reached by scrolling the page if it
+     grows past the viewport edge, so the popup itself must never exceed
+     that budget. overflow: hidden + the scrolling child below
+     (.cell-hover-history) is what turns "the popup grows forever" into
+     "the list scrolls within a fixed-size popup." */
+  overflow: hidden;
 }
 
 /* CellClickPopover (double-click, plain text/phone) — sits inside the
@@ -989,14 +1092,50 @@ tr.row-drop-end td {
   border-bottom: 1px solid var(--border);
   border-radius: 0;
   padding: 0.45em 0.6em;
+  flex-shrink: 0;
 }
 .cell-hover-new-entry:focus {
   box-shadow: none;
   background: var(--today-bg);
 }
 
+/* Quick-log tag buttons under "Add a note…" (CellHoverEditor note mode) —
+   one click logs a dated entry with just that word, for the handful of
+   things actually logged constantly (sent an email, had a call). */
+.cell-hover-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-alt);
+  flex-shrink: 0;
+}
+
+.cell-hover-tag {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  border-radius: 999px;
+  padding: 0.25em 0.7em;
+  font-size: 0.76rem;
+  color: var(--text);
+}
+.cell-hover-tag:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
 .cell-hover-history {
-  max-height: 45vh;
+  /* Was a flat `max-height: 45vh` — fine on its own, but did nothing to
+     stop the *editor* (.cell-hover-editor, see its own comment) from
+     growing past the viewport when combined with the contact-add form
+     above it. flex: 1 here makes this the one section that actually
+     shrinks/scrolls to fit whatever room the editor's own maxHeight
+     leaves after its fixed-size siblings (the add-note/add-contact
+     inputs) take their natural height — min-height: 0 is required for a
+     flex child to be allowed to shrink below its content size at all. */
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
 }
 
@@ -1076,6 +1215,7 @@ tr.row-drop-end td {
   padding: 0.5rem 0.6rem;
   border-bottom: 1px solid var(--border);
   background: var(--bg-alt);
+  flex-shrink: 0;
 }
 
 .cell-hover-contact-form input {
@@ -1211,6 +1351,9 @@ tr.row-drop-end td {
 .cell-hover-contact-structured-form {
   border-bottom: 1px solid var(--border);
   background: var(--bg-alt);
+  /* Keeps its natural height inside .cell-hover-editor's flex column —
+     .cell-hover-history is the only section that should shrink/scroll. */
+  flex-shrink: 0;
 }
 
 .cell-hover-contact-structured-label {
@@ -1258,6 +1401,7 @@ tr.row-drop-end td {
   padding: 0.3rem 0;
   background: var(--bg-alt);
   border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
 }
 
 /* Toast */

@@ -12,6 +12,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import type { Column, Row } from '../../types';
 import { useTableStore, type CellColorUpdate, type CellUpdate, type ImportColumnMapping } from '../../store/useTableStore';
 import { useToastStore } from '../../store/useToastStore';
+import { confirmDialog } from '../../store/useConfirmStore';
 import { DataCell } from './DataCell';
 import { ColorInput } from '../ColorInput';
 import { CellHoverEditor } from './CellHoverEditor';
@@ -882,9 +883,10 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
     requestAnimationFrame(() => scrollToRowId(id));
   };
 
-  const handleDeleteSelected = () => {
+  const handleDeleteSelected = async () => {
     if (selectedRowIds.size === 0) return;
-    if (window.confirm(`Delete the selected rows (${selectedRowIds.size})?`)) {
+    const ok = await confirmDialog({ message: `Delete the selected rows (${selectedRowIds.size})?`, danger: true });
+    if (ok) {
       removeRows(Array.from(selectedRowIds));
       setRowRangeAnchor(null);
       setRowRangeFocus(null);
@@ -1250,9 +1252,9 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
                           type="button"
                           className="row-delete"
                           title="Delete row"
-                          onClick={(e) => {
+                          onClick={async (e) => {
                             e.stopPropagation();
-                            if (window.confirm('Delete this row?')) removeRow(row.id);
+                            if (await confirmDialog({ message: 'Delete this row?', danger: true })) removeRow(row.id);
                           }}
                         >
                           ×

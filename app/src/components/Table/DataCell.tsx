@@ -13,6 +13,7 @@ import { useToastStore } from '../../store/useToastStore';
 import { combineDateTime, getDatePart, getTimePart } from '../../utils/date';
 import { getLatestNoteText } from '../../utils/noteHistory';
 import { getContactsSummary } from '../../utils/contacts';
+import { ensureProtocol } from '../../utils/link';
 import { EXCEL_CELL_LIMIT } from '../../constants';
 
 interface DataCellProps {
@@ -225,7 +226,7 @@ function DataCellImpl({
     );
   }
 
-  // text | phone | company — plain, single-value, single-click-to-edit.
+  // text | phone | company | link — plain, single-value, single-click-to-edit.
   // Click selects *and* immediately swaps the cell into a live `<input>`
   // (via the `editable` prop, computed by TableView from selection state),
   // matching an ordinary spreadsheet cell. Only the *one* currently-active
@@ -238,7 +239,7 @@ function DataCellImpl({
     return (
       <td className={cellClassName} style={cellStyle}>
         <input
-          type={column.type === 'phone' ? 'tel' : 'text'}
+          type={column.type === 'phone' ? 'tel' : column.type === 'link' ? 'url' : 'text'}
           autoFocus
           // A custom cell color is set here too, not just on the <td> above —
           // `.cell input:focus` in App.css paints an opaque `var(--bg)` the
@@ -260,6 +261,38 @@ function DataCellImpl({
             }
           }}
         />
+      </td>
+    );
+  }
+
+  // link's non-editable preview needs a second click target (the 🔗 icon)
+  // alongside the normal click-to-edit text, so "open the URL" and "edit
+  // the URL" are both one click away instead of one interaction fighting
+  // the other. Protocol is added only at the point of forming the actual
+  // href — the stored value (and what CSV export writes) stays exactly
+  // what the user typed, e.g. "google.com" with no "https://".
+  if (column.type === 'link') {
+    const href = storedValue ? ensureProtocol(storedValue) : null;
+    return (
+      <td className={cellClassName} style={cellStyle} onMouseDown={onSelect} onMouseEnter={onExtend}>
+        <div className="cell-link">
+          <button type="button" className={`cell-preview cell-link-text ${color ? '' : 'cell-preview-hoverable'}`} tabIndex={-1}>
+            {storedValue || <span className="cell-empty">+ link</span>}
+          </button>
+          {href && (
+            <a
+              href={href}
+              target="_blank"
+              rel="noreferrer"
+              className="cell-link-open"
+              title={href}
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+            >
+              🔗
+            </a>
+          )}
+        </div>
       </td>
     );
   }

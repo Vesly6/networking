@@ -14,6 +14,7 @@ import { formatHistoryTimestamp } from '../../utils/date';
 import { parseContactText } from '../../utils/contactsApi';
 import { requestCallback } from '../../utils/callsApi';
 import { useToastStore } from '../../store/useToastStore';
+import { confirmDialog } from '../../store/useConfirmStore';
 
 interface CellHoverEditorProps {
   anchor: HTMLElement;
@@ -31,6 +32,12 @@ interface CellHoverEditorProps {
 const MARGIN = 8;
 
 const EMPTY_CONTACT_FIELDS: ContactFormFields = { firstName: '', lastName: '', position: '', email: '', phone: '' };
+
+// Quick-log buttons for the common one-word entries in a call workflow
+// ("sent an email", "had a meeting") — each just adds a new dated note
+// entry with this exact text, same as typing it into "Add a note…" and
+// hitting Enter, just faster for the entries logged constantly.
+const NOTE_TAGS = ['Email', 'Email follow up', 'Meeting', 'Call follow up'];
 
 // Temporarily disabled on explicit request — kept (not deleted) since
 // callContact/requestCallback are meant to come back, not go away for
@@ -50,7 +57,7 @@ export function CellHoverEditor({
   onClose,
 }: CellHoverEditorProps) {
   const showToast = useToastStore((s) => s.show);
-  const [pos, setPos] = useState<{ top: number; left: number; width: number } | null>(null);
+  const [pos, setPos] = useState<{ top: number; left: number; width: number; maxHeight: number } | null>(null);
   const [newEntryDraft, setNewEntryDraft] = useState('');
   const [contactDraft, setContactDraft] = useState('');
   const [parsingContact, setParsingContact] = useState(false);
@@ -69,7 +76,17 @@ export function CellHoverEditor({
       const width = Math.max(rect.width, minWidth);
       const left = Math.max(MARGIN, Math.min(rect.left, window.innerWidth - width - MARGIN));
       const top = Math.max(MARGIN, Math.min(rect.top, window.innerHeight - MARGIN - 60));
-      setPos({ top, left, width });
+      // Previously only `top` was clamped into the viewport — nothing capped
+      // the editor's own height, so adding enough contacts/notes could grow
+      // it past the bottom of the screen. Since it's position:fixed, content
+      // past the viewport edge isn't reachable by scrolling the page at all
+      // (fixed elements don't move with page scroll) — it just became
+      // inaccessible. maxHeight is the actual remaining room below `top`;
+      // the CSS makes the contact/note list the one scrolling region within
+      // that budget (the add-contact form above it stays fixed in place),
+      // so it's "scroll the list," never "scroll the whole screen."
+      const maxHeight = window.innerHeight - top - MARGIN;
+      setPos({ top, left, width, maxHeight });
     };
     place();
     window.addEventListener('resize', place);
@@ -124,12 +141,20 @@ export function CellHoverEditor({
 
   const cancelContactEdit = () => setEditingContactId(null);
 
-  const saveContactEdit = () => {
+  const saveContactEdit = async () => {
     if (!editingContactId) return;
-    if (!window.confirm('Save changes to this contact?')) return;
+    if (!(await confirmDialog('Save changes to this contact?'))) return;
     const text = joinContactFields(editFields);
     if (text) onUpdateContact(editingContactId, text);
     setEditingContactId(null);
+  };
+
+  const removeNoteEntry = async (id: string) => {
+    if (await confirmDialog({ message: 'Delete this note entry?', danger: true })) onRemoveNoteEntry(id);
+  };
+
+  const removeContact = async (id: string) => {
+    if (await confirmDialog({ message: 'Delete this contact?', danger: true })) onRemoveContact(id);
   };
 
   const handleEditKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
@@ -189,6 +214,7 @@ export function CellHoverEditor({
     top: pos?.top ?? -9999,
     left: pos?.left ?? -9999,
     width: pos?.width,
+    maxHeight: pos?.maxHeight,
     visibility: pos ? 'visible' : 'hidden',
   };
 
@@ -214,6 +240,13 @@ export function CellHoverEditor({
               }
             }}
           />
+          <div className="cell-hover-tags">
+            {NOTE_TAGS.map((tag) => (
+              <button type="button" key={tag} className="cell-hover-tag" onClick={() => onAddNoteEntry(tag)}>
+                {tag}
+              </button>
+            ))}
+          </div>
           {parseNoteHistory(value).length > 0 && (
             <div className="cell-hover-history">
               {parseNoteHistory(value).map((entry) => (
@@ -254,7 +287,7 @@ export function CellHoverEditor({
                       className="cell-hover-history-remove"
                       title="Delete entry"
                       onClick={() => {
-                        if (window.confirm('Delete this note entry?')) onRemoveNoteEntry(entry.id);
+                        void removeNoteEntry(entry.id);
                       }}
                     >
                       ×
@@ -342,7 +375,7 @@ export function CellHoverEditor({
                         className="cell-hover-contact-structured-grid cell-hover-contact-edit-grid"
                         onSubmit={(e) => {
                           e.preventDefault();
-                          saveContactEdit();
+                          void saveContactEdit();
                         }}
                       >
                         <input
@@ -437,7 +470,7 @@ export function CellHoverEditor({
                           className="cell-hover-contact-remove"
                           title="Remove contact"
                           onClick={() => {
-                            if (window.confirm('Delete this contact?')) onRemoveContact(c.id);
+                            void removeContact(c.id);
                           }}
                         >
                           ×

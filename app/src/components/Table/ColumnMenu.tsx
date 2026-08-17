@@ -1,18 +1,10 @@
 import { useState } from 'react';
 import type { Column, ColumnType } from '../../types';
 import { useTableStore } from '../../store/useTableStore';
+import { confirmDialog } from '../../store/useConfirmStore';
 import { Popover } from '../Popover';
 import { ColorInput } from '../ColorInput';
-
-const TYPE_LABELS: Record<ColumnType, string> = {
-  text: 'Text',
-  phone: 'Phone',
-  company: 'Company',
-  note: 'Note',
-  contact: 'Contacts',
-  dropdown: 'Dropdown (status)',
-  date: 'Date',
-};
+import { TYPE_LABELS } from '../../utils/columnTypeLabels';
 
 interface ColumnMenuProps {
   column: Column;
@@ -140,8 +132,9 @@ export function ColumnMenu({ column, anchor, onClose }: ColumnMenuProps) {
         <button
           type="button"
           className="danger"
-          onClick={() => {
-            if (window.confirm(`Delete column "${column.name}"? Its data will be lost.`)) {
+          onClick={async () => {
+            const ok = await confirmDialog({ message: `Delete column "${column.name}"? Its data will be lost.`, danger: true });
+            if (ok) {
               removeColumn(column.id);
               onClose();
             }

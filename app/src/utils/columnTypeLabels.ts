@@ -8,4 +8,5 @@ export const TYPE_LABELS: Record<ColumnType, string> = {
   contact: 'Contacts',
   dropdown: 'Dropdown (status)',
   date: 'Date',
+  link: 'Link (website, LinkedIn…)',
 };
