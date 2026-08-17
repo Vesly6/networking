@@ -182,6 +182,15 @@ export const useTableStore = create<TableState>((set, get) => {
         id: crypto.randomUUID(),
         name: name.trim() || 'Column',
         type,
+        // The default column width (160px) is enough for a bare date, but
+        // not for date + time + the contact-linking button + the clear
+        // button all showing at once — confirmed directly: at 160px the
+        // date itself could shrink to the point of being unreadable while
+        // every *secondary* control around it stayed fully visible. A
+        // wider starting point avoids that for any table's first date
+        // column; existing narrower ones can still be drag-resized same
+        // as any other column.
+        ...(type === 'date' ? { width: 260 } : {}),
         ...(type === 'dropdown' ? { options: options ?? [] } : {}),
       };
       const columns = [...get().columns, column];

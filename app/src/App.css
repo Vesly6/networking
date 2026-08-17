@@ -593,21 +593,33 @@ tr.row-flash {
   align-items: center;
   gap: 0.25rem;
   padding: 0.2em 0.4em;
+  /* Contains overflow at the cell boundary instead of spilling into the
+     next column — table.sheet tbody td has no overflow rule of its own,
+     so without this, a cell too narrow for date+time+both icon buttons
+     would visually bleed rightward into whatever column comes next. */
+  overflow: hidden;
 }
+/* Both inputs set their size via the `flex` shorthand's flex-basis
+   component, NOT `width` — `.cell input, .cell select { width: 100% }`
+   (App.css, shared by every editable cell type) outranks a plain
+   `width: 5.5em` here on specificity (".cell input" is one class + one
+   element; a bare ".date-cell-time" class selector is only one class),
+   and when flex-basis is left at its default `auto`, a flex item's used
+   basis falls back to *its own* `width` — so that global 100% rule was
+   silently making the *time* input's basis equal to the whole cell's
+   width (confirmed directly: it measured ~900px in a wide column),
+   which then starved the date input down to its bare minimum and made
+   the whole row overflow. flex-basis is a definite length here instead,
+   so `width` no longer enters into sizing at all — immune to that rule
+   regardless of which selector wins the cascade. */
 .date-cell input[type='date'] {
-  flex: 1;
-  min-width: 0;
+  flex: 1 1 100px;
+  min-width: 100px;
   padding: 0.25em 0.3em;
 }
 
-.date-cell-time-group {
-  display: flex;
-  align-items: center;
-  gap: 0.1rem;
-  flex-shrink: 0;
-}
 .date-cell-time {
-  width: 5.5em;
+  flex: 0 0 5.5em;
   padding: 0.25em 0.3em;
 }
 
@@ -624,22 +636,32 @@ tr.row-flash {
   background: var(--bg-hover);
 }
 
-.date-cell-clear-time {
+/* One clear button for the whole cell — date, time, and linked contact
+   together — rather than the separate per-piece clear this replaced
+   (deleting a native date input's day/month/year segments one at a time
+   was the actual complaint: "убрать всё одним кликом"). Always the last
+   element in .date-cell, shown whenever there's a date to clear at all. */
+.date-cell-clear-all {
   border: none;
   background: transparent;
   color: var(--text-muted);
-  padding: 0 0.2em;
-  font-size: 0.9em;
+  padding: 0 0.3em;
+  font-size: 1em;
   line-height: 1;
   flex-shrink: 0;
 }
-.date-cell-clear-time:hover {
+.date-cell-clear-all:hover {
   color: var(--danger);
+  background: var(--danger-bg);
 }
 
 /* "Who are you calling?" picker on the next-action-date cell — same muted
    icon-button treatment as .date-cell-add-time (🕐), just with an
    optional name suffix once a contact is actually linked. */
+/* Icon-only — the linked contact's name lives in the title tooltip, not
+   the button label. It used to show inline too, but that (plus the time
+   input and clear button all being visible at once) could squeeze the
+   date input itself down to unreadable in the cell's default width. */
 .date-cell-contact-btn {
   border: none;
   background: transparent;
@@ -647,10 +669,6 @@ tr.row-flash {
   font-size: 0.85em;
   opacity: 0.55;
   flex-shrink: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 6em;
 }
 .date-cell-contact-btn:hover {
   opacity: 1;

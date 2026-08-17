@@ -163,28 +163,14 @@ function DataCellImpl({
             onChange={(e) => updateCell(row.id, column.id, combineDateTime(e.target.value, timePart))}
           />
           {showTimeInput ? (
-            <span className="date-cell-time-group">
-              <input
-                type="time"
-                className="date-cell-time"
-                style={cellStyle}
-                value={timePart}
-                onFocus={onSelect}
-                onChange={(e) => updateCell(row.id, column.id, combineDateTime(datePart, e.target.value))}
-              />
-              <button
-                type="button"
-                className="date-cell-clear-time"
-                title="Remove time"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  updateCell(row.id, column.id, datePart);
-                  setTimeExpanded(false);
-                }}
-              >
-                ×
-              </button>
-            </span>
+            <input
+              type="time"
+              className="date-cell-time"
+              style={cellStyle}
+              value={timePart}
+              onFocus={onSelect}
+              onChange={(e) => updateCell(row.id, column.id, combineDateTime(datePart, e.target.value))}
+            />
           ) : (
             datePart && (
               <button
@@ -214,17 +200,36 @@ function DataCellImpl({
                 <button
                   type="button"
                   className={`date-cell-contact-btn ${linked ? 'date-cell-contact-linked' : ''}`}
-                  title={linked ? `Calling: ${linked.text}` : 'Pick who you\'re calling'}
+                  title={
+                    linked
+                      ? `Calling: ${contactTextToFields(linked.text).firstName || linked.text}`
+                      : "Pick who you're calling"
+                  }
                   onClick={(e) => {
                     e.stopPropagation();
                     const anchor = e.currentTarget;
                     setContactPickerAnchor((prev) => (prev ? null : anchor));
                   }}
                 >
-                  👤{linked ? ` ${contactTextToFields(linked.text).firstName || linked.text}` : ''}
+                  👤
                 </button>
               );
             })()}
+          {datePart && (
+            <button
+              type="button"
+              className="date-cell-clear-all"
+              title="Clear date, time, and linked contact"
+              onClick={(e) => {
+                e.stopPropagation();
+                updateCell(row.id, column.id, '');
+                setTimeExpanded(false);
+                if (column.isNextActionDate && row.linkedContactId) setLinkedContact(row.id, null);
+              }}
+            >
+              ×
+            </button>
+          )}
         </div>
         {contactPickerAnchor && (
           <Popover anchor={contactPickerAnchor} width={220}>
