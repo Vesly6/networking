@@ -33,17 +33,21 @@ declare global {
 const READY_POLL_MS = 200;
 const READY_TIMEOUT_MS = 8000;
 
-// Was temporarily disabled — Zadarma's own backend reported this account's
-// WebRTC integration as disabled (GET .../sys/webrtc/get_sips.php returned
-// {"sips":{"disabled":true},"errorCode":"integrationDisabled"}), which
-// Zadarma support traced to the widget's registered domain being
-// localhost — not valid for their WebRTC integration, needs a real
-// external domain. Re-enabled now that the app is deployed at
-// https://app.serteo.lt and that domain is registered in the Zadarma
-// dashboard's WebRTC widget settings. If "Sip not found"/the red
-// "integrationDisabled" banner ever comes back, check that setting first
-// before assuming this flag needs to flip off again.
-const SOFTPHONE_ENABLED = true;
+// Still disabled — Zadarma's own backend reports this account's WebRTC
+// integration as disabled (GET .../sys/webrtc/get_sips.php returns
+// {"sips":{"disabled":true},"errorCode":"integrationDisabled"}). Zadarma
+// support said this was the registered-domain-being-localhost issue, and
+// the domain is now fixed (deployed at https://app.serteo.lt, registered
+// in the Zadarma dashboard's WebRTC widget settings) — but re-enabling and
+// testing live against that real domain still reproduces the exact same
+// integrationDisabled banner/error. So the domain was not the only
+// blocker (or support's diagnosis was incomplete) — something else is
+// still off on Zadarma's side: worth re-checking the "Use WebRTC" toggle
+// specifically on the ZADARMA_WEBRTC_SIP extension (not just the account
+// level), and confirming the extension/SIP value itself is correct.
+// Re-open the support ticket with this finding before flipping this back
+// on again.
+const SOFTPHONE_ENABLED = false;
 
 /** Mounts Zadarma's floating WebRTC softphone widget (bottom-right corner,
  * its own dialpad/incoming-call UI) — a standalone browser phone, separate
