@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Cold Call Sheet</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <!-- Zadarma's WebRTC softphone widget loader — static, no secret in
+         these; the actual per-session key is fetched from our own local
+         proxy at runtime (components/Softphone.tsx) and passed into
+         window.zadarmaWidgetFn, which these two scripts define. This exact
+         v9/sub_v=1 URL is what Zadarma's own dashboard (My Zadarma →
+         Settings → Integrations and API → WebRTC widget integration)
+         generated for this account once the integration was enabled there
+         — don't casually "clean up" back to an older v8 URL found via a
+         generic doc/blog post, the dashboard-issued one is authoritative
+         for whatever's actually enabled on this account. -->
+    <script src="https://my.zadarma.com/webphoneWebRTCWidget/v9/js/loader-phone-lib.js?sub_v=1"></script>
+    <script src="https://my.zadarma.com/webphoneWebRTCWidget/v9/js/loader-phone-fn.js?sub_v=1"></script>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

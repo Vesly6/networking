@@ -1,0 +1,1926 @@
+.app-loading {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}
+
+.app {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Header */
+
+.app-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.back-to-workspace {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  white-space: nowrap;
+  padding: 0.4em 0.5em;
+}
+.back-to-workspace:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.table-title {
+  font-size: 1.05rem;
+  font-weight: 700;
+  margin: 0;
+  white-space: nowrap;
+  cursor: pointer;
+  padding: 0.25em 0.4em;
+  border-radius: 6px;
+  max-width: 30vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.table-title:hover {
+  background: var(--bg-hover);
+}
+
+.table-title-input {
+  font-size: 1.05rem;
+  font-weight: 700;
+  max-width: 30vw;
+}
+
+.app-tabs {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.app-tabs button {
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: 6px;
+  padding: 0.4em 0.8em;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+  color: var(--text-muted);
+}
+
+.app-tabs button.active {
+  background: var(--bg-alt);
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.tab-badge {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-size: 0.72em;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 0.05em 0.5em;
+  min-width: 1.4em;
+  text-align: center;
+}
+
+.tab-badge-overdue {
+  background: var(--danger);
+}
+
+.app-main {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Toolbar */
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+.toolbar-spacer {
+  flex: 1;
+}
+
+.search-input {
+  min-width: 240px;
+  flex: 0 1 320px;
+}
+
+.name-box {
+  width: 5.5em;
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Table */
+
+.table-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.table-scroll {
+  flex: 1;
+  overflow: auto;
+  position: relative;
+}
+
+table.sheet {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.88rem;
+  table-layout: fixed;
+  /* Dragging across cells to range-select was also triggering the browser's
+     native text-selection (the blue highlight-and-copy you'd get dragging
+     across a paragraph on any web page) — since a drag-select gesture is
+     mechanically identical to a text-selection drag as far as the browser
+     is concerned, both fired from the same mousedown-move-mouseup. Turned
+     off here and re-enabled explicitly on the actual editable controls
+     below (.cell input/select), so typing/selecting text *within* a live
+     cell edit still works normally — this only blocks selecting the
+     surrounding cell chrome/other cells' text. */
+  user-select: none;
+}
+
+table.sheet thead th {
+  position: sticky;
+  background: var(--bg-alt);
+  border-bottom: 1px solid var(--border-strong);
+  border-right: 1px solid var(--border);
+  z-index: 2;
+  padding: 0;
+  text-align: left;
+  white-space: nowrap;
+}
+
+/* Row 1: spreadsheet-style column letters (A, B, C…). The small grip is the
+   drag handle for reordering; clicking/dragging the letter itself selects a
+   range of columns (for multi-column reorder or bulk operations). */
+tr.letters-row th {
+  top: 0;
+  height: 1.5rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-align: center;
+  user-select: none;
+  position: relative;
+  padding: 0;
+}
+
+.letter-cell-inner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.2em;
+  height: 100%;
+}
+tr.letters-row th.letter-cell-selected {
+  background: var(--today-bg);
+  color: var(--accent);
+}
+tr.letters-row th.col-dragging {
+  opacity: 0.4;
+}
+tr.letters-row th.col-drop-before {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+tr.letters-row th.col-drop-after {
+  box-shadow: inset -2px 0 0 var(--accent);
+}
+
+.col-grip {
+  cursor: grab;
+  opacity: 0.5;
+  padding: 0 0.15em;
+}
+.col-grip:hover {
+  opacity: 1;
+}
+
+.col-letter {
+  flex: 1;
+  cursor: pointer;
+  padding: 0.1em 0.2em;
+  border-radius: 3px;
+}
+
+.col-resize-handle {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 3;
+}
+.col-resize-handle:hover {
+  background: var(--accent);
+  opacity: 0.5;
+}
+
+/* Row 2: editable column names, sort + menu */
+thead tr:nth-child(2) th {
+  top: 1.5rem;
+}
+
+.gutter-header {
+  width: 4rem;
+}
+
+.th-content {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.3rem 0.15rem 0.3rem 0.6rem;
+  gap: 0.25rem;
+}
+
+.th-name {
+  border: none;
+  background: transparent;
+  padding: 0.2em 0.2em;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+}
+.th-name:hover {
+  background: var(--bg-hover);
+}
+
+.th-menu-btn {
+  border: none;
+  background: transparent;
+  padding: 0.1em 0.4em;
+  color: var(--text-muted);
+}
+
+.sort-arrow {
+  color: var(--accent);
+}
+
+table.sheet tbody td {
+  border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  padding: 0;
+  vertical-align: middle;
+}
+
+/* Zebra striping and row-hover are applied per-cell, scoped to
+   `.cell-row-bg` (added in DataCell.tsx whenever a cell has no custom
+   color), rather than as a `<tr>` background. A `<tr>` background is
+   only ever visible through a cell that doesn't paint its own — which
+   should already be every colored cell, since they carry an opaque
+   inline `background-color` — but that relies on every browser
+   correctly implementing the CSS table background-painting order (cell
+   layers above row). Scoping the selector to uncolored cells removes
+   that assumption entirely: a colored `<td>` is structurally outside
+   these rules, so nothing can ever repaint over its custom color,
+   regardless of any layering-order surprises. */
+table.sheet tbody tr:nth-child(even) td.cell-row-bg {
+  background: var(--bg-alt);
+}
+
+table.sheet tbody tr:hover td.cell-row-bg {
+  background: var(--bg-hover);
+}
+
+@keyframes row-flash {
+  0%,
+  100% {
+    background: var(--today-bg);
+  }
+  50% {
+    background: transparent;
+  }
+}
+
+tr.row-flash {
+  animation: row-flash 0.5s ease-in-out 3;
+}
+
+.cell input,
+.cell select {
+  width: 100%;
+  border: 1px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  padding: 0.45em 0.6em;
+  user-select: text;
+}
+
+.cell input:focus,
+.cell select:focus {
+  box-shadow: none;
+  border-color: var(--accent);
+  background: var(--bg);
+}
+
+/* Status dropdown as a rounded pill/badge, Excel-clean when uncolored
+   (transparent, thin border) and switches to a colored badge once the
+   column's optionColors assigns that value a color (applied inline by
+   DataCell — inline style always wins over these declarations). */
+.cell-dropdown {
+  text-align: center;
+}
+
+.cell-dropdown select {
+  appearance: none;
+  -webkit-appearance: none;
+  width: auto;
+  max-width: calc(100% - 0.4em);
+  margin: 0 auto;
+  display: inline-block;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.28em 1.8em 0.28em 0.9em;
+  font-weight: 600;
+  font-size: 0.8em;
+  text-align: center;
+  text-align-last: center;
+  cursor: pointer;
+  background-color: transparent;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' fill='none' stroke='%236b7280' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 0.6em center;
+  background-size: 0.6em;
+  color: var(--text);
+}
+
+.cell-dropdown select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(47, 111, 237, 0.15);
+  background-color: var(--bg);
+}
+
+.cell-selected {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.cell-in-range {
+  box-shadow: inset 0 0 0 999px rgba(47, 111, 237, 0.12);
+}
+
+.cell-text,
+.cell-phone,
+.cell-company,
+.cell-note {
+  min-width: 140px;
+  max-width: 280px;
+}
+
+.cell-preview {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  padding: 0.45em 0.6em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text);
+  border-radius: 0;
+  cursor: default;
+}
+/* A global `button:hover { background-color: var(--bg-hover) }` in index.css
+   (element + pseudo-class, specificity 0,1,1) actually outranks the plain
+   `.cell-preview` rule above (one class, 0,1,0) the moment :hover is
+   involved — so without this, EVERY cell-preview button greyed out on
+   hover regardless of the `cell-preview-hoverable` gating below, including
+   colored cells, because the base .cell-preview rule alone couldn't win
+   that fight. This explicit `:hover` rule (one class + pseudo-class,
+   0,2,0) reclaims it unconditionally. */
+.cell-preview:hover {
+  background: transparent;
+}
+/* Only cells without a custom background get the hover tint — otherwise
+   the button (which fills the whole cell) would paint gray right over a
+   colored cell, visually "losing" its color on hover. See DataCell.tsx:
+   the plain-preview branch only adds this class when `!color`. Same
+   specificity as the rule above (one class + :hover each); declared after
+   it, so on the tie this one wins for elements that carry both classes. */
+.cell-preview-hoverable:hover {
+  background: var(--bg-hover);
+}
+
+.cell-empty {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.date-cell {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.2em 0.4em;
+}
+.date-cell input[type='date'] {
+  flex: 1;
+  min-width: 0;
+  padding: 0.25em 0.3em;
+}
+
+.date-cell-time-group {
+  display: flex;
+  align-items: center;
+  gap: 0.1rem;
+  flex-shrink: 0;
+}
+.date-cell-time {
+  width: 5.5em;
+  padding: 0.25em 0.3em;
+}
+
+.date-cell-add-time {
+  border: none;
+  background: transparent;
+  padding: 0.15em 0.3em;
+  font-size: 0.85em;
+  opacity: 0.55;
+  flex-shrink: 0;
+}
+.date-cell-add-time:hover {
+  opacity: 1;
+  background: var(--bg-hover);
+}
+
+.date-cell-clear-time {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  padding: 0 0.2em;
+  font-size: 0.9em;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.date-cell-clear-time:hover {
+  color: var(--danger);
+}
+
+.row-gutter {
+  width: 4rem;
+  padding: 0 !important;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  position: relative;
+}
+
+.row-gutter-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.1rem;
+  padding: 0 0.25rem;
+  height: 100%;
+}
+
+.row-grip {
+  cursor: grab;
+  opacity: 0.5;
+  padding: 0 0.1em;
+}
+.row-grip:hover {
+  opacity: 1;
+}
+
+.row-number {
+  flex: 1;
+  text-align: right;
+  padding: 0.2em 0.1em;
+  border-radius: 4px;
+  cursor: pointer;
+  user-select: none;
+}
+.row-number:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.row-resize-handle {
+  position: absolute;
+  left: 0;
+  bottom: -3px;
+  width: 100%;
+  height: 6px;
+  cursor: row-resize;
+  z-index: 3;
+}
+.row-resize-handle:hover {
+  background: var(--accent);
+  opacity: 0.5;
+}
+
+.row-delete {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  padding: 0.1em 0.3em;
+  font-size: 0.9rem;
+  line-height: 1;
+  opacity: 0;
+}
+tr:hover .row-delete {
+  opacity: 1;
+}
+.row-delete:hover {
+  color: var(--danger);
+  background: var(--danger-bg);
+}
+
+tr.row-selected td {
+  background: var(--today-bg);
+}
+
+tr.row-selected .row-number {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+tr.row-dragging {
+  opacity: 0.4;
+}
+
+tr.row-drop-target-before td {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+tr.row-drop-target-after td {
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+tr.row-drop-end td {
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  padding: 0.5rem;
+  border: 1px dashed var(--border-strong);
+  background: var(--bg-alt);
+}
+
+.empty-state {
+  padding: 2.5rem 1rem;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.empty-state-add-column {
+  border: none;
+  background: transparent;
+  padding: 0;
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: underline;
+}
+
+/* Trailing header cell (Airtable/Notion-style "+ add column" tile) — no
+   corresponding <td> in body rows, so it only ever occupies header space;
+   see the colgroup comment above for why hidden columns use visibility:
+   collapse rather than a display:none class on cells like this one would
+   otherwise suggest. */
+.add-column-header {
+  cursor: pointer;
+  text-align: center;
+  color: var(--text-muted);
+  font-weight: 600;
+  border-bottom: 1px solid var(--border-strong);
+}
+.add-column-header:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+/* Trailing "+ Add row" strip, always present below the last real row
+   (except mid drag-reorder, where "drop here to move to the end" takes its
+   place) — the persistent bootstrapping affordance for a 0-row table now
+   that the toolbar's "+ Row" button is gone. */
+.row-add-tr td {
+  cursor: pointer;
+  text-align: center;
+  padding: 0.4em;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+.row-add-tr:hover td {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.table-footer {
+  padding: 0.4rem 1rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border);
+}
+
+/* Formula bar */
+
+.formula-bar {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.4rem 1rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-alt);
+  font-size: 0.85rem;
+  /* Matches the 3-line textarea's height (see .formula-bar-input) so the
+     bar doesn't visibly grow the instant a cell is selected — same height
+     empty or populated. */
+  min-height: 4.5rem;
+}
+
+.formula-bar-label {
+  flex: 0 0 auto;
+  font-weight: 600;
+  padding-top: 0.35em;
+  white-space: nowrap;
+}
+
+.formula-bar-row {
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.formula-bar-hint {
+  color: var(--text-muted);
+  padding-top: 0.35em;
+}
+
+.formula-bar-input {
+  flex: 1;
+  resize: vertical;
+  /* Defaults to 3 visible lines (rows={3} in FormulaBar.tsx) so a cell's
+     content — a note's raw JSON, a long text value — is readable at a
+     glance without resizing first; still user-resizable both ways. */
+  min-height: 4.5em;
+  max-height: 8em;
+}
+
+.formula-bar-value {
+  flex: 1;
+  padding-top: 0.35em;
+  color: var(--text-muted);
+}
+
+/* Popovers (column menu / add column) — positioned via inline style by the
+   Popover component (position: fixed, clamped to the viewport); this class
+   only supplies the visual chrome. */
+
+.popover {
+  z-index: 10;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  text-align: left;
+  font-weight: 400;
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+}
+
+.popover-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.popover-field input,
+.popover-field select {
+  width: 100%;
+}
+
+.popover-checkbox {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+}
+.popover-checkbox input {
+  width: auto;
+}
+
+.popover-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: 0.2rem;
+}
+
+.option-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-bottom: 0.3rem;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.15em 0.5em;
+  font-size: 0.78rem;
+}
+
+.chip-color {
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.chip-remove {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0 0.3em;
+  font-size: 1em;
+  line-height: 1;
+}
+.chip-remove:hover {
+  color: var(--danger);
+}
+
+.option-add-row {
+  display: flex;
+  gap: 0.3rem;
+}
+.option-add-row input {
+  flex: 1;
+}
+
+/* Excel-style right-click menu (column/row headers) — a plain list of
+   action buttons, distinct from .popover's form-field layout. */
+
+.context-menu {
+  z-index: 20;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  padding: 0.3rem;
+  display: flex;
+  flex-direction: column;
+  min-width: 190px;
+}
+
+.context-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  padding: 0.4em 0.6em;
+  border-radius: 5px;
+  font-size: 0.85rem;
+  color: var(--text);
+}
+.context-menu-item:hover {
+  background: var(--bg-hover);
+}
+
+.context-menu-danger {
+  color: var(--danger);
+}
+
+.context-menu-separator {
+  height: 1px;
+  background: var(--border);
+  margin: 0.3rem 0.2rem;
+}
+
+/* Centered modal (currently just CSV import mapping) — a new pattern
+   distinct from Popover, which is anchor-positioned and too small for a
+   per-CSV-header list that can run to dozens of rows. */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem 1rem;
+}
+
+.modal {
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  padding: 1.25rem;
+  max-width: 560px;
+  width: 100%;
+  max-height: calc(100vh - 4rem);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.modal h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.csv-import-mapping-hint {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+.csv-import-mapping-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  overflow-y: auto;
+  padding-right: 0.2rem;
+}
+
+.csv-import-mapping-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.csv-import-mapping-header {
+  font-size: 0.85rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.csv-import-mapping-row select {
+  width: 100%;
+  font-size: 0.8rem;
+}
+
+.csv-import-mapping-summary {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+/* Color picker (toolbar "🎨 Color" button) */
+
+.color-palette-label {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.color-palette {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 0.35rem;
+}
+
+.color-swatch {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  border: 1px solid var(--border-strong);
+  padding: 0;
+  cursor: pointer;
+}
+.color-swatch:hover {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.color-swatch-custom {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-alt);
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  position: relative;
+  overflow: hidden;
+}
+.color-swatch-custom input[type='color'] {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+  width: 100%;
+  height: 100%;
+}
+
+.color-clear-btn {
+  font-size: 0.8rem;
+}
+
+/* Cell hover editor — opens on hover (see CellHoverEditor.tsx), positioned
+   to sit exactly over the cell it belongs to and grow with its content, so
+   it reads as "the cell itself expanded" rather than a separate popup. */
+
+.cell-hover-editor {
+  z-index: 15;
+  background: var(--bg);
+  border: 1.5px solid var(--accent);
+  box-shadow: var(--shadow);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* CellClickPopover (double-click, plain text/phone) — sits inside the
+   generic .popover card chrome, so it just needs to fill it. */
+.cell-click-textarea {
+  width: 100%;
+  min-height: 120px;
+  max-height: 60vh;
+  resize: vertical;
+}
+
+.cell-hover-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0.1em 0.5em 0.3em;
+}
+
+.char-counter {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.char-counter-over {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.cell-hover-new-entry {
+  width: 100%;
+  min-height: 2.2em;
+  max-height: 40vh;
+  resize: none;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  padding: 0.45em 0.6em;
+}
+.cell-hover-new-entry:focus {
+  box-shadow: none;
+  background: var(--today-bg);
+}
+
+.cell-hover-history {
+  max-height: 45vh;
+  overflow-y: auto;
+}
+
+.cell-hover-history-entry {
+  padding: 0.4em 0.6em;
+  border-top: 1px solid var(--border);
+}
+.cell-hover-history-entry:first-child {
+  border-top: none;
+}
+
+.cell-hover-history-time {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  margin-bottom: 0.15em;
+}
+
+.cell-hover-history-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+}
+
+.cell-hover-history-text {
+  font-size: 0.85rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  flex: 1;
+  min-width: 0;
+}
+
+/* Click-to-edit trigger for an existing entry — same text styling as the
+   plain (read-only) div above, but reset to look like text, not a button. */
+.cell-hover-history-text-button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+  cursor: text;
+  color: var(--text);
+  font-family: inherit;
+}
+
+.cell-hover-history-edit {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.85rem;
+  padding: 0.2em 0.3em;
+  resize: vertical;
+  min-height: 2.2em;
+}
+
+.cell-hover-history-remove {
+  flex: 0 0 auto;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  line-height: 1;
+  padding: 0.2em 0.3em;
+}
+.cell-hover-history-remove:hover {
+  color: var(--danger);
+  background: var(--danger-bg);
+}
+
+/* Contact form (CellHoverEditor 'contact' mode) — one freeform field plus
+   the "+ Add contact" button, side by side. */
+
+.cell-hover-contact-form {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.5rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-alt);
+}
+
+.cell-hover-contact-form input {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.82rem;
+  padding: 0.3em 0.5em;
+}
+
+.cell-hover-contact-add {
+  flex: 0 0 auto;
+  font-size: 0.78rem;
+  padding: 0.35em 0.6em;
+}
+
+.cell-hover-contact-entry {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.4rem;
+  padding: 0.4em 0.6em;
+  border-top: 1px solid var(--border);
+}
+.cell-hover-contact-entry:first-child {
+  border-top: none;
+}
+
+.cell-hover-contact-info {
+  min-width: 0;
+}
+
+/* One line per field (name/title/company/email/phone) rather than the raw
+   comma-separated string — splitContactDisplayFields() classifies each
+   comma-split piece by shape (utils/contacts.ts), this just styles the
+   result. Wraps like .cell-hover-history-text (notes) rather than
+   truncating, so nothing gets hidden behind an ellipsis. */
+.cell-hover-contact-field {
+  font-size: 0.83rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.35;
+}
+
+.cell-hover-contact-field-name {
+  font-weight: 600;
+  font-size: 0.88rem;
+  color: var(--text);
+}
+
+.cell-hover-contact-field-text {
+  color: var(--text-muted);
+}
+
+.cell-hover-contact-field-email {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+/* Phone gets its own treatment — tabular figures + slight letter-spacing
+   read more like a dialable number than a line of prose, and the accent
+   color is a quiet visual anchor since it's the one field with an action
+   (the call button) sitting right next to it. */
+.cell-hover-contact-field-phone {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.cell-hover-contact-remove {
+  flex: 0 0 auto;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  line-height: 1;
+  padding: 0.2em 0.3em;
+}
+.cell-hover-contact-remove:hover {
+  color: var(--danger);
+  background: var(--danger-bg);
+}
+
+.cell-hover-contact-call {
+  flex: 0 0 auto;
+  border: none;
+  background: transparent;
+  font-size: 0.9rem;
+  line-height: 1;
+  padding: 0.2em 0.3em;
+}
+.cell-hover-contact-call:hover {
+  background: var(--bg-hover);
+}
+
+.cell-hover-contact-edit {
+  flex: 0 0 auto;
+  border: none;
+  background: transparent;
+  font-size: 0.85rem;
+  line-height: 1;
+  padding: 0.2em 0.3em;
+}
+.cell-hover-contact-edit:hover {
+  background: var(--bg-hover);
+}
+
+/* Inline, right after the value it copies (phone/email field lines) —
+   deliberately small/quiet rather than matched with .calls-copy-btn's
+   bordered "Copy" label style elsewhere in the app: this sits inside an
+   already-dense per-contact row, not a spacious table cell, so a bare
+   icon reads as "part of this line" instead of competing with it. */
+.cell-hover-contact-copy {
+  border: none;
+  background: transparent;
+  font-size: 0.75rem;
+  line-height: 1;
+  padding: 0.1em 0.3em;
+  margin-left: 0.3em;
+  color: var(--text-muted);
+  vertical-align: middle;
+}
+.cell-hover-contact-copy:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+/* Structured add form — First/Last name share a row, everything after
+   (Position/Email/Phone/the submit button) spans the full width. Reused
+   as-is for the inline edit form (CellHoverEditor.tsx applies both this
+   class and .cell-hover-contact-edit-grid together), where the final
+   spanning slot is a Save/Cancel button pair instead of a single submit. */
+.cell-hover-contact-structured-form {
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-alt);
+}
+
+.cell-hover-contact-structured-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  padding: 0.5rem 0.6rem 0;
+}
+
+.cell-hover-contact-structured-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.4rem;
+  padding: 0.5rem 0.6rem;
+}
+.cell-hover-contact-structured-grid input {
+  min-width: 0;
+  font-size: 0.82rem;
+  padding: 0.3em 0.5em;
+}
+.cell-hover-contact-structured-grid input:nth-child(n + 3),
+.cell-hover-contact-structured-grid > button {
+  grid-column: 1 / -1;
+}
+
+.cell-hover-contact-edit-grid {
+  padding: 0.5em 0.6em;
+}
+
+.cell-hover-contact-edit-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 0.4rem;
+}
+.cell-hover-contact-edit-actions button {
+  flex: 1;
+  font-size: 0.78rem;
+  padding: 0.35em 0.6em;
+}
+
+.cell-hover-contact-divider {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  text-align: center;
+  padding: 0.3rem 0;
+  background: var(--bg-alt);
+  border-bottom: 1px solid var(--border);
+}
+
+/* Toast */
+
+.toast {
+  position: fixed;
+  bottom: 1.25rem;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--text);
+  color: var(--bg);
+  padding: 0.6em 1.1em;
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  font-size: 0.85rem;
+  cursor: pointer;
+  z-index: 200;
+  max-width: 90vw;
+}
+
+/* Calendar */
+
+.calendar-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 1rem 1.25rem;
+  overflow: auto;
+}
+
+.calendar-mode-switch {
+  display: flex;
+  gap: 0.4rem;
+  margin-bottom: 1rem;
+}
+
+.calendar-mode-switch button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  max-width: 960px;
+}
+
+.task-section h3 {
+  font-size: 0.95rem;
+  margin: 0 0 0.5rem;
+}
+
+.task-section-overdue h3 {
+  color: var(--danger);
+}
+
+.task-section-empty {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+.task-section ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+/* One task = one compact row, not a padded card — company/status/phone/
+   date/time/note all on a single line with ellipsis where it doesn't fit. */
+.task-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  font-size: 0.82rem;
+  overflow: hidden;
+}
+
+.task-section-overdue .task-row {
+  background: var(--overdue-bg);
+  border-color: #f3c8c9;
+}
+
+.task-row-status {
+  flex: 0 0 auto;
+  font-size: 0.7rem;
+  font-weight: 600;
+  background: var(--bg-alt);
+  border-radius: 999px;
+  padding: 0.1em 0.65em;
+  white-space: nowrap;
+}
+
+.task-row-label {
+  flex: 1 1 auto;
+  min-width: 70px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-row-phone,
+.task-row-date {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.task-row-time {
+  flex: 0 0 auto;
+  font-weight: 700;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.task-row-note {
+  flex: 2 1 auto;
+  min-width: 60px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-open {
+  flex: 0 0 auto;
+  font-size: 0.75rem;
+  padding: 0.25em 0.55em;
+  white-space: nowrap;
+}
+
+/* Calendar grid */
+
+.calendar-grid-view {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.calendar-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.calendar-month-label {
+  min-width: 10rem;
+  text-transform: capitalize;
+}
+
+.calendar-today-btn {
+  margin-left: auto;
+}
+
+.calendar-weekdays,
+.calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+}
+
+.calendar-weekday {
+  text-align: center;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  padding: 0.3rem 0;
+}
+
+.calendar-day {
+  border: 1px solid var(--border);
+  min-height: 96px;
+  /* Grid/flex items default to min-width: auto, which sizes to the widest
+     unbroken line of content — one chip full of long, space-less text would
+     otherwise force this cell (and the whole 7-column grid) wider. */
+  min-width: 0;
+  padding: 0.35rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.calendar-day-outside {
+  background: var(--bg-alt);
+  color: var(--text-muted);
+}
+
+.calendar-day-today {
+  background: var(--today-bg);
+}
+
+.calendar-day-number {
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.calendar-day-tasks {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.calendar-chip {
+  text-align: left;
+  font-size: 0.72rem;
+  padding: 0.15em 0.4em;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  border-radius: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.calendar-chip:hover {
+  background: var(--bg-hover);
+}
+
+.calendar-chip-time {
+  font-weight: 700;
+  color: var(--accent);
+  margin-right: 0.35em;
+}
+
+.calendar-chip-more {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+
+/* Workspace (desktop with multiple tables) */
+
+.workspace-view {
+  flex: 1;
+  overflow: auto;
+  padding: 1.5rem 2rem;
+  max-width: 960px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.workspace-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1.5rem;
+}
+
+.workspace-header h2 {
+  margin: 0;
+  font-size: 1.3rem;
+}
+
+.table-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 1rem;
+}
+
+.table-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1rem;
+  background: var(--bg);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.table-card:hover {
+  border-color: var(--accent);
+  box-shadow: var(--shadow);
+}
+
+.table-card-name {
+  font-weight: 700;
+  font-size: 1rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.table-card-name-input {
+  font-weight: 700;
+  font-size: 1rem;
+  width: 100%;
+}
+
+.table-card-meta {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.table-card-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: auto;
+  padding-top: 0.4rem;
+}
+
+.table-card-actions button {
+  font-size: 0.78rem;
+  padding: 0.3em 0.6em;
+}
+
+/* Calls tab (Zadarma statistics) */
+
+.calls-view {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+  overflow: auto;
+}
+
+.calls-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 0.85rem;
+}
+
+.calls-range-error {
+  color: var(--danger);
+  font-size: 0.8rem;
+}
+
+.calls-summary {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  margin-left: auto;
+}
+
+/* Deliberately its own ruleset, not table.sheet — that class carries
+   spreadsheet-specific machinery (sticky headers, resize hooks,
+   cell-row-bg-scoped zebra/hover selectors) this simple read-only list has
+   no markup for and gains nothing from. */
+/* table-layout: fixed (+ the nth-child widths below), matching
+   table.sheet's own reasoning — without it, expanding/collapsing a
+   transcript row (or the audio player appearing under "▶ Recording") lets
+   the browser's auto-layout algorithm re-measure and shift *every other*
+   column's width based on whatever content is currently visible, which
+   reads as the whole table "jumping"/reflowing on every click, not just
+   the row that actually changed. */
+.calls-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 0.85rem;
+}
+
+.calls-table th:nth-child(1),
+.calls-table td:nth-child(1) {
+  width: 11%;
+}
+.calls-table th:nth-child(2),
+.calls-table td:nth-child(2) {
+  width: 19%;
+}
+.calls-table th:nth-child(3),
+.calls-table td:nth-child(3) {
+  width: 24%;
+}
+.calls-table th:nth-child(4),
+.calls-table td:nth-child(4) {
+  width: 6%;
+}
+.calls-table th:nth-child(5),
+.calls-table td:nth-child(5) {
+  width: 9%;
+}
+.calls-table th:nth-child(6),
+.calls-table td:nth-child(6) {
+  width: 31%;
+}
+
+.calls-table th,
+.calls-table td {
+  text-align: left;
+  padding: 0.5em 0.6em;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+  overflow-wrap: break-word;
+}
+
+.calls-table th {
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 0.78rem;
+}
+
+/* No nth-child zebra striping here — a call's transcript renders as an
+   extra sibling <tr> only when present, so row count per call is
+   irregular and position-based striping would misalign. */
+.calls-table tbody tr:hover {
+  background: var(--bg-hover);
+}
+
+/* Row, not column — the Recording and Transcribe controls used to stack
+   vertically here, which meant a recorded call's row was roughly twice as
+   tall as an unrecorded one's ("Not recorded", one line) even before
+   either was actually clicked/expanded. That height mismatch, repeated
+   down a long list where recorded/unrecorded calls interleave, is what
+   read as the table's rows being "jumbled" — nothing was actually
+   misaligned data-wise, but visually there was no consistent row rhythm
+   to scan down. Side by side keeps the *resting* height close to a single
+   line regardless of is_recorded; wrapping to a second line only kicks in
+   once there's genuinely more to show (the audio player, an error).
+   Deliberately a class on an inner <div>, NOT on the <td> itself (same
+   note applies to .calls-destination below) — table-layout: fixed's
+   column-width algorithm assumes cells stay display: table-cell; putting
+   display: flex directly on a <td> makes browsers size that cell by its
+   flex content instead of respecting the fixed column width at all. This
+   was found the hard way while fixing the row-height issue above: the
+   Actions and Number columns were the *only* two ignoring their assigned
+   nth-child widths (measured ~90px against a declared 24%/31%) while the
+   four plain-<td> columns matched their percentages exactly — both
+   offending classes turned out to be flex displays applied straight to a
+   <td>. Wrapping the flex content in a child <div> keeps the <td> itself
+   a normal table-cell (so the fixed column width actually applies) while
+   the inner div still lays out its children with flexbox same as before. */
+.calls-row-actions {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.calls-audio,
+.calls-transcribe-group {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.calls-audio audio {
+  height: 2rem;
+  max-width: 220px;
+}
+
+.calls-error {
+  color: var(--danger);
+  font-size: 0.78rem;
+}
+
+.calls-transcribe-btn.pending {
+  color: var(--text-muted);
+}
+
+.calls-transcribe-btn.error {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.calls-transcript-row td {
+  background: var(--bg-alt);
+  border-bottom: 1px solid var(--border);
+}
+
+.calls-transcript {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  white-space: pre-wrap;
+  font-size: 0.85rem;
+}
+
+.calls-transcript-actions {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  align-items: center;
+  white-space: normal;
+}
+
+/* Sits above the raw transcript text inside the same .calls-transcript
+   flex column — a visually distinct callout (accent-tinted background, own
+   border) so it reads as "the AI's take," not just the first paragraph of
+   the transcript. */
+.calls-summary-block {
+  background: var(--today-bg);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 0.6em 0.8em;
+  white-space: normal;
+}
+
+.calls-summary-label {
+  font-weight: 600;
+  font-size: 0.78rem;
+  color: var(--accent);
+  margin-bottom: 0.3em;
+}
+
+.calls-destination {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.calls-copy-btn {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  border-radius: 4px;
+  padding: 0.1em 0.45em;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+.calls-copy-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.calls-open-row-btn {
+  border: none;
+  background: var(--bg-alt);
+  border-radius: 4px;
+  padding: 0.15em 0.5em;
+  font-size: 0.78rem;
+  color: var(--accent);
+}
+.calls-open-row-btn:hover {
+  background: var(--bg-hover);
+}
+
+/* Calls tab List/Statistics toggle — same look as
+   .calendar-mode-switch's List/Grid toggle, kept as a separate class
+   rather than reusing that one since these two tabs' toggles have no
+   actual relationship to each other besides looking alike. */
+.calls-mode-switch {
+  display: flex;
+  gap: 0.4rem;
+  margin-bottom: 1rem;
+}
+.calls-mode-switch button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.calls-stats-view {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.calls-stats-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.calls-stats-period-toggle {
+  display: flex;
+  gap: 0.4rem;
+}
+.calls-stats-period-toggle button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.calls-stats-range-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.85rem;
+}
+.calls-stats-range-title {
+  min-width: 11rem;
+  text-align: center;
+  font-weight: 600;
+}
+
+.calls-stats-syncing {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  margin-left: auto;
+}
+
+.calls-stats-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.75rem;
+  max-width: 640px;
+}
+
+.calls-stats-card {
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+}
+.calls-stats-card-value {
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: var(--text);
+}
+.calls-stats-card-label {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  margin-top: 0.15rem;
+}
+
+.calls-stats-chart {
+  max-width: 720px;
+}
+
+.calls-bar-chart {
+  width: 100%;
+  height: 180px;
+  display: block;
+}
+.calls-bar-chart-baseline {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+.calls-bar-total {
+  fill: var(--border-strong);
+}
+.calls-bar-answered {
+  fill: var(--accent);
+}
+.calls-bar-chart-label {
+  fill: var(--text-muted);
+  font-size: 9px;
+}
+
+.calls-bar-chart-legend {
+  display: flex;
+  gap: 1.25rem;
+  margin-top: 0.5rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+.calls-bar-chart-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.calls-bar-chart-swatch {
+  display: inline-block;
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 2px;
+}
+.calls-bar-chart-swatch-total {
+  background: var(--border-strong);
+}
+.calls-bar-chart-swatch-answered {
+  background: var(--accent);
+}

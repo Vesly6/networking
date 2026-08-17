@@ -1,0 +1,5 @@
+# Personal data exports dropped at the repo root — not part of the app,
+# and not something that should end up in git history.
+*.csv
+
+.DS_Store
