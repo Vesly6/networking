@@ -86,7 +86,11 @@ export function Softphone() {
       try {
         const [{ key, sip }] = await Promise.all([fetchWebrtcKey(), waitForWidgetFn()]);
         if (cancelled) return;
-        window.zadarmaWidgetFn!(key, sip, 'rounded', 'en', true, { right: '20px', bottom: '20px' });
+        // skin/position match this account's actual dashboard-issued embed
+        // snippet exactly ('square', {right:'10px',bottom:'5px'}) — an
+        // earlier version used 'rounded'/20px, carried over from a
+        // generic example rather than this account's real one.
+        window.zadarmaWidgetFn!(key, sip, 'square', 'en', true, { right: '10px', bottom: '5px' });
       } catch (err) {
         showToast(err instanceof Error ? `Softphone unavailable: ${err.message}` : 'Softphone unavailable');
       }
