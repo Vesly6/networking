@@ -33,21 +33,17 @@ declare global {
 const READY_POLL_MS = 200;
 const READY_TIMEOUT_MS = 8000;
 
-// Still disabled — Zadarma's own backend reports this account's WebRTC
-// integration as disabled (GET .../sys/webrtc/get_sips.php returns
-// {"sips":{"disabled":true},"errorCode":"integrationDisabled"}). Zadarma
-// support said this was the registered-domain-being-localhost issue, and
-// the domain is now fixed (deployed at https://app.serteo.lt, registered
-// in the Zadarma dashboard's WebRTC widget settings) — but re-enabling and
-// testing live against that real domain still reproduces the exact same
-// integrationDisabled banner/error. So the domain was not the only
-// blocker (or support's diagnosis was incomplete) — something else is
-// still off on Zadarma's side: worth re-checking the "Use WebRTC" toggle
-// specifically on the ZADARMA_WEBRTC_SIP extension (not just the account
-// level), and confirming the extension/SIP value itself is correct.
-// Re-open the support ticket with this finding before flipping this back
-// on again.
-const SOFTPHONE_ENABLED = false;
+// Re-enabled — Zadarma support (ticket follow-up) identified the actual
+// cause: the value passed to zadarmaWidgetFn's `sip` argument needs to be
+// the fully-qualified "{account_id}-{extension}" form ("488048-100" for
+// this account), not the bare extension ("100") — which is what the
+// /v1/webrtc/get_key/ API call itself wants, and what this was mistakenly
+// also using for the widget. Neither the domain (fixed earlier) nor
+// account-level WebRTC settings were ever the issue. See
+// ZADARMA_WEBRTC_WIDGET_SIP in server/.env and the /api/webrtc/key route
+// in server/src/index.ts, which now returns the two different SIP values
+// for their two different purposes instead of one value used for both.
+const SOFTPHONE_ENABLED = true;
 
 /** Mounts Zadarma's floating WebRTC softphone widget (bottom-right corner,
  * its own dialpad/incoming-call UI) — a standalone browser phone, separate

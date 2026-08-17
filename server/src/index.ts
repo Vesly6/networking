@@ -165,13 +165,22 @@ app.post(
 app.get(
   '/api/webrtc/key',
   asyncHandler(async (_req, res) => {
+    // Two different SIP formats for two different Zadarma calls — per
+    // Zadarma support: /v1/webrtc/get_key/ itself wants the bare extension
+    // ("100"), but the value actually handed to the WIDGET's own init
+    // function (zadarmaWidgetFn, in Softphone.tsx) needs the fully
+    // qualified "{account_id}-{extension}" form ("488048-100" for this
+    // account) — using the bare extension there is what produced the
+    // integrationDisabled/"Sip not found" error, not anything about the
+    // domain or the key itself.
     const sip = process.env.ZADARMA_WEBRTC_SIP;
-    if (!sip) {
-      res.status(500).json({ error: 'ZADARMA_WEBRTC_SIP is not set — check server/.env' });
+    const widgetSip = process.env.ZADARMA_WEBRTC_WIDGET_SIP;
+    if (!sip || !widgetSip) {
+      res.status(500).json({ error: 'ZADARMA_WEBRTC_SIP / ZADARMA_WEBRTC_WIDGET_SIP are not set — check server/.env' });
       return;
     }
     const result = await getWebrtcKey(sip);
-    res.json({ key: result.key, sip });
+    res.json({ key: result.key, sip: widgetSip });
   }),
 );
 
