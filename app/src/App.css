@@ -661,12 +661,6 @@ tr.row-flash {
   color: var(--accent);
 }
 
-.date-cell-contact-empty {
-  font-size: 0.8rem;
-  color: var(--text-muted);
-  padding: 0.2rem 0;
-}
-
 .date-cell-contact-option {
   display: block;
   width: 100%;
@@ -1415,6 +1409,25 @@ tr.row-drop-end td {
   letter-spacing: 0.02em;
   color: var(--accent);
   font-weight: 500;
+}
+
+/* The phone number itself is now a button (click sends it to the Zadarma
+   softphone's own input — see utils/softphoneBridge.ts) — styled to read
+   as the same inline text .cell-hover-contact-field-phone always was,
+   plus an underline on hover as the one hint it's clickable, not just
+   colored for emphasis like it was before this was interactive. */
+.cell-hover-contact-phone-value {
+  border: none;
+  background: transparent;
+  padding: 0;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  color: var(--accent);
+  font-weight: 500;
+}
+.cell-hover-contact-phone-value:hover {
+  text-decoration: underline;
 }
 
 .cell-hover-contact-remove {

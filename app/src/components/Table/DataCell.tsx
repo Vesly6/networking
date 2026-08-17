@@ -204,6 +204,11 @@ function DataCellImpl({
             datePart &&
             (() => {
               const contacts = parseContacts(contactsRaw ?? '');
+              // No entry point at all when the row has no contacts yet —
+              // there's nothing to pick, so showing the button just to
+              // immediately tell the user that in the popover was pure
+              // friction. It reappears the moment a contact gets added.
+              if (contacts.length === 0) return null;
               const linked = contacts.find((c) => c.id === row.linkedContactId);
               return (
                 <button
@@ -226,23 +231,19 @@ function DataCellImpl({
             <div className="popover-field">
               <span>Who are you calling?</span>
             </div>
-            {parseContacts(contactsRaw ?? '').length === 0 ? (
-              <div className="date-cell-contact-empty">No contacts on this row yet — add one in the Contacts cell.</div>
-            ) : (
-              parseContacts(contactsRaw ?? '').map((c) => (
-                <button
-                  key={c.id}
-                  type="button"
-                  className={`date-cell-contact-option ${row.linkedContactId === c.id ? 'date-cell-contact-option-active' : ''}`}
-                  onClick={() => {
-                    setLinkedContact(row.id, row.linkedContactId === c.id ? null : c.id);
-                    setContactPickerAnchor(null);
-                  }}
-                >
-                  {c.text}
-                </button>
-              ))
-            )}
+            {parseContacts(contactsRaw ?? '').map((c) => (
+              <button
+                key={c.id}
+                type="button"
+                className={`date-cell-contact-option ${row.linkedContactId === c.id ? 'date-cell-contact-option-active' : ''}`}
+                onClick={() => {
+                  setLinkedContact(row.id, row.linkedContactId === c.id ? null : c.id);
+                  setContactPickerAnchor(null);
+                }}
+              >
+                {c.text}
+              </button>
+            ))}
             {row.linkedContactId && (
               <button
                 type="button"

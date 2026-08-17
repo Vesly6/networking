@@ -13,6 +13,7 @@ import {
 import { formatHistoryTimestamp } from '../../utils/date';
 import { parseContactText } from '../../utils/contactsApi';
 import { requestCallback } from '../../utils/callsApi';
+import { insertIntoSoftphone } from '../../utils/softphoneBridge';
 import { useToastStore } from '../../store/useToastStore';
 import { confirmDialog } from '../../store/useConfirmStore';
 
@@ -206,6 +207,25 @@ export function CellHoverEditor({
       showToast(`${label} copied`);
     } catch {
       showToast('Could not copy — clipboard access denied');
+    }
+  };
+
+  // Clicking a contact's phone number (the number itself, not the 📋
+  // button — that still just copies, unchanged) sends it straight into
+  // the Zadarma softphone's own input so the only thing left to do is
+  // press its Call button. Falls back to copying instead, same as the
+  // existing button, if the widget isn't on the page at all — no worse
+  // than before in that case, not a dead click.
+  const callViaSoftphone = async (phone: string) => {
+    if (insertIntoSoftphone(phone)) {
+      showToast('Number sent to the softphone — press Call there');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(phone);
+      showToast('Softphone not open — number copied instead');
+    } catch {
+      showToast('Softphone not open, and could not copy the number either');
     }
   };
 
@@ -423,7 +443,18 @@ export function CellHoverEditor({
                         <div className="cell-hover-contact-info">
                           {splitContactDisplayFields(c.text).map((field, i) => (
                             <div key={i} className={`cell-hover-contact-field cell-hover-contact-field-${field.kind}`}>
-                              {field.value}
+                              {field.kind === 'phone' ? (
+                                <button
+                                  type="button"
+                                  className="cell-hover-contact-phone-value"
+                                  title="Send to the softphone"
+                                  onClick={() => void callViaSoftphone(field.value)}
+                                >
+                                  {field.value}
+                                </button>
+                              ) : (
+                                field.value
+                              )}
                               {field.kind === 'phone' && (
                                 <button
                                   type="button"
