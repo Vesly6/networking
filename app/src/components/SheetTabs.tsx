@@ -1,5 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { useWorkspaceStore } from '../store/useWorkspaceStore';
+import { confirmDeleteTable } from '../utils/confirmDeleteTable';
+import { countRowsForTable } from '../db/db';
+import { ContextMenu } from './ContextMenu';
 
 /** Excel-style sheet tabs along the bottom of the window — lets you switch
  * between the workspace's other tables without leaving the current one to
@@ -12,15 +15,35 @@ export function SheetTabs() {
   const activeTableId = useWorkspaceStore((s) => s.activeTableId);
   const setActiveTable = useWorkspaceStore((s) => s.setActiveTable);
   const createTable = useWorkspaceStore((s) => s.createTable);
+  const duplicateTable = useWorkspaceStore((s) => s.duplicateTable);
   const renameTable = useWorkspaceStore((s) => s.renameTable);
+  const deleteTable = useWorkspaceStore((s) => s.deleteTable);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState('');
+  const [menu, setMenu] = useState<{ x: number; y: number; id: string; name: string } | null>(null);
 
   const commitRename = () => {
     if (editingId) renameTable(editingId, editingName);
     setEditingId(null);
   };
+
+  const handleContextMenu = (e: ReactMouseEvent, id: string, name: string) => {
+    e.preventDefault();
+    setMenu({ x: e.clientX, y: e.clientY, id, name });
+  };
+
+  // ContextMenu itself only stops its own click from bubbling (so clicking
+  // an item inside it doesn't also trigger this) — closing on a click
+  // anywhere else is the caller's job, same as every other context menu
+  // in the app (TableView's closePopovers does this for the column/row
+  // header menus).
+  useEffect(() => {
+    if (!menu) return;
+    const close = () => setMenu(null);
+    document.addEventListener('click', close);
+    return () => document.removeEventListener('click', close);
+  }, [menu]);
 
   return (
     <div className="sheet-tabs">
@@ -48,7 +71,8 @@ export function SheetTabs() {
               setEditingId(t.id);
               setEditingName(t.name);
             }}
-            title="Click to switch tables, double-click to rename"
+            onContextMenu={(e) => handleContextMenu(e, t.id, t.name)}
+            title="Click to switch tables, double-click to rename, right-click for more"
           >
             {t.name}
           </button>
@@ -62,6 +86,34 @@ export function SheetTabs() {
       >
         +
       </button>
+      {menu && (
+        <ContextMenu x={menu.x} y={menu.y}>
+          <button
+            type="button"
+            className="context-menu-item"
+            onClick={async () => {
+              const newId = await duplicateTable(menu.id);
+              setMenu(null);
+              if (newId) setActiveTable(newId);
+            }}
+          >
+            Duplicate table
+          </button>
+          <button
+            type="button"
+            className="context-menu-item context-menu-danger"
+            onClick={async () => {
+              const id = menu.id;
+              const name = menu.name;
+              setMenu(null);
+              const rows = await countRowsForTable(id);
+              if (await confirmDeleteTable(name, rows)) deleteTable(id);
+            }}
+          >
+            Delete table
+          </button>
+        </ContextMenu>
+      )}
     </div>
   );
 }

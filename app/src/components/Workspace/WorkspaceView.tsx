@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useWorkspaceStore } from '../../store/useWorkspaceStore';
-import { confirmDialog } from '../../store/useConfirmStore';
+import { confirmDeleteTable } from '../../utils/confirmDeleteTable';
 import { countRowsForTable } from '../../db/db';
 
 interface WorkspaceViewProps {
@@ -32,23 +32,8 @@ export function WorkspaceView({ onOpenTable }: WorkspaceViewProps) {
     onOpenTable(id);
   };
 
-  // Deleting a whole table is the single most destructive action in the
-  // app (every row, gone, with no undo — undo/redo history is per-table
-  // and reset on load, so there's nothing to recover through even the
-  // usual Ctrl+Z path) — on explicit request, this gets one extra
-  // confirmation step beyond the standard confirmDialog every other
-  // delete in the app uses, not just a reworded single dialog.
   const handleDeleteTable = async (id: string, name: string) => {
-    const rows = rowCounts[id] ?? 0;
-    const first = await confirmDialog({ message: `Delete table "${name}" and all of its rows?`, danger: true });
-    if (!first) return;
-    const second = await confirmDialog({
-      title: 'Are you sure?',
-      message: `This will permanently delete "${name}"${rows > 0 ? ` and all ${rows} of its rows` : ''}. This cannot be undone.`,
-      confirmLabel: 'Delete permanently',
-      danger: true,
-    });
-    if (second) deleteTable(id);
+    if (await confirmDeleteTable(name, rowCounts[id] ?? 0)) deleteTable(id);
   };
 
   return (
