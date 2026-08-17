@@ -28,6 +28,13 @@ export function SheetTabs() {
     setEditingId(null);
   };
 
+  const startRename = (id: string, name: string) => {
+    setEditingId(id);
+    setEditingName(name);
+  };
+
+  const handleNewTable = () => setActiveTable(createTable(`Table ${tables.length + 1}`));
+
   const handleContextMenu = (e: ReactMouseEvent, id: string, name: string) => {
     e.preventDefault();
     setMenu({ x: e.clientX, y: e.clientY, id, name });
@@ -67,27 +74,38 @@ export function SheetTabs() {
             type="button"
             className={`sheet-tab ${t.id === activeTableId ? 'sheet-tab-active' : ''}`}
             onClick={() => setActiveTable(t.id)}
-            onDoubleClick={() => {
-              setEditingId(t.id);
-              setEditingName(t.name);
-            }}
             onContextMenu={(e) => handleContextMenu(e, t.id, t.name)}
-            title="Click to switch tables, double-click to rename, right-click for more"
+            title="Click to switch tables — right-click to rename, add, duplicate, or delete"
           >
             {t.name}
           </button>
         ),
       )}
-      <button
-        type="button"
-        className="sheet-tab-add"
-        title="New table"
-        onClick={() => setActiveTable(createTable(`Table ${tables.length + 1}`))}
-      >
+      <button type="button" className="sheet-tab-add" title="New table" onClick={handleNewTable}>
         +
       </button>
       {menu && (
         <ContextMenu x={menu.x} y={menu.y}>
+          <button
+            type="button"
+            className="context-menu-item"
+            onClick={() => {
+              startRename(menu.id, menu.name);
+              setMenu(null);
+            }}
+          >
+            Rename
+          </button>
+          <button
+            type="button"
+            className="context-menu-item"
+            onClick={() => {
+              setMenu(null);
+              handleNewTable();
+            }}
+          >
+            New table
+          </button>
           <button
             type="button"
             className="context-menu-item"
