@@ -3,3 +3,6 @@
 *.csv
 
 .DS_Store
+
+# Claude Code's own local session state, not part of the project.
+.claude/
