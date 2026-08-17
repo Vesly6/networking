@@ -80,6 +80,8 @@ interface TableState {
   removeRow: (id: string) => void;
   removeRows: (ids: string[]) => void;
   setRowHeight: (id: string, height: number) => void;
+  /** null clears the link. See Row.linkedContactId in types.ts. */
+  setLinkedContact: (rowId: string, contactId: string | null) => void;
   updateCell: (rowId: string, columnId: string, value: string) => boolean;
   updateCells: (updates: CellUpdate[]) => number;
   setCellColors: (updates: CellColorUpdate[]) => void;
@@ -409,6 +411,18 @@ export const useTableStore = create<TableState>((set, get) => {
       const rows = get().rows.map((r) => {
         if (r.id !== id) return r;
         updatedRow = { ...r, height, updatedAt: Date.now() };
+        return updatedRow;
+      });
+      set({ rows });
+      if (updatedRow) void saveRow(updatedRow);
+    },
+
+    setLinkedContact: (rowId, contactId) => {
+      snapshot();
+      let updatedRow: Row | undefined;
+      const rows = get().rows.map((r) => {
+        if (r.id !== rowId) return r;
+        updatedRow = { ...r, linkedContactId: contactId ?? undefined, updatedAt: Date.now() };
         return updatedRow;
       });
       set({ rows });

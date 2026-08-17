@@ -29,6 +29,7 @@ import { parseTsv, buildTsv } from '../../utils/tsv';
 import { addNoteEntry, updateNoteEntry, removeNoteEntry } from '../../utils/noteHistory';
 import { addContact, updateContact, removeContact } from '../../utils/contacts';
 import { columnLetter, formatCellRef, parseRangeRef } from '../../utils/spreadsheet';
+import { getColumnByType } from '../../utils/row';
 import {
   ADD_COLUMN_WIDTH,
   DEFAULT_COLUMN_WIDTH,
@@ -73,6 +74,10 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
   const columns = useTableStore((s) => s.columns);
   const rows = useTableStore((s) => s.rows);
   const hiddenColumns = columns.filter((c) => c.hidden);
+  // For the next-action-date cell's "who are you calling" picker — computed
+  // once per render here rather than per-cell, since it only depends on
+  // `columns` (same reasoning as any other columns.find()-derived value).
+  const contactColumn = useMemo(() => getColumnByType(columns, 'contact'), [columns]);
   const addRow = useTableStore((s) => s.addRow);
   const removeRow = useTableStore((s) => s.removeRow);
   const removeRows = useTableStore((s) => s.removeRows);
@@ -1309,6 +1314,7 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
                         onExtend={(e) => handleCellMouseEnter(index, colIndex, e)}
                         onOpenEditor={(anchor) => openCellEditor(row.id, col.id, anchor)}
                         highlightQuery={search.trim() || undefined}
+                        contactsRaw={contactColumn ? row.cells[contactColumn.id] : undefined}
                       />
                     ))}
                   </tr>

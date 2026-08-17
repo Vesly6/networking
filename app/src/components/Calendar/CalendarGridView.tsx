@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useTableStore } from '../../store/useTableStore';
-import { getNextActionColumn, getPrimaryLabel } from '../../utils/row';
+import { getLinkedContactName, getNextActionColumn, getPrimaryLabel } from '../../utils/row';
 import { getDatePart, getMonthGrid, getTimePart, monthLabel, nextMonth, prevMonth, todayISO } from '../../utils/date';
 
 interface CalendarGridViewProps {
@@ -91,10 +91,18 @@ export function CalendarGridView({ onJumpToRow }: CalendarGridViewProps) {
               <div className="calendar-day-tasks">
                 {dayEntries.slice(0, MAX_VISIBLE_PER_DAY).map(({ row, value }) => {
                   const time = getTimePart(value);
+                  const label = getPrimaryLabel(row, columns);
+                  const contactName = getLinkedContactName(row, columns);
                   return (
-                    <button key={row.id} type="button" className="calendar-chip" onClick={() => onJumpToRow(row.id)} title={getPrimaryLabel(row, columns)}>
+                    <button
+                      key={row.id}
+                      type="button"
+                      className="calendar-chip"
+                      onClick={() => onJumpToRow(row.id)}
+                      title={contactName ? `${label} | ${contactName}` : label}
+                    >
                       {time && <span className="calendar-chip-time">{time}</span>}
-                      {truncateLabel(getPrimaryLabel(row, columns))}
+                      {truncateLabel(label)}
                     </button>
                   );
                 })}

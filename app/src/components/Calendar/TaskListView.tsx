@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { useTableStore } from '../../store/useTableStore';
-import { getNextActionColumn, getPrimaryLabel } from '../../utils/row';
+import { getLinkedContactName, getNextActionColumn, getPrimaryLabel } from '../../utils/row';
 import { formatDisplayDate, getTimePart, isDueToday, isOverdue } from '../../utils/date';
 import type { Row } from '../../types';
 
@@ -39,9 +39,13 @@ export function TaskListView({ onJumpToRow }: TaskListViewProps) {
   const renderItem = (row: Row) => {
     const dateValue = row.cells[dateColumn.id] ?? '';
     const time = getTimePart(dateValue);
+    const contactName = getLinkedContactName(row, columns);
     return (
       <li key={row.id} className="task-row">
-        <span className="task-row-label">{getPrimaryLabel(row, columns)}</span>
+        <span className="task-row-label">
+          {getPrimaryLabel(row, columns)}
+          {contactName && <span className="task-row-contact"> | {contactName}</span>}
+        </span>
         <span className="task-row-date">{formatDisplayDate(dateValue)}</span>
         {time && <span className="task-row-time">{time}</span>}
         <button type="button" className="task-open" onClick={() => onJumpToRow(row.id)}>

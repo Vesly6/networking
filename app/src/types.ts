@@ -34,6 +34,14 @@ export interface Row {
   colors?: Record<string, string>;
   /** Manual sort order — sequential, reassigned on every drag-reorder. */
   order: number;
+  /** Optional — the id of a ContactEntry (utils/contacts.ts) within this
+   * row's own `contact`-type column, picked from the next-action-date
+   * cell as "who to call" for that date. Row-level, not column-keyed:
+   * there's only ever one next-action-date column per table (see
+   * isNextActionDate), so there's nothing to disambiguate. Dangling (the
+   * contact was since deleted) is handled gracefully wherever this is
+   * read — just resolves to no name, never an error. */
+  linkedContactId?: string;
   /** Row height in pixels; falls back to a default when unset. */
   height?: number;
   createdAt: number;

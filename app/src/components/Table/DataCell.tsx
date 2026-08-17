@@ -12,7 +12,8 @@ import { useTableStore } from '../../store/useTableStore';
 import { useToastStore } from '../../store/useToastStore';
 import { combineDateTime, getDatePart, getTimePart } from '../../utils/date';
 import { getLatestNoteText } from '../../utils/noteHistory';
-import { getContactsSummary } from '../../utils/contacts';
+import { getContactsSummary, parseContacts, contactTextToFields } from '../../utils/contacts';
+import { Popover } from '../Popover';
 import { ensureProtocol } from '../../utils/link';
 import { highlightMatches } from '../../utils/highlight';
 import { EXCEL_CELL_LIMIT } from '../../constants';
@@ -39,6 +40,10 @@ interface DataCellProps {
    * search has already matched, so this just highlights *where* the match
    * is within that row's cells. Undefined/empty means no active search. */
   highlightQuery?: string;
+  /** Raw stored value of this row's `contact`-type column (whichever one,
+   * if any — see getColumnByType), for the next-action-date cell's "who to
+   * call" picker. Only read by the `date` branch when `column.isNextActionDate`. */
+  contactsRaw?: string;
 }
 
 function DataCellImpl({
@@ -51,14 +56,17 @@ function DataCellImpl({
   onExtend,
   onOpenEditor,
   highlightQuery,
+  contactsRaw,
 }: DataCellProps) {
   const updateCell = useTableStore((s) => s.updateCell);
+  const setLinkedContact = useTableStore((s) => s.setLinkedContact);
   const showToast = useToastStore((s) => s.show);
   const storedValue = row.cells[column.id] ?? '';
   const color = row.colors?.[column.id];
   // Declared unconditionally (not just inside the branches that use them)
   // so the hook order stays stable even if this column's type changes.
   const [timeExpanded, setTimeExpanded] = useState(false);
+  const [contactPickerAnchor, setContactPickerAnchor] = useState<HTMLElement | null>(null);
   const [draft, setDraft] = useState(storedValue);
   useEffect(() => {
     setDraft(storedValue);
@@ -192,7 +200,63 @@ function DataCellImpl({
               </button>
             )
           )}
+          {column.isNextActionDate &&
+            datePart &&
+            (() => {
+              const contacts = parseContacts(contactsRaw ?? '');
+              const linked = contacts.find((c) => c.id === row.linkedContactId);
+              return (
+                <button
+                  type="button"
+                  className={`date-cell-contact-btn ${linked ? 'date-cell-contact-linked' : ''}`}
+                  title={linked ? `Calling: ${linked.text}` : 'Pick who you\'re calling'}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const anchor = e.currentTarget;
+                    setContactPickerAnchor((prev) => (prev ? null : anchor));
+                  }}
+                >
+                  👤{linked ? ` ${contactTextToFields(linked.text).firstName || linked.text}` : ''}
+                </button>
+              );
+            })()}
         </div>
+        {contactPickerAnchor && (
+          <Popover anchor={contactPickerAnchor} width={220}>
+            <div className="popover-field">
+              <span>Who are you calling?</span>
+            </div>
+            {parseContacts(contactsRaw ?? '').length === 0 ? (
+              <div className="date-cell-contact-empty">No contacts on this row yet — add one in the Contacts cell.</div>
+            ) : (
+              parseContacts(contactsRaw ?? '').map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  className={`date-cell-contact-option ${row.linkedContactId === c.id ? 'date-cell-contact-option-active' : ''}`}
+                  onClick={() => {
+                    setLinkedContact(row.id, row.linkedContactId === c.id ? null : c.id);
+                    setContactPickerAnchor(null);
+                  }}
+                >
+                  {c.text}
+                </button>
+              ))
+            )}
+            {row.linkedContactId && (
+              <button
+                type="button"
+                className="date-cell-contact-clear"
+                onClick={() => {
+                  setLinkedContact(row.id, null);
+                  setContactPickerAnchor(null);
+                }}
+              >
+                Clear
+              </button>
+            )}
+          </Popover>
+        )}
       </td>
     );
   }
@@ -334,10 +398,14 @@ function DataCellImpl({
 // compared: they're fresh closures every render (they close over this
 // cell's row/col index), but behave identically to the previous render's
 // closures whenever the compared props are unchanged, so skipping
-// re-render on their identity alone is safe. highlightQuery IS compared —
-// unlike the callbacks, its value actually changes what gets rendered
-// (which substring, if any, is wrapped in <mark>), so a stale skip here
-// would leave old highlights on screen after the search box changes.
+// re-render on their identity alone is safe. highlightQuery and
+// contactsRaw ARE compared — unlike the callbacks, their values actually
+// change what gets rendered, and neither is reliably implied by `row`
+// alone: contactsRaw is derived from a *different* column (the row's
+// Contacts cell, for the next-action-date picker) than the `column` prop
+// this particular cell instance has, so adding a Contacts column after a
+// date was already set wouldn't otherwise be picked up until some other
+// prop changed too.
 export const DataCell = memo(DataCellImpl, (prev, next) => {
   return (
     prev.row === next.row &&
@@ -345,6 +413,7 @@ export const DataCell = memo(DataCellImpl, (prev, next) => {
     prev.selected === next.selected &&
     prev.editable === next.editable &&
     prev.inRange === next.inRange &&
-    prev.highlightQuery === next.highlightQuery
+    prev.highlightQuery === next.highlightQuery &&
+    prev.contactsRaw === next.contactsRaw
   );
 });
