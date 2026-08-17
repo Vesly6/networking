@@ -1,6 +1,10 @@
-# Personal data exports dropped at the repo root — not part of the app,
-# and not something that should end up in git history.
+# Personal data/image exports dropped at the repo root — not part of the
+# app, and not something that should end up in git history. Doesn't affect
+# app/public/favicon.png etc. — already-tracked files aren't untracked by
+# a later gitignore rule.
 *.csv
+/*.jpg
+/*.jpeg
 
 .DS_Store
 
