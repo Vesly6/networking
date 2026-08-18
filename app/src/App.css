@@ -1377,8 +1377,17 @@ tr.row-drop-end td {
   min-width: 0;
   font-size: 0.85rem;
   padding: 0.2em 0.3em;
-  resize: vertical;
+  /* Height is set inline by CellHoverEditor's autoGrow (measures
+     scrollHeight so a long pasted note — a client email quoted into a
+     note, say — is fully visible instead of collapsing to the browser's
+     default ~2-row textarea). resize: none because a manual drag would
+     just get overwritten by autoGrow on the next keystroke anyway;
+     max-height is the one thing still capping it, past which the
+     textarea's own native scroll takes over. */
+  resize: none;
   min-height: 2.2em;
+  max-height: 40vh;
+  overflow-y: auto;
 }
 
 .cell-hover-history-remove {

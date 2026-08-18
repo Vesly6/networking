@@ -1,4 +1,12 @@
-import { useLayoutEffect, useRef, useState, type ClipboardEvent, type CSSProperties, type KeyboardEvent } from 'react';
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ClipboardEvent,
+  type CSSProperties,
+  type KeyboardEvent,
+} from 'react';
 import { createPortal } from 'react-dom';
 import { parseNoteHistory } from '../../utils/noteHistory';
 import {
@@ -65,6 +73,28 @@ export function CellHoverEditor({
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState('');
   const skipNoteEditCommitRef = useRef(false);
+
+  // Neither the "Add a note" box nor the per-entry edit box had any real
+  // height beyond the browser's default ~2-row textarea — fine for a short
+  // logged line, but a pasted multi-paragraph email (a real, reported use
+  // case: a client's reply, quoted into a note) rendered as a couple of
+  // visible lines with the rest scrolled out of view inside a cramped box,
+  // not editable "neatly." These grow each textarea to fit its actual
+  // content (capped by the CSS max-height below, beyond which it falls
+  // back to the textarea's own native internal scroll) instead of relying
+  // on the user manually dragging the resize handle every single time.
+  // Effects (not a plain ref callback) so this also re-fires — and shrinks
+  // back down — when the draft is cleared after committing, and when
+  // switching which entry is being edited.
+  const autoGrow = (el: HTMLTextAreaElement | null) => {
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight}px`;
+  };
+  const newEntryRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => autoGrow(newEntryRef.current), [newEntryDraft]);
+  const editRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => autoGrow(editRef.current), [editDraft, editingNoteId]);
 
   const [addFields, setAddFields] = useState<ContactFormFields>(EMPTY_CONTACT_FIELDS);
   const [editingContactId, setEditingContactId] = useState<string | null>(null);
@@ -243,6 +273,7 @@ export function CellHoverEditor({
       {mode === 'note' ? (
         <>
           <textarea
+            ref={newEntryRef}
             className="cell-hover-new-entry"
             autoFocus
             placeholder="Add a note…"
@@ -277,6 +308,7 @@ export function CellHoverEditor({
                   <div className="cell-hover-history-row">
                     {editingNoteId === entry.id ? (
                       <textarea
+                        ref={editRef}
                         className="cell-hover-history-edit"
                         autoFocus
                         value={editDraft}

@@ -485,6 +485,21 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
     return active === document.body || !!tableScrollRef.current?.contains(active);
   };
 
+  // A cell being edited is itself an <input> inside .table-scroll, so
+  // withinTableFocus() alone can't distinguish "editing this one cell's
+  // text" from "the table as a whole is focused" — without this check,
+  // highlighting part of a cell's text mid-edit and pressing Ctrl+C copied
+  // the *entire cell* instead of the highlighted substring, silently
+  // discarding the user's actual selection. Only a genuine, non-collapsed
+  // text selection defers to the browser's native copy/paste; a bare
+  // cursor position (no highlight) keeps the existing whole-cell/range
+  // behavior, since that's how "click a cell, Ctrl+C" already worked.
+  const hasActiveTextSelection = () => {
+    const active = document.activeElement;
+    if (!(active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement)) return false;
+    return active.selectionStart !== null && active.selectionStart !== active.selectionEnd;
+  };
+
   // --- Copy / paste (Excel & Google Sheets interop via the system clipboard) ---
   // buildGridTsv/applyPastedGrid are shared by two entry points: the native
   // copy/paste DOM events below (Ctrl+C/Ctrl+V, driven by the cell range)
@@ -630,7 +645,7 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
 
   useEffect(() => {
     const handleCopy = (e: ClipboardEvent) => {
-      if (!withinTableFocus() || !rangeBounds) return;
+      if (!withinTableFocus() || !rangeBounds || hasActiveTextSelection()) return;
       const { minR, maxR, minC, maxC } = rangeBounds;
       if (minR >= filteredSortedRows.length || minC >= columns.length) return;
       e.preventDefault();
@@ -642,7 +657,7 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
     };
 
     const handlePaste = (e: ClipboardEvent) => {
-      if (!withinTableFocus() || !rangeFocus) return;
+      if (!withinTableFocus() || !rangeFocus || hasActiveTextSelection()) return;
       const text = e.clipboardData?.getData('text/plain');
       if (!text) return;
       e.preventDefault();
