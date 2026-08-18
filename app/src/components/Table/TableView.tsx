@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -55,6 +56,33 @@ interface CellPos {
   c: number;
 }
 type ViewSort = { columnId: string; direction: SortDirection } | null;
+
+/** The fill handle only ever extends along a single axis — same as
+ * Excel's own: whichever of row/column has the larger displacement from
+ * the source cell wins, and the other axis is ignored (a mostly-diagonal
+ * drag doesn't fill an L-shaped block). Recomputed fresh on every mouse
+ * move during the drag (not locked in once), so the preview rectangle
+ * can flip axis if the user changes direction mid-drag, matching what
+ * Excel's own fill handle does. Returns the cells to be *filled* —
+ * excludes the origin itself, which already has the value. */
+function computeFillRange(origin: CellPos, current: CellPos): CellPos[] {
+  const dr = current.r - origin.r;
+  const dc = current.c - origin.c;
+  if (dr === 0 && dc === 0) return [];
+  const cells: CellPos[] = [];
+  if (Math.abs(dr) >= Math.abs(dc)) {
+    const step = dr > 0 ? 1 : -1;
+    for (let r = origin.r + step; step > 0 ? r <= current.r : r >= current.r; r += step) {
+      cells.push({ r, c: origin.c });
+    }
+  } else {
+    const step = dc > 0 ? 1 : -1;
+    for (let c = origin.c + step; step > 0 ? c <= current.c : c >= current.c; c += step) {
+      cells.push({ r: origin.r, c });
+    }
+  }
+  return cells;
+}
 
 // Search text and sort survive a full page reload (not just switching
 // tabs — see App.tsx's tab-panel comment for that half of "my work keeps
@@ -187,6 +215,34 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
   // edit mode) even though the user never intended to drag at all.
   const dragStartPosRef = useRef<{ x: number; y: number } | null>(null);
   const DRAG_SELECT_THRESHOLD_PX = 4;
+
+  // Fill handle (the little square at the active cell's bottom-right
+  // corner — Excel calls this the "fill handle") — a fourth, independent
+  // drag system alongside cell/row/column range selection, only ever
+  // active for a single source cell (fillDragOrigin), copying its value
+  // into whichever cells the drag passes over. Refs mirror the state for
+  // the same reason isRangeDraggingRef etc. do above: the global mouseup
+  // listener below has an intentionally empty dependency array (so it's
+  // not torn down and re-added on every render) and DataCell's memoing
+  // means a cell's own onMouseEnter closure can predate the mousedown
+  // that started this drag.
+  const [fillDragActive, setFillDragActive] = useState(false);
+  const [fillDragOrigin, setFillDragOrigin] = useState<CellPos | null>(null);
+  const [fillDragCurrent, setFillDragCurrent] = useState<CellPos | null>(null);
+  // Live cursor position (viewport coordinates) during the drag — used
+  // only to give the preview rectangle below a smoothly-following edge
+  // along the locked axis; the actual fill on drop uses fillDragCurrent's
+  // cell indices, not this, so any pixel imprecision here never affects
+  // which cells actually get filled.
+  const [fillDragMousePos, setFillDragMousePos] = useState<{ x: number; y: number } | null>(null);
+  const fillDragActiveRef = useRef(fillDragActive);
+  fillDragActiveRef.current = fillDragActive;
+  const fillDragOriginRef = useRef(fillDragOrigin);
+  fillDragOriginRef.current = fillDragOrigin;
+  const fillDragCurrentRef = useRef(fillDragCurrent);
+  fillDragCurrentRef.current = fillDragCurrent;
+  const columnsRef = useRef(columns);
+  columnsRef.current = columns;
 
   // Row-header selection (for multi-row drag-reorder / bulk delete)
   const [rowRangeAnchor, setRowRangeAnchor] = useState<number | null>(null);
@@ -381,6 +437,36 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
   // Finish any drag-select or resize gesture on mouseup, anywhere on the page.
   useEffect(() => {
     const handleMouseUp = () => {
+      if (fillDragActiveRef.current) {
+        const origin = fillDragOriginRef.current;
+        const current = fillDragCurrentRef.current;
+        if (origin && current) {
+          const targets = computeFillRange(origin, current);
+          const rowList = filteredSortedRowsRef.current;
+          const colList = columnsRef.current;
+          const originRow = rowList[origin.r];
+          const originColumn = colList[origin.c];
+          if (originRow && originColumn && targets.length > 0) {
+            const value = originRow.cells[originColumn.id] ?? '';
+            const updates: CellUpdate[] = [];
+            for (const t of targets) {
+              const row = rowList[t.r];
+              const col = colList[t.c];
+              if (row && col) updates.push({ rowId: row.id, columnId: col.id, value });
+            }
+            if (updates.length > 0) {
+              const truncated = updateCells(updates);
+              const parts = [`Filled ${updates.length} cell${updates.length === 1 ? '' : 's'}`];
+              if (truncated > 0) parts.push(`${truncated} truncated to the Excel limit`);
+              showToast(parts.join(' · '));
+            }
+          }
+        }
+        setFillDragActive(false);
+        setFillDragOrigin(null);
+        setFillDragCurrent(null);
+        setFillDragMousePos(null);
+      }
       if (isRowRangeDraggingRef.current || isColRangeDraggingRef.current) {
         justFinishedHeaderDragRef.current = true;
         setTimeout(() => {
@@ -395,6 +481,14 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
     };
     window.addEventListener('mouseup', handleMouseUp);
     return () => window.removeEventListener('mouseup', handleMouseUp);
+    // showToast/updateCells are Zustand action references — stable across
+    // renders (defined once in the store, never reassigned), so closing
+    // over "the current one" here is exactly the same as closing over
+    // "the only one that will ever exist"; no staleness risk from the
+    // empty dependency array, which is deliberate — this listener stays
+    // attached once instead of tearing down/re-adding on every render,
+    // matching every other global mouseup handler in this file.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // --- Cell range selection (formula bar target + copy/paste/color source) ---
@@ -424,6 +518,80 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
   // focused in a text input. Only a true single-cell selection is editable.
   const isSingleCellSelection =
     !!rangeAnchor && !!rangeFocus && rangeAnchor.r === rangeFocus.r && rangeAnchor.c === rangeFocus.c;
+
+  // Fill handle's on-screen position, in coordinates relative to
+  // .table-scroll's own scrollable content (not the viewport) — computed
+  // once per relevant change rather than on every scroll tick, because an
+  // absolutely-positioned child of a `position: relative; overflow: auto`
+  // container scrolls with that container's content automatically once
+  // placed; no manual scroll-tracking needed. Only shown for a genuine
+  // single-cell selection (same gate DataCell's own editable prop uses),
+  // and hidden entirely while a drag is already in progress (dragging the
+  // handle itself sets fillDragActive, at which point the *preview*
+  // rectangle below takes over instead).
+  const [fillHandlePos, setFillHandlePos] = useState<{ top: number; left: number } | null>(null);
+  useLayoutEffect(() => {
+    const scrollEl = tableScrollRef.current;
+    if (!scrollEl || !isSingleCellSelection || fillDragActive) {
+      setFillHandlePos(null);
+      return;
+    }
+    const cellEl = scrollEl.querySelector('td.cell-selected');
+    if (!(cellEl instanceof HTMLElement)) {
+      setFillHandlePos(null);
+      return;
+    }
+    const cellRect = cellEl.getBoundingClientRect();
+    const scrollRect = scrollEl.getBoundingClientRect();
+    setFillHandlePos({
+      top: cellRect.bottom - scrollRect.top + scrollEl.scrollTop,
+      left: cellRect.right - scrollRect.left + scrollEl.scrollLeft,
+    });
+  }, [activeCell, isSingleCellSelection, fillDragActive, filteredSortedRows, columns]);
+
+  // Dashed preview rectangle shown while a fill drag is in progress —
+  // pinned to the origin cell's own width/height on the axis that ISN'T
+  // being extended (matching computeFillRange's own axis lock: a fill can
+  // only go straight down/up/left/right, never diagonal), with the other
+  // edge following the live cursor position. The origin cell is still
+  // `td.cell-selected` throughout the drag (fillDragActive suppresses the
+  // *handle*, not the selection itself), so the same query as above finds
+  // it.
+  const [fillPreviewRect, setFillPreviewRect] = useState<{ top: number; left: number; width: number; height: number } | null>(
+    null,
+  );
+  useLayoutEffect(() => {
+    const scrollEl = tableScrollRef.current;
+    if (!scrollEl || !fillDragActive || !fillDragOrigin || !fillDragCurrent || !fillDragMousePos) {
+      setFillPreviewRect(null);
+      return;
+    }
+    const cellEl = scrollEl.querySelector('td.cell-selected');
+    if (!(cellEl instanceof HTMLElement)) {
+      setFillPreviewRect(null);
+      return;
+    }
+    const cellRect = cellEl.getBoundingClientRect();
+    const scrollRect = scrollEl.getBoundingClientRect();
+    const originTop = cellRect.top - scrollRect.top + scrollEl.scrollTop;
+    const originLeft = cellRect.left - scrollRect.left + scrollEl.scrollLeft;
+    const originBottom = originTop + cellRect.height;
+    const originRight = originLeft + cellRect.width;
+    const mouseY = fillDragMousePos.y - scrollRect.top + scrollEl.scrollTop;
+    const mouseX = fillDragMousePos.x - scrollRect.left + scrollEl.scrollLeft;
+
+    const dr = fillDragCurrent.r - fillDragOrigin.r;
+    const dc = fillDragCurrent.c - fillDragOrigin.c;
+    if (Math.abs(dr) >= Math.abs(dc)) {
+      const top = Math.min(originTop, mouseY);
+      const bottom = Math.max(originBottom, mouseY);
+      setFillPreviewRect({ top, left: originLeft, width: cellRect.width, height: bottom - top });
+    } else {
+      const left = Math.min(originLeft, mouseX);
+      const right = Math.max(originRight, mouseX);
+      setFillPreviewRect({ top: originTop, left, width: right - left, height: cellRect.height });
+    }
+  }, [fillDragActive, fillDragOrigin, fillDragCurrent, fillDragMousePos]);
 
   // --- Name Box (Excel's top-left "C13" reference box) — type a cell or
   // range reference (e.g. "A1:A10000") and jump straight to it, for bulk
@@ -507,10 +675,29 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
   // unaffected either way — it's a deliberate, keyboard-modified action,
   // not stray mouse movement.
   const handleCellMouseEnter = (r: number, c: number, e: ReactMouseEvent) => {
+    if (fillDragActiveRef.current) {
+      setFillDragCurrent({ r, c });
+      setFillDragMousePos({ x: e.clientX, y: e.clientY });
+      return;
+    }
     if (!isRangeDraggingRef.current || !rangeAnchorRef.current) return;
     const start = dragStartPosRef.current;
     if (start && Math.hypot(e.clientX - start.x, e.clientY - start.y) < DRAG_SELECT_THRESHOLD_PX) return;
     setRangeFocus({ r, c });
+  };
+
+  // Mousedown on the fill handle (rendered below, at the active cell's
+  // bottom-right corner) — deliberately does NOT go through
+  // handleCellMouseDown, since that would collapse the selection to
+  // whatever cell happens to be under the handle instead of starting a
+  // fill drag from the cell that's already selected.
+  const handleFillHandleMouseDown = (e: ReactMouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!activeCell) return;
+    setFillDragActive(true);
+    setFillDragOrigin(activeCell);
+    setFillDragCurrent(activeCell);
   };
 
   // note/contact cells open CellHoverEditor on click — see DataCell's
@@ -1492,6 +1679,25 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
               )}
             </tbody>
           </table>
+          {fillHandlePos && (
+            <div
+              className="fill-handle"
+              title="Drag to fill this value into adjacent cells"
+              style={{ top: fillHandlePos.top, left: fillHandlePos.left }}
+              onMouseDown={handleFillHandleMouseDown}
+            />
+          )}
+          {fillPreviewRect && (
+            <div
+              className="fill-preview-rect"
+              style={{
+                top: fillPreviewRect.top,
+                left: fillPreviewRect.left,
+                width: fillPreviewRect.width,
+                height: fillPreviewRect.height,
+              }}
+            />
+          )}
           {filteredSortedRows.length === 0 && (
             <div className="empty-state">
               {rows.length === 0 ? 'No companies yet — import a CSV or add a row.' : 'No results for the current search.'}

@@ -294,6 +294,37 @@
   position: relative;
 }
 
+/* Excel's "fill handle" — the small square at the active cell's
+   bottom-right corner; dragging it copies that cell's value into
+   whichever cells the drag passes over (TableView's fillDrag* state).
+   Positioned via inline top/left computed in content-space (relative to
+   .table-scroll's scrollable area, not the viewport), so — unlike a
+   position:fixed overlay — it scrolls with the table automatically with
+   no manual scroll-tracking needed. Offset by half its own size so it's
+   centered ON the corner, the same way Excel's own handle straddles the
+   cell border rather than sitting fully inside or outside it. */
+.fill-handle {
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  transform: translate(-50%, -50%);
+  background: var(--accent);
+  border: 1px solid var(--bg);
+  cursor: crosshair;
+  z-index: 4;
+}
+
+/* The dashed preview box shown while dragging the fill handle — purely
+   visual, never intercepts the mouse (pointer-events: none), since the
+   drag's actual mouseenter/mouseup handling is on the cells underneath
+   it, not this overlay. */
+.fill-preview-rect {
+  position: absolute;
+  border: 1.5px dashed var(--accent);
+  pointer-events: none;
+  z-index: 3;
+}
+
 table.sheet {
   border-collapse: collapse;
   width: 100%;
