@@ -157,15 +157,22 @@ export interface CompanySearchParams {
   per_page?: number;
 }
 
-/** A company/"account" record — Apollo's own field name for this in the
- * response is `accounts`, not `organizations` (confirmed against a real
- * response), which is why searchCompanies below remaps it to the more
- * predictable `companies` for this app's own API shape. The real response
- * carries considerably more than the docs list — revenue estimates,
- * headcount growth percentages, full street address, num_contacts,
- * Apollo CRM stage/ownership fields (this account's own saved accounts
- * surface here too, not just the global database) — all reachable via
- * the index signature rather than clipped to the few fields typed below. */
+/** A company/"account" record. Apollo's /mixed_companies/search response
+ * actually carries the matches in TWO separate arrays, not one:
+ * `accounts` (companies already saved to this Apollo user's own CRM) and
+ * `organizations` (matches from Apollo's global company database). Which
+ * one is populated depends entirely on the query — confirmed directly: a
+ * plain q_organization_name: "Google" search came back with `accounts: []`
+ * but `organizations` holding 3 real matches (and pagination.total_entries
+ * correctly at 2874), while some other query shapes return data under
+ * `accounts` instead. searchCompanies below merges both (deduped by id)
+ * into the single `companies` array this app's frontend expects — an
+ * earlier version trusted `accounts` alone, which silently returned zero
+ * results for ordinary by-name searches (the exact case that surfaced
+ * this). The real response carries considerably more than the docs list —
+ * revenue estimates, headcount growth percentages, full street address,
+ * num_contacts, Apollo CRM stage/ownership fields — all reachable via the
+ * index signature rather than clipped to the few fields typed below. */
 export interface ApolloCompany {
   id: string;
   name: string | null;
@@ -194,12 +201,24 @@ export interface ApolloCompany {
 export async function searchCompanies(
   params: CompanySearchParams,
 ): Promise<{ companies: ApolloCompany[]; total_entries: number; page: number }> {
-  const result = await callApollo<{ accounts: ApolloCompany[]; pagination?: { total_entries: number; page: number } }>(
-    '/mixed_companies/search',
-    params as Record<string, unknown>,
-  );
+  const result = await callApollo<{
+    accounts: ApolloCompany[];
+    organizations?: ApolloCompany[];
+    pagination?: { total_entries: number; page: number };
+  }>('/mixed_companies/search', params as Record<string, unknown>);
+
+  const seen = new Set<string>();
+  const companies: ApolloCompany[] = [];
+  for (const c of [...(result.accounts ?? []), ...(result.organizations ?? [])]) {
+    if (c.id) {
+      if (seen.has(c.id)) continue;
+      seen.add(c.id);
+    }
+    companies.push(c);
+  }
+
   return {
-    companies: result.accounts ?? [],
+    companies,
     total_entries: result.pagination?.total_entries ?? 0,
     page: result.pagination?.page ?? params.page ?? 1,
   };
@@ -338,7 +357,18 @@ export async function pollWebhookResult(requestId: string): Promise<WebhookPollR
     return { status: 'processing', retryAfterSeconds };
   }
   if (res.status === 400 || res.status === 410) {
-    return { status: 'error', message: res.status === 410 ? 'This phone lookup result has expired (older than 30 days)' : 'Invalid lookup id' };
+    // 400 here is the known, unresolved account-level issue documented at
+    // length above ("Invalid lookup id" is Apollo's own raw wording for a
+    // request_id it won't accept, on either candidate id this app has
+    // tried) — reworded so the UI doesn't read as a fresh, unexplained
+    // failure on every single attempt.
+    return {
+      status: 'error',
+      message:
+        res.status === 410
+          ? 'This phone lookup result has expired (older than 30 days)'
+          : "Apollo isn't accepting phone lookups on this account right now (a known, account-level issue — not specific to this contact). Email reveal is unaffected.",
+    };
   }
 
   const json: any = await res.json().catch(() => null);

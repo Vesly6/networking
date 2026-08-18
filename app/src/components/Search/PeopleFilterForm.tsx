@@ -1,8 +1,10 @@
 import { useState } from 'react';
 import type { PeopleSearchParams } from '../../utils/apolloApi';
 import { ComboBoxMultiInput } from './ComboBoxMultiInput';
+import { CompanyLookupInput } from './CompanyLookupInput';
 import { COUNTRIES } from '../../utils/countries';
 import { JOB_TITLES } from '../../utils/jobTitles';
+import { EMPLOYEE_RANGES } from '../../utils/employeeRanges';
 
 interface PeopleFilterFormProps {
   params: PeopleSearchParams;
@@ -25,15 +27,22 @@ const joinList = (v?: string[]) => (v ?? []).join(', ');
 
 /** Mirrors apollo.io's own People Search panel structure (verified against
  * Apollo's help center / magazine articles, not invented): a small set of
- * filters shown by default — Name, Job Title, Seniority, Location, Company
- * size — with everything else (org domains/ids, revenue, technology, job
- * postings, email status) behind the same "Show more filters" toggle
- * Apollo itself uses, rather than one long flat list of every field at
- * once. Every field still maps to a real, documented /mixed_people/
- * api_search parameter — nothing here is invented, only the grouping. */
+ * filters shown by default — Name, Job Title, Seniority, Company
+ * name/domain, Location, Company size — with everything else (revenue,
+ * technology, job postings, email status) behind the same "Show more
+ * filters" toggle Apollo itself uses, rather than one long flat list of
+ * every field at once. Every field still maps to a real, documented
+ * /mixed_people/api_search parameter — nothing here is invented, only the
+ * grouping. "Company name" is the one exception worth calling out: People
+ * Search has no free-text org-name parameter at all (only organization_ids
+ * and q_organization_domains_list), so CompanyLookupInput resolves a typed
+ * name to an id via the real Company Search endpoint first — the same
+ * two-step Apollo's own product does internally, just not hidden behind an
+ * undocumented endpoint this app doesn't have access to. */
 export function PeopleFilterForm({ params, onChange, onSubmit, loading }: PeopleFilterFormProps) {
   const [seniorities, setSeniorities] = useState<string[]>(params.person_seniorities ?? []);
   const [emailStatuses, setEmailStatuses] = useState<string[]>(params.contact_email_status ?? []);
+  const [employeeRanges, setEmployeeRanges] = useState<string[]>(params.organization_num_employees_ranges ?? []);
   const [showMore, setShowMore] = useState(false);
 
   const set = <K extends keyof PeopleSearchParams>(key: K, value: PeopleSearchParams[K]) =>
@@ -48,6 +57,11 @@ export function PeopleFilterForm({ params, onChange, onSubmit, loading }: People
     const next = emailStatuses.includes(s) ? emailStatuses.filter((x) => x !== s) : [...emailStatuses, s];
     setEmailStatuses(next);
     set('contact_email_status', next.length > 0 ? next : undefined);
+  };
+  const toggleEmployeeRange = (v: string) => {
+    const next = employeeRanges.includes(v) ? employeeRanges.filter((x) => x !== v) : [...employeeRanges, v];
+    setEmployeeRanges(next);
+    set('organization_num_employees_ranges', next.length > 0 ? next : undefined);
   };
 
   return (
@@ -101,6 +115,21 @@ export function PeopleFilterForm({ params, onChange, onSubmit, loading }: People
           </div>
         </div>
         <div className="search-filter-field">
+          <span>Company name</span>
+          <CompanyLookupInput
+            value={params.organization_ids ?? []}
+            onChange={(ids) => set('organization_ids', ids.length > 0 ? ids : undefined)}
+          />
+        </div>
+        <label className="search-filter-field">
+          <span>Company domain</span>
+          <input
+            placeholder="apollo.io, google.com"
+            value={joinList(params.q_organization_domains_list)}
+            onChange={(e) => set('q_organization_domains_list', splitList(e.target.value))}
+          />
+        </label>
+        <div className="search-filter-field">
           <span>Person locations</span>
           <ComboBoxMultiInput
             placeholder="Vilnius, Lithuania"
@@ -109,14 +138,21 @@ export function PeopleFilterForm({ params, onChange, onSubmit, loading }: People
             suggestions={COUNTRIES}
           />
         </div>
-        <label className="search-filter-field">
-          <span>Company size (employee ranges, e.g. 1,10)</span>
-          <input
-            placeholder="1,10, 50,200"
-            value={joinList(params.organization_num_employees_ranges)}
-            onChange={(e) => set('organization_num_employees_ranges', splitList(e.target.value))}
-          />
-        </label>
+        <div className="search-filter-field">
+          <span>Company size</span>
+          <div className="search-filter-chips">
+            {EMPLOYEE_RANGES.map((r) => (
+              <button
+                type="button"
+                key={r.value}
+                className={`search-filter-chip ${employeeRanges.includes(r.value) ? 'search-filter-chip-active' : ''}`}
+                onClick={() => toggleEmployeeRange(r.value)}
+              >
+                {r.label}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
       <button type="button" className="search-show-more-toggle" onClick={() => setShowMore((v) => !v)}>
@@ -154,22 +190,6 @@ export function PeopleFilterForm({ params, onChange, onSubmit, loading }: People
                 suggestions={COUNTRIES}
               />
             </div>
-            <label className="search-filter-field">
-              <span>Org. domains</span>
-              <input
-                placeholder="apollo.io, google.com"
-                value={joinList(params.q_organization_domains_list)}
-                onChange={(e) => set('q_organization_domains_list', splitList(e.target.value))}
-              />
-            </label>
-            <label className="search-filter-field">
-              <span>Org. Apollo IDs</span>
-              <input
-                placeholder="from a prior company search result's id"
-                value={joinList(params.organization_ids)}
-                onChange={(e) => set('organization_ids', splitList(e.target.value))}
-              />
-            </label>
             <div className="search-filter-field search-filter-range">
               <span>Revenue range ($)</span>
               <div className="search-filter-range-inputs">

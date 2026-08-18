@@ -15,7 +15,14 @@ function PersonRow({ person }: { person: ApolloSearchPerson }) {
 
   const { addPerson } = useAddApolloResultToTable();
 
-  const displayName = [person.first_name, enriched?.last_name ?? person.last_name_obfuscated].filter(Boolean).join(' ');
+  // `||`, not `??` — Apollo's enrichment response has come back with an
+  // empty-string last_name for at least one real match tested against this
+  // account, which `??` would happily keep (showing only the first name,
+  // reading as "less revealed than before"); `||` falls through to the
+  // pre-enrichment obfuscated value the same way a missing field would.
+  const firstName = enriched?.first_name || person.first_name;
+  const lastName = enriched?.last_name || person.last_name_obfuscated;
+  const displayName = [firstName, lastName].filter(Boolean).join(' ');
   const email = enriched?.email ?? enriched?.contact?.email;
   const phone = phoneNumbers?.[0]?.sanitized_number;
 
@@ -47,20 +54,22 @@ function PersonRow({ person }: { person: ApolloSearchPerson }) {
         {enrichError && <div className="search-result-detail-error">{enrichError}</div>}
         {phoneError && <div className="search-result-detail-error">{phoneError}</div>}
       </td>
-      <td className="search-results-table-actions">
-        {!email && (
-          <button type="button" onClick={() => void revealEmail(person)} disabled={!!enriching}>
-            {enriching ? 'Finding…' : 'Find email'}
+      <td>
+        <div className="search-results-table-actions">
+          {!email && (
+            <button type="button" onClick={() => void revealEmail(person)} disabled={!!enriching}>
+              {enriching ? 'Finding…' : 'Find email'}
+            </button>
+          )}
+          {!phone && (
+            <button type="button" onClick={() => void revealPhone(person)} disabled={!!phonePending}>
+              {phonePending ? 'Finding…' : 'Find phone'}
+            </button>
+          )}
+          <button type="button" className="primary" onClick={() => addPerson(person, enriched, phone)}>
+            + Add
           </button>
-        )}
-        {!phone && (
-          <button type="button" onClick={() => void revealPhone(person)} disabled={!!phonePending}>
-            {phonePending ? 'Finding…' : 'Find phone'}
-          </button>
-        )}
-        <button type="button" className="primary" onClick={() => addPerson(person, enriched, phone)}>
-          + Add
-        </button>
+        </div>
       </td>
     </tr>
   );
@@ -68,7 +77,7 @@ function PersonRow({ person }: { person: ApolloSearchPerson }) {
 
 export function PeopleResultsTable({ people }: { people: ApolloSearchPerson[] }) {
   return (
-    <table className="search-results-table">
+    <table className="search-results-table search-results-table-people">
       <thead>
         <tr>
           <th>Name</th>

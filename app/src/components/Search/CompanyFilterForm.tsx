@@ -3,6 +3,7 @@ import type { CompanySearchParams } from '../../utils/apolloApi';
 import { ComboBoxMultiInput } from './ComboBoxMultiInput';
 import { COUNTRIES } from '../../utils/countries';
 import { JOB_TITLES } from '../../utils/jobTitles';
+import { EMPLOYEE_RANGES } from '../../utils/employeeRanges';
 
 interface CompanyFilterFormProps {
   params: CompanySearchParams;
@@ -30,8 +31,14 @@ const joinList = (v?: string[]) => (v ?? []).join(', ');
  * button rather than hidden. */
 export function CompanyFilterForm({ params, onChange, onSubmit, loading }: CompanyFilterFormProps) {
   const [showMore, setShowMore] = useState(false);
+  const [employeeRanges, setEmployeeRanges] = useState<string[]>(params.organization_num_employees_ranges ?? []);
   const set = <K extends keyof CompanySearchParams>(key: K, value: CompanySearchParams[K]) =>
     onChange({ ...params, [key]: value });
+  const toggleEmployeeRange = (v: string) => {
+    const next = employeeRanges.includes(v) ? employeeRanges.filter((x) => x !== v) : [...employeeRanges, v];
+    setEmployeeRanges(next);
+    set('organization_num_employees_ranges', next.length > 0 ? next : undefined);
+  };
 
   return (
     <form
@@ -62,14 +69,21 @@ export function CompanyFilterForm({ params, onChange, onSubmit, loading }: Compa
             suggestions={COUNTRIES}
           />
         </div>
-        <label className="search-filter-field">
-          <span>Employee count ranges (e.g. 1,10)</span>
-          <input
-            placeholder="1,10, 50,200"
-            value={joinList(params.organization_num_employees_ranges)}
-            onChange={(e) => set('organization_num_employees_ranges', splitList(e.target.value))}
-          />
-        </label>
+        <div className="search-filter-field">
+          <span>Employee count</span>
+          <div className="search-filter-chips">
+            {EMPLOYEE_RANGES.map((r) => (
+              <button
+                type="button"
+                key={r.value}
+                className={`search-filter-chip ${employeeRanges.includes(r.value) ? 'search-filter-chip-active' : ''}`}
+                onClick={() => toggleEmployeeRange(r.value)}
+              >
+                {r.label}
+              </button>
+            ))}
+          </div>
+        </div>
         <label className="search-filter-field">
           <span>Keyword tags / industry</span>
           <input

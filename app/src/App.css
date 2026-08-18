@@ -2520,6 +2520,20 @@ tr.row-drop-end td {
   background: var(--bg-hover);
 }
 
+/* CompanyLookupInput — same chips/dropdown look as .combobox, plus a
+   trailing explicit lookup button (never fires on keystroke — see the
+   component's own comment on why this stays a deliberate click). */
+.company-lookup {
+  position: relative;
+}
+.company-lookup-btn {
+  border: none !important;
+  background: transparent !important;
+  padding: 0.1em 0.35em !important;
+  font-size: 0.9rem;
+  flex-shrink: 0;
+}
+
 .search-filter-range-inputs {
   display: flex;
   gap: 0.4rem;
@@ -2573,8 +2587,15 @@ tr.row-drop-end td {
   gap: 0.5rem;
 }
 
+/* table-layout: fixed (+ explicit per-column widths below) so a row whose
+   Contact/Actions cell grows — a revealed email/phone line, a LinkedIn
+   link, an error message, one fewer action button once revealed — never
+   re-triggers the browser's auto-layout column-width algorithm and shifts
+   every other column out of alignment. Same fix, same reasoning, as the
+   Calls tab's own table-layout note elsewhere in this file. */
 .search-results-table {
   border-collapse: collapse;
+  table-layout: fixed;
   width: 100%;
   font-size: 0.85rem;
 }
@@ -2594,13 +2615,63 @@ tr.row-drop-end td {
   padding: 0.6em 0.75em;
   border-bottom: 1px solid var(--border);
   vertical-align: top;
+  overflow-wrap: break-word;
 }
 .search-results-table tbody tr:hover td {
   background: var(--bg-hover);
 }
 .search-results-table-name {
   font-weight: 700;
-  white-space: nowrap;
+}
+
+.search-results-table-people th:nth-child(1),
+.search-results-table-people td:nth-child(1) {
+  width: 19%;
+}
+.search-results-table-people th:nth-child(2),
+.search-results-table-people td:nth-child(2) {
+  width: 19%;
+}
+.search-results-table-people th:nth-child(3),
+.search-results-table-people td:nth-child(3) {
+  width: 17%;
+}
+.search-results-table-people th:nth-child(4),
+.search-results-table-people td:nth-child(4) {
+  width: 27%;
+}
+.search-results-table-people th:nth-child(5),
+.search-results-table-people td:nth-child(5) {
+  width: 18%;
+}
+
+.search-results-table-company th:nth-child(1),
+.search-results-table-company td:nth-child(1) {
+  width: 18%;
+}
+.search-results-table-company th:nth-child(2),
+.search-results-table-company td:nth-child(2) {
+  width: 16%;
+}
+.search-results-table-company th:nth-child(3),
+.search-results-table-company td:nth-child(3) {
+  width: 16%;
+}
+.search-results-table-company th:nth-child(4),
+.search-results-table-company td:nth-child(4) {
+  width: 13%;
+}
+.search-results-table-company th:nth-child(5),
+.search-results-table-company td:nth-child(5) {
+  width: 12%;
+}
+.search-results-table-company th:nth-child(6),
+.search-results-table-company td:nth-child(6) {
+  width: 10%;
+}
+.search-results-table-company th:nth-child(7),
+.search-results-table-company td:nth-child(7) {
+  width: 15%;
 }
 .search-results-linkedin {
   display: block;
@@ -2620,6 +2691,9 @@ tr.row-drop-end td {
 }
 .search-results-table-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.4rem;
+}
+.search-results-table-actions button {
   white-space: nowrap;
 }
