@@ -5,6 +5,7 @@
 *.csv
 /*.jpg
 /*.jpeg
+/*.png
 
 .DS_Store
 
