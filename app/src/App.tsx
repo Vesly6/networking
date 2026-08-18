@@ -186,18 +186,59 @@ function App() {
             </button>
           </header>
 
-          <main className="app-main">
-            {tab === 'calls' ? (
+          <main className="app-main tab-panel-container">
+            {/* Table/Calendar/Calls all stay mounted across tab switches —
+                hidden via `visibility` (not display:none, and not
+                unmounting) — so search/sort/scroll position/selection
+                survive a trip to another tab and back. This used to fully
+                reset on every switch, since the old ternary here unmounted
+                whichever view wasn't active.
+
+                `display: none` was tried first and rejected: it makes the
+                hidden panel report zero size, and TableView's virtualizer
+                (@tanstack/react-virtual) watches the scroll container's
+                size via ResizeObserver — the zero-size blip resets its
+                internal scroll-offset tracking, so the table silently
+                snapped back to the top on every return trip even though
+                the DOM's own scrollTop would have restored correctly on
+                its own. Absolute-positioning every panel to fill this
+                container, toggling only `visibility`, keeps each panel's
+                real layout size intact the entire time, so the
+                virtualizer never sees that zero-size event in the first
+                place.
+
+                `key={activeTableId}` still forces a clean remount of
+                Table/Calendar when the *table* itself changes (switching
+                tables already resets the tab to 'table' — see the
+                activeTableId effect above — and a search/filter left over
+                from a different table would otherwise silently hide rows
+                in the new one, which is worse than not persisting at
+                all). Calls has no such key: it isn't scoped to a table. */}
+            <div className={`tab-panel ${tab === 'calls' ? 'tab-panel-active' : ''}`}>
               <CallsView onJumpToRow={handleJumpToRow} />
-            ) : !tableReady ? (
-              <div className="app-loading">
-                <span>Loading…</span>
-              </div>
-            ) : tab === 'table' ? (
-              <TableView focusRowId={focusRowId} onFocusHandled={() => setFocusRowId(null)} />
-            ) : (
-              <CalendarView onJumpToRow={handleJumpToRow} />
-            )}
+            </div>
+            <div className={`tab-panel ${tab === 'table' ? 'tab-panel-active' : ''}`}>
+              {tableReady ? (
+                <TableView
+                  key={activeTableId}
+                  focusRowId={focusRowId}
+                  onFocusHandled={() => setFocusRowId(null)}
+                />
+              ) : (
+                <div className="app-loading">
+                  <span>Loading…</span>
+                </div>
+              )}
+            </div>
+            <div className={`tab-panel ${tab === 'calendar' ? 'tab-panel-active' : ''}`}>
+              {tableReady ? (
+                <CalendarView key={activeTableId} onJumpToRow={handleJumpToRow} />
+              ) : (
+                <div className="app-loading">
+                  <span>Loading…</span>
+                </div>
+              )}
+            </div>
           </main>
 
           <SheetTabs />

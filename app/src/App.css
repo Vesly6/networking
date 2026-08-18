@@ -225,6 +225,34 @@
   flex-direction: column;
 }
 
+/* Tab panels (App.tsx) — Table/Calendar/Calls all stay mounted across a
+   tab switch, so their state (search, sort, scroll position, selection)
+   survives a trip to another tab and back. `.tab-panel-container` (added
+   alongside `.app-main`, same element) is the positioning root; each
+   `.tab-panel` absolutely fills it and is hidden via `visibility`, not
+   `display: none` — the inactive panel needs to keep reporting its real
+   layout size at all times, or TableView's virtualizer (which watches the
+   scroll container's size via ResizeObserver) sees a zero-size blip and
+   resets its scroll-offset tracking, snapping the table back to the top
+   on every return visit even though the DOM's own scrollTop would have
+   restored correctly on its own. `pointer-events: none` keeps a hidden
+   panel from intercepting clicks meant for the one on top of it. */
+.tab-panel-container {
+  position: relative;
+}
+.tab-panel {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  visibility: hidden;
+  pointer-events: none;
+}
+.tab-panel-active {
+  visibility: visible;
+  pointer-events: auto;
+}
+
 /* Toolbar */
 
 .toolbar {
