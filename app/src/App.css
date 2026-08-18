@@ -89,13 +89,6 @@
   object-fit: contain;
 }
 
-.brand-name {
-  font-weight: 700;
-  font-size: 1.05rem;
-  color: var(--text);
-  white-space: nowrap;
-}
-
 .back-to-workspace {
   border: none;
   background: transparent;

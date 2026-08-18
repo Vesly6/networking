@@ -124,7 +124,6 @@ function App() {
           <header className="app-header">
             <div className="brand">
               <img src="/favicon.png" alt="" className="brand-logo" />
-              <span className="brand-name">Networking</span>
             </div>
             <button type="button" className="back-to-workspace" onClick={() => setActiveTable(null)}>
               ← Workspace

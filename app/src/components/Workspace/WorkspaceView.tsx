@@ -44,7 +44,6 @@ export function WorkspaceView({ onOpenTable }: WorkspaceViewProps) {
         <div className="brand">
           <img src="/favicon.png" alt="" className="brand-logo" />
           <h2>Workspace</h2>
-          <span className="brand-name">Networking</span>
         </div>
         <div className="workspace-header-actions">
           <button type="button" className="primary" onClick={handleCreate}>
