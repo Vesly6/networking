@@ -789,10 +789,15 @@ tr:hover .row-delete {
   background: var(--danger-bg);
 }
 
-tr.row-selected td {
-  background: var(--today-bg);
-}
-
+/* Body-cell highlighting for a row/column gutter selection is no longer
+   done here — TableView now syncs the gutter selection into the normal
+   cell range (rangeAnchor/rangeFocus), so the existing .cell-in-range
+   box-shadow (below) covers every cell in the selected rows/columns
+   automatically. A background rule here would lose a specificity fight
+   against the zebra-stripe rule below on every *even* row (both target
+   `td`; the zebra selector has more classes in its chain), which is
+   exactly why row selection used to visibly skip every other row —
+   box-shadow is a different property, so it can't lose that fight. */
 tr.row-selected .row-number {
   color: var(--accent);
   font-weight: 700;

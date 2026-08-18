@@ -281,7 +281,15 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
     return ids;
   }, [rowRangeAnchor, rowRangeFocus, filteredSortedRows]);
 
+  // Selecting rows via the gutter also drives the cell range (rangeAnchor/
+  // rangeFocus) to span every column of those rows — matching Excel, where
+  // clicking a row number selects that row as a normal range, not a
+  // separate concept. Without this, `applyColor`/copy/paste/the formula
+  // bar (all of which only ever read the cell range) had no idea a row
+  // selection had been made, so e.g. "Color" would silently repaint just
+  // whatever single cell was last clicked instead of the selected rows.
   const handleRowNumberMouseDown = (index: number, extend: boolean) => {
+    const anchorIndex = extend && rowRangeAnchor !== null ? rowRangeAnchor : index;
     if (extend && rowRangeAnchor !== null) setRowRangeFocus(index);
     else {
       setRowRangeAnchor(index);
@@ -289,9 +297,13 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
     }
     setIsRowRangeDragging(true);
     isRowRangeDraggingRef.current = true;
+    setRangeAnchor({ r: anchorIndex, c: 0 });
+    setRangeFocus({ r: index, c: Math.max(0, columns.length - 1) });
   };
   const handleRowNumberMouseEnter = (index: number) => {
-    if (isRowRangeDragging) setRowRangeFocus(index);
+    if (!isRowRangeDragging || rowRangeAnchor === null) return;
+    setRowRangeFocus(index);
+    setRangeFocus({ r: index, c: Math.max(0, columns.length - 1) });
   };
 
   // --- Column-header (letter) range selection: click / shift+click / drag ---
@@ -305,7 +317,9 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
     return ids;
   }, [colRangeAnchor, colRangeFocus, columns]);
 
+  // Same reasoning as handleRowNumberMouseDown above, mirrored for columns.
   const handleColLetterMouseDown = (index: number, extend: boolean) => {
+    const anchorIndex = extend && colRangeAnchor !== null ? colRangeAnchor : index;
     if (extend && colRangeAnchor !== null) setColRangeFocus(index);
     else {
       setColRangeAnchor(index);
@@ -313,9 +327,13 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
     }
     setIsColRangeDragging(true);
     isColRangeDraggingRef.current = true;
+    setRangeAnchor({ r: 0, c: anchorIndex });
+    setRangeFocus({ r: Math.max(0, filteredSortedRows.length - 1), c: index });
   };
   const handleColLetterMouseEnter = (index: number) => {
-    if (isColRangeDragging) setColRangeFocus(index);
+    if (!isColRangeDragging || colRangeAnchor === null) return;
+    setColRangeFocus(index);
+    setRangeFocus({ r: Math.max(0, filteredSortedRows.length - 1), c: index });
   };
 
   // Finish any drag-select or resize gesture on mouseup, anywhere on the page.
