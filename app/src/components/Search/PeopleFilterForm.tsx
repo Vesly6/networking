@@ -128,6 +128,14 @@ export function PeopleFilterForm({ params, onChange, onSubmit, loading }: People
           />
         </label>
         <label className="search-filter-field">
+          <span>Org. Apollo IDs</span>
+          <input
+            placeholder="from a prior company search result's id"
+            value={joinList(params.organization_ids)}
+            onChange={(e) => set('organization_ids', splitList(e.target.value))}
+          />
+        </label>
+        <label className="search-filter-field">
           <span>Employee count ranges (e.g. 1,10)</span>
           <input
             placeholder="1,10, 50,200"
