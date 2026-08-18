@@ -85,6 +85,15 @@ function constantTimeStringEqual(a: string, b: string): boolean {
  * frontend gate alone wouldn't stop someone who found api.serteo.lt's
  * routes without ever loading the UI. */
 export function requireAuth(req: Request, res: Response, next: NextFunction) {
+  // Local-testing-only escape hatch — set AUTH_DISABLED=true in server/.env
+  // (gitignored, never in Render's env vars, so app.serteo.lt/api.serteo.lt
+  // stay fully gated regardless). Mirrors the app's DEV-only frontend skip
+  // (App.tsx) so a local run needs neither a login screen nor a bearer
+  // token to reach the Zadarma/OpenAI/ElevenLabs routes.
+  if (process.env.AUTH_DISABLED === 'true') {
+    next();
+    return;
+  }
   const header = req.headers.authorization;
   const token = header?.startsWith('Bearer ') ? header.slice(7) : null;
   if (!token || !verifyToken(token)) {

@@ -82,8 +82,13 @@ function App() {
   // Gated before workspace loading even starts — nothing in this app is
   // meant to be reachable without logging in first, and checking here
   // (rather than after workspaceReady) avoids a flash of "Loading…" before
-  // the login form appears on a fresh visit.
-  if (!token) {
+  // the login form appears on a fresh visit. import.meta.env.DEV is
+  // statically false in any production build (vite build), so this can't
+  // be flipped by a Render env var or anything else at the deployed
+  // app.serteo.lt — the skip only exists in the actual `vite dev` process.
+  // requireAuth's own AUTH_DISABLED bypass (server/src/auth.ts) is the
+  // matching local-only relaxation for the backend side of the gate.
+  if (!token && !import.meta.env.DEV) {
     return <LoginScreen />;
   }
 
