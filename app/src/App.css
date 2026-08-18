@@ -2438,6 +2438,88 @@ tr.row-drop-end td {
   color: var(--accent-contrast);
 }
 
+/* ComboBoxMultiInput — "pick from a list, but can still type your own"
+   used for Person/Org locations and Job titles. Positioned relative so the
+   suggestion dropdown (position: absolute) anchors directly under it. */
+.combobox {
+  position: relative;
+}
+.combobox-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+  width: 100%;
+  min-height: 2.1em;
+  padding: 0.3em 0.4em;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+}
+.combobox-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  border: 1px solid var(--border-strong);
+  background: var(--accent);
+  color: var(--accent-contrast);
+  border-radius: 999px;
+  padding: 0.15em 0.3em 0.15em 0.65em;
+  font-size: 0.74rem;
+  white-space: nowrap;
+}
+.combobox-chip-remove {
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: 0.9rem;
+  line-height: 1;
+  padding: 0 0.2em;
+  opacity: 0.85;
+}
+.combobox-chip-remove:hover {
+  opacity: 1;
+}
+.combobox-input {
+  flex: 1;
+  min-width: 4em;
+  border: none !important;
+  background: transparent !important;
+  padding: 0.15em 0 !important;
+  font-size: 0.85rem;
+}
+.combobox-input:focus {
+  outline: none;
+}
+.combobox-dropdown {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.15);
+  padding: 0.25rem;
+}
+.combobox-option {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  padding: 0.35em 0.5em;
+  font-size: 0.82rem;
+  border-radius: 4px;
+  color: var(--text);
+}
+.combobox-option-active {
+  background: var(--bg-hover);
+}
+
 .search-filter-range-inputs {
   display: flex;
   gap: 0.4rem;
@@ -2445,6 +2527,23 @@ tr.row-drop-end td {
 .search-filter-range-inputs input {
   min-width: 0;
   flex: 1;
+}
+
+/* Matches apollo.io's own "Show more filters" toggle — the advanced
+   filter groups (Organization/Technology/Funding/Job postings) are
+   collapsed by default so the sidebar isn't a wall of every field at
+   once, same as the real product. */
+.search-show-more-toggle {
+  align-self: flex-start;
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font-size: 0.82rem;
+  font-weight: 600;
+  padding: 0.2em 0;
+}
+.search-show-more-toggle:hover {
+  text-decoration: underline;
 }
 
 .search-filter-actions {
@@ -2502,6 +2601,16 @@ tr.row-drop-end td {
 .search-results-table-name {
   font-weight: 700;
   white-space: nowrap;
+}
+.search-results-linkedin {
+  display: block;
+  font-weight: 500;
+  font-size: 0.76rem;
+  color: var(--accent);
+  text-decoration: none;
+}
+.search-results-linkedin:hover {
+  text-decoration: underline;
 }
 .search-result-detail-muted {
   color: var(--text-muted);

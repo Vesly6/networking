@@ -5,7 +5,7 @@ import { ZadarmaApiError, getStatistics, requestRecording, requestCallback, getW
 import { TranscriptionError, transcribeFromUrl } from './elevenlabs.js';
 import { ContactParseError, parseContactText, SummarizeError, summarizeCall } from './openai.js';
 import { AuthError, checkCredentials, issueToken, requireAuth } from './auth.js';
-import { ApolloApiError, searchPeople, searchCompanies, enrichPerson } from './apollo.js';
+import { ApolloApiError, searchPeople, searchCompanies, enrichPerson, pollWebhookResult } from './apollo.js';
 
 const PORT = Number(process.env.PORT) || 4000;
 // Binds 127.0.0.1 by default — deliberately not reachable from the local
@@ -58,6 +58,19 @@ app.post(
     res.json({ token: issueToken(username), viaRecovery: match === 'recovery' });
   }),
 );
+
+// Public on purpose, same as /health and /api/auth/login above — Apollo
+// itself calls this (not our frontend), so it can't require our session
+// token. webhook_url is a mandatory param whenever enrichPerson() asks
+// for reveal_phone_number, but this route deliberately doesn't parse or
+// store the body: GET /api/apollo/webhook/:requestId below (an
+// authenticated route, polled by the frontend) retrieves the actual
+// result via Apollo's own documented poll-webhook-result endpoint
+// instead, which has a stable, documented response shape — unlike the
+// webhook POST payload itself, which Apollo's docs don't fully specify.
+app.post('/api/apollo/webhook', (_req, res) => {
+  res.status(200).json({ ok: true });
+});
 
 // Everything below requires a valid session token — a visitor who never
 // loads the frontend at all (hits these routes directly) is blocked here
@@ -224,12 +237,39 @@ app.post(
 
 // Costs Apollo credits (1 for email, +8 more for a phone number) — this is
 // the one Apollo route in the whole app that's never called automatically,
-// only from an explicit "Reveal contact" click per person, same philosophy
-// as Calls' manual per-call "Transcribe" button (CLAUDE.md).
+// only from an explicit "Find email"/"Find phone" click per person, same
+// philosophy as Calls' manual per-call "Transcribe" button (CLAUDE.md).
+// webhook_url is filled in here, not left to the frontend, whenever
+// reveal_phone_number is requested — it's a mandatory Apollo param at
+// that point, and the frontend has no business knowing this server's own
+// public URL (PUBLIC_BASE_URL, only meaningful once actually deployed;
+// see the /api/apollo/webhook route above for why the URL only needs to
+// exist and 200, not actually process anything).
 app.post(
   '/api/apollo/people/enrich',
   asyncHandler(async (req, res) => {
-    const result = await enrichPerson(req.body ?? {});
+    const body = { ...(req.body ?? {}) };
+    if (body.reveal_phone_number) {
+      const base = process.env.PUBLIC_BASE_URL;
+      if (!base) {
+        res.status(500).json({ error: 'PUBLIC_BASE_URL is not set — check server/.env (needed for phone reveal)' });
+        return;
+      }
+      body.webhook_url = `${base}/api/apollo/webhook`;
+    }
+    const result = await enrichPerson(body);
+    res.json(result);
+  }),
+);
+
+// Polled by the frontend after a reveal_phone_number=true enrichPerson()
+// call, using the request_id from that response — see pollWebhookResult()
+// in apollo.ts for why this is used instead of actually parsing Apollo's
+// webhook POST payload.
+app.get(
+  '/api/apollo/webhook/:requestId',
+  asyncHandler(async (req, res) => {
+    const result = await pollWebhookResult(req.params.requestId);
     res.json(result);
   }),
 );

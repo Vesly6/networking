@@ -1,4 +1,8 @@
+import { useState } from 'react';
 import type { CompanySearchParams } from '../../utils/apolloApi';
+import { ComboBoxMultiInput } from './ComboBoxMultiInput';
+import { COUNTRIES } from '../../utils/countries';
+import { JOB_TITLES } from '../../utils/jobTitles';
 
 interface CompanyFilterFormProps {
   params: CompanySearchParams;
@@ -16,10 +20,16 @@ const splitList = (v: string): string[] | undefined => {
 };
 const joinList = (v?: string[]) => (v ?? []).join(', ');
 
-/** Every documented filter for POST /mixed_companies/search — unlike
- * people search, each page of this one costs 1 Apollo credit, called out
- * explicitly in the submit button rather than hidden. */
+/** Same basic/advanced split as PeopleFilterForm, mirroring apollo.io's own
+ * pattern: Company name, Domains, Location, Employee count, Industry
+ * keywords shown by default; Exclude-locations, Revenue, Technology,
+ * Funding, and Job postings behind "Show more filters". Every field maps
+ * to a real, documented /mixed_companies/search parameter — only the
+ * grouping changed, nothing invented. Unlike people search, each page of
+ * this one costs 1 Apollo credit, called out explicitly in the submit
+ * button rather than hidden. */
 export function CompanyFilterForm({ params, onChange, onSubmit, loading }: CompanyFilterFormProps) {
+  const [showMore, setShowMore] = useState(false);
   const set = <K extends keyof CompanySearchParams>(key: K, value: CompanySearchParams[K]) =>
     onChange({ ...params, [key]: value });
 
@@ -32,7 +42,6 @@ export function CompanyFilterForm({ params, onChange, onSubmit, loading }: Compa
       }}
     >
       <div className="search-filter-group">
-        <div className="search-filter-group-title">Company</div>
         <label className="search-filter-field">
           <span>Company name (partial match)</span>
           <input value={params.q_organization_name ?? ''} onChange={(e) => set('q_organization_name', e.target.value || undefined)} />
@@ -45,14 +54,14 @@ export function CompanyFilterForm({ params, onChange, onSubmit, loading }: Compa
             onChange={(e) => set('q_organization_domains_list', splitList(e.target.value))}
           />
         </label>
-        <label className="search-filter-field">
+        <div className="search-filter-field">
           <span>HQ locations</span>
-          <input value={joinList(params.organization_locations)} onChange={(e) => set('organization_locations', splitList(e.target.value))} />
-        </label>
-        <label className="search-filter-field">
-          <span>Exclude locations</span>
-          <input value={joinList(params.organization_not_locations)} onChange={(e) => set('organization_not_locations', splitList(e.target.value))} />
-        </label>
+          <ComboBoxMultiInput
+            value={params.organization_locations ?? []}
+            onChange={(v) => set('organization_locations', v.length > 0 ? v : undefined)}
+            suggestions={COUNTRIES}
+          />
+        </div>
         <label className="search-filter-field">
           <span>Employee count ranges (e.g. 1,10)</span>
           <input
@@ -69,139 +78,171 @@ export function CompanyFilterForm({ params, onChange, onSubmit, loading }: Compa
             onChange={(e) => set('q_organization_keyword_tags', splitList(e.target.value))}
           />
         </label>
-        <div className="search-filter-field search-filter-range">
-          <span>Revenue range ($)</span>
-          <div className="search-filter-range-inputs">
-            <input
-              type="number"
-              placeholder="min"
-              value={params.revenue_range?.min ?? ''}
-              onChange={(e) => set('revenue_range', { ...params.revenue_range, min: e.target.value ? Number(e.target.value) : undefined })}
-            />
-            <input
-              type="number"
-              placeholder="max"
-              value={params.revenue_range?.max ?? ''}
-              onChange={(e) => set('revenue_range', { ...params.revenue_range, max: e.target.value ? Number(e.target.value) : undefined })}
-            />
-          </div>
-        </div>
       </div>
 
-      <div className="search-filter-group">
-        <div className="search-filter-group-title">Technology</div>
-        <label className="search-filter-field">
-          <span>Using ALL of</span>
-          <input
-            value={joinList(params.currently_using_all_of_technology_uids)}
-            onChange={(e) => set('currently_using_all_of_technology_uids', splitList(e.target.value))}
-          />
-        </label>
-        <label className="search-filter-field">
-          <span>Using ANY of</span>
-          <input
-            value={joinList(params.currently_using_any_of_technology_uids)}
-            onChange={(e) => set('currently_using_any_of_technology_uids', splitList(e.target.value))}
-          />
-        </label>
-        <label className="search-filter-field">
-          <span>NOT using any of</span>
-          <input
-            value={joinList(params.currently_not_using_any_of_technology_uids)}
-            onChange={(e) => set('currently_not_using_any_of_technology_uids', splitList(e.target.value))}
-          />
-        </label>
-      </div>
+      <button type="button" className="search-show-more-toggle" onClick={() => setShowMore((v) => !v)}>
+        {showMore ? '− Hide advanced filters' : '+ Show more filters'}
+      </button>
 
-      <div className="search-filter-group">
-        <div className="search-filter-group-title">Funding</div>
-        <div className="search-filter-field search-filter-range">
-          <span>Latest funding amount ($)</span>
-          <div className="search-filter-range-inputs">
-            <input
-              type="number"
-              placeholder="min"
-              value={params.latest_funding_amount_range?.min ?? ''}
-              onChange={(e) =>
-                set('latest_funding_amount_range', { ...params.latest_funding_amount_range, min: e.target.value ? Number(e.target.value) : undefined })
-              }
-            />
-            <input
-              type="number"
-              placeholder="max"
-              value={params.latest_funding_amount_range?.max ?? ''}
-              onChange={(e) =>
-                set('latest_funding_amount_range', { ...params.latest_funding_amount_range, max: e.target.value ? Number(e.target.value) : undefined })
-              }
-            />
+      {showMore && (
+        <>
+          <div className="search-filter-group">
+            <div className="search-filter-group-title">Organization</div>
+            <div className="search-filter-field">
+              <span>Exclude locations</span>
+              <ComboBoxMultiInput
+                value={params.organization_not_locations ?? []}
+                onChange={(v) => set('organization_not_locations', v.length > 0 ? v : undefined)}
+                suggestions={COUNTRIES}
+              />
+            </div>
+            <div className="search-filter-field search-filter-range">
+              <span>Revenue range ($)</span>
+              <div className="search-filter-range-inputs">
+                <input
+                  type="number"
+                  placeholder="min"
+                  value={params.revenue_range?.min ?? ''}
+                  onChange={(e) => set('revenue_range', { ...params.revenue_range, min: e.target.value ? Number(e.target.value) : undefined })}
+                />
+                <input
+                  type="number"
+                  placeholder="max"
+                  value={params.revenue_range?.max ?? ''}
+                  onChange={(e) => set('revenue_range', { ...params.revenue_range, max: e.target.value ? Number(e.target.value) : undefined })}
+                />
+              </div>
+            </div>
           </div>
-        </div>
-        <div className="search-filter-field search-filter-range">
-          <span>Total funding ($)</span>
-          <div className="search-filter-range-inputs">
-            <input
-              type="number"
-              placeholder="min"
-              value={params.total_funding_range?.min ?? ''}
-              onChange={(e) => set('total_funding_range', { ...params.total_funding_range, min: e.target.value ? Number(e.target.value) : undefined })}
-            />
-            <input
-              type="number"
-              placeholder="max"
-              value={params.total_funding_range?.max ?? ''}
-              onChange={(e) => set('total_funding_range', { ...params.total_funding_range, max: e.target.value ? Number(e.target.value) : undefined })}
-            />
-          </div>
-        </div>
-        <div className="search-filter-field search-filter-range">
-          <span>Latest funding date</span>
-          <div className="search-filter-range-inputs">
-            <input
-              type="date"
-              value={params.latest_funding_date_range?.min ?? ''}
-              onChange={(e) => set('latest_funding_date_range', { ...params.latest_funding_date_range, min: e.target.value || undefined })}
-            />
-            <input
-              type="date"
-              value={params.latest_funding_date_range?.max ?? ''}
-              onChange={(e) => set('latest_funding_date_range', { ...params.latest_funding_date_range, max: e.target.value || undefined })}
-            />
-          </div>
-        </div>
-      </div>
 
-      <div className="search-filter-group">
-        <div className="search-filter-group-title">Job postings</div>
-        <label className="search-filter-field">
-          <span>Job titles in postings</span>
-          <input
-            value={joinList(params.q_organization_job_titles)}
-            onChange={(e) => set('q_organization_job_titles', splitList(e.target.value))}
-          />
-        </label>
-        <label className="search-filter-field">
-          <span>Job posting locations</span>
-          <input
-            value={joinList(params.organization_job_locations)}
-            onChange={(e) => set('organization_job_locations', splitList(e.target.value))}
-          />
-        </label>
-        <div className="search-filter-field search-filter-range">
-          <span>Job posted date range</span>
-          <div className="search-filter-range-inputs">
-            <input
-              type="date"
-              value={params.organization_job_posted_at_range?.min ?? ''}
-              onChange={(e) => set('organization_job_posted_at_range', { ...params.organization_job_posted_at_range, min: e.target.value || undefined })}
-            />
-            <input
-              type="date"
-              value={params.organization_job_posted_at_range?.max ?? ''}
-              onChange={(e) => set('organization_job_posted_at_range', { ...params.organization_job_posted_at_range, max: e.target.value || undefined })}
-            />
+          <div className="search-filter-group">
+            <div className="search-filter-group-title">Technology</div>
+            <label className="search-filter-field">
+              <span>Using ALL of</span>
+              <input
+                value={joinList(params.currently_using_all_of_technology_uids)}
+                onChange={(e) => set('currently_using_all_of_technology_uids', splitList(e.target.value))}
+              />
+            </label>
+            <label className="search-filter-field">
+              <span>Using ANY of</span>
+              <input
+                value={joinList(params.currently_using_any_of_technology_uids)}
+                onChange={(e) => set('currently_using_any_of_technology_uids', splitList(e.target.value))}
+              />
+            </label>
+            <label className="search-filter-field">
+              <span>NOT using any of</span>
+              <input
+                value={joinList(params.currently_not_using_any_of_technology_uids)}
+                onChange={(e) => set('currently_not_using_any_of_technology_uids', splitList(e.target.value))}
+              />
+            </label>
           </div>
-        </div>
-      </div>
+
+          <div className="search-filter-group">
+            <div className="search-filter-group-title">Funding</div>
+            <div className="search-filter-field search-filter-range">
+              <span>Latest funding amount ($)</span>
+              <div className="search-filter-range-inputs">
+                <input
+                  type="number"
+                  placeholder="min"
+                  value={params.latest_funding_amount_range?.min ?? ''}
+                  onChange={(e) =>
+                    set('latest_funding_amount_range', {
+                      ...params.latest_funding_amount_range,
+                      min: e.target.value ? Number(e.target.value) : undefined,
+                    })
+                  }
+                />
+                <input
+                  type="number"
+                  placeholder="max"
+                  value={params.latest_funding_amount_range?.max ?? ''}
+                  onChange={(e) =>
+                    set('latest_funding_amount_range', {
+                      ...params.latest_funding_amount_range,
+                      max: e.target.value ? Number(e.target.value) : undefined,
+                    })
+                  }
+                />
+              </div>
+            </div>
+            <div className="search-filter-field search-filter-range">
+              <span>Total funding ($)</span>
+              <div className="search-filter-range-inputs">
+                <input
+                  type="number"
+                  placeholder="min"
+                  value={params.total_funding_range?.min ?? ''}
+                  onChange={(e) => set('total_funding_range', { ...params.total_funding_range, min: e.target.value ? Number(e.target.value) : undefined })}
+                />
+                <input
+                  type="number"
+                  placeholder="max"
+                  value={params.total_funding_range?.max ?? ''}
+                  onChange={(e) => set('total_funding_range', { ...params.total_funding_range, max: e.target.value ? Number(e.target.value) : undefined })}
+                />
+              </div>
+            </div>
+            <div className="search-filter-field search-filter-range">
+              <span>Latest funding date</span>
+              <div className="search-filter-range-inputs">
+                <input
+                  type="date"
+                  value={params.latest_funding_date_range?.min ?? ''}
+                  onChange={(e) => set('latest_funding_date_range', { ...params.latest_funding_date_range, min: e.target.value || undefined })}
+                />
+                <input
+                  type="date"
+                  value={params.latest_funding_date_range?.max ?? ''}
+                  onChange={(e) => set('latest_funding_date_range', { ...params.latest_funding_date_range, max: e.target.value || undefined })}
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="search-filter-group">
+            <div className="search-filter-group-title">Job postings</div>
+            <div className="search-filter-field">
+              <span>Job titles in postings</span>
+              <ComboBoxMultiInput
+                value={params.q_organization_job_titles ?? []}
+                onChange={(v) => set('q_organization_job_titles', v.length > 0 ? v : undefined)}
+                suggestions={JOB_TITLES}
+              />
+            </div>
+            <div className="search-filter-field">
+              <span>Job posting locations</span>
+              <ComboBoxMultiInput
+                value={params.organization_job_locations ?? []}
+                onChange={(v) => set('organization_job_locations', v.length > 0 ? v : undefined)}
+                suggestions={COUNTRIES}
+              />
+            </div>
+            <div className="search-filter-field search-filter-range">
+              <span>Job posted date range</span>
+              <div className="search-filter-range-inputs">
+                <input
+                  type="date"
+                  value={params.organization_job_posted_at_range?.min ?? ''}
+                  onChange={(e) =>
+                    set('organization_job_posted_at_range', { ...params.organization_job_posted_at_range, min: e.target.value || undefined })
+                  }
+                />
+                <input
+                  type="date"
+                  value={params.organization_job_posted_at_range?.max ?? ''}
+                  onChange={(e) =>
+                    set('organization_job_posted_at_range', { ...params.organization_job_posted_at_range, max: e.target.value || undefined })
+                  }
+                />
+              </div>
+            </div>
+          </div>
+        </>
+      )}
 
       <div className="search-filter-actions">
         <label className="search-filter-field search-filter-per-page">

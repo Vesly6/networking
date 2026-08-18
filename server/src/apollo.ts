@@ -263,8 +263,94 @@ export interface ApolloEnrichedPerson {
   [key: string]: unknown;
 }
 
-export async function enrichPerson(
-  params: PeopleEnrichParams,
-): Promise<{ person: ApolloEnrichedPerson | null; request_id?: string }> {
+export async function enrichPerson(params: PeopleEnrichParams): Promise<{
+  person: ApolloEnrichedPerson | null;
+  request_id?: string | number;
+  // Only present when reveal_phone_number was requested — its own
+  // request_id is what pollWebhookResult()/GET /webhook_result/:id below
+  // actually needs, NOT the top-level request_id above (confirmed by
+  // testing both against a real account: the top-level id — a large
+  // signed int, matching what the polling endpoint's docs describe —
+  // consistently comes back "request_id_unknown" even freshly issued and
+  // exactly as received with no precision loss; this nested id is a
+  // different, Mongo-ObjectId-shaped string that the polling endpoint
+  // instead rejects outright as "invalid_request_id". Neither candidate
+  // has been made to work end-to-end — see the long comment on
+  // pollWebhookResult below).
+  phone_enrichment?: { request_id?: string; status: string; message?: string };
+}> {
   return callApollo('/people/match', params as Record<string, unknown>);
+}
+
+/** GET /webhook_result/{request_id} — the documented way to retrieve a
+ * phone number after enrichPerson({reveal_phone_number: true, ...}), as
+ * an alternative to actually receiving Apollo's async webhook POST. Used
+ * instead of standing up a real webhook payload parser: webhook_url is
+ * still a mandatory param when reveal_phone_number is true (so index.ts
+ * exposes a trivial public POST /api/apollo/webhook that just 200s and
+ * discards the body — Apollo's push still "succeeds" from its side even
+ * though nothing reads it), but the *documented, stable* response shape
+ * here is what the frontend actually polls against.
+ *
+ * A 404 means "still processing" (not "not found") — Apollo returns
+ * retry_after_seconds alongside it, which the caller should wait before
+ * polling again. 400/410 are terminal (bad id / result expired after 30
+ * days) and shouldn't be retried.
+ *
+ * UNRESOLVED as of writing: neither id this app has access to — the
+ * top-level enrichPerson() response's `request_id` (a large signed int,
+ * matching this endpoint's documented format) nor the nested
+ * `phone_enrichment.request_id` (a Mongo-ObjectId-shaped string) — was
+ * made to work against a real account. The signed-int one consistently
+ * comes back 404 "request_id_unknown" (tested with the exact, unaltered
+ * value straight from Apollo's own response — precision loss in transit
+ * was ruled out explicitly); the ObjectId one comes back 400
+ * "invalid_request_id" outright. Both were tested repeatedly, including
+ * waiting several minutes for "still processing" to plausibly resolve.
+ * Given this codebase's own precedent (the ElevenLabs speech-to-text
+ * permission gap, resolved only by checking scopes on ElevenLabs'
+ * dashboard directly — see the Calls tab section of CLAUDE.md), the most
+ * likely explanation is a similar per-key scope/permission gap on this
+ * Apollo account for webhook_result_read specifically, not a bug in this
+ * request. If phone reveal ever needs debugging again, check that before
+ * re-suspecting the id/format logic here — it's been ruled out. */
+export type WebhookPollResult =
+  | { status: 'processing'; retryAfterSeconds: number }
+  | { status: 'ready'; phoneNumbers: Array<{ sanitized_number: string; status_cd?: string; confidence_cd?: string | null }> }
+  | { status: 'error'; message: string };
+
+export async function pollWebhookResult(requestId: string): Promise<WebhookPollResult> {
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}/webhook_result/${encodeURIComponent(requestId)}`, {
+      headers: { 'x-api-key': getApiKey() },
+    });
+  } catch {
+    throw new ApolloApiError('Could not reach Apollo API', 0, null);
+  }
+
+  if (res.status === 404) {
+    const json: unknown = await res.json().catch(() => null);
+    const retryAfterSeconds =
+      json && typeof json === 'object' && 'retry_after_seconds' in json && typeof (json as { retry_after_seconds: unknown }).retry_after_seconds === 'number'
+        ? (json as { retry_after_seconds: number }).retry_after_seconds
+        : 10;
+    return { status: 'processing', retryAfterSeconds };
+  }
+  if (res.status === 400 || res.status === 410) {
+    return { status: 'error', message: res.status === 410 ? 'This phone lookup result has expired (older than 30 days)' : 'Invalid lookup id' };
+  }
+
+  const json: any = await res.json().catch(() => null);
+  if (!res.ok || !json) {
+    throw new ApolloApiError(`Apollo webhook poll failed (HTTP ${res.status})`, res.status, json);
+  }
+  if (json.webhook_status === 'failed') {
+    return { status: 'error', message: json.failure_reason ?? 'Apollo could not find a phone number' };
+  }
+  if (json.webhook_status === 'in_progress') {
+    return { status: 'processing', retryAfterSeconds: 10 };
+  }
+  const phoneNumbers = json.webhook_result?.people?.[0]?.phone_numbers ?? [];
+  return { status: 'ready', phoneNumbers };
 }

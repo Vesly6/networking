@@ -3,6 +3,7 @@ import {
   searchPeople as apiSearchPeople,
   searchCompanies as apiSearchCompanies,
   enrichPerson as apiEnrichPerson,
+  pollPhoneReveal as apiPollPhoneReveal,
   type PeopleSearchParams,
   type CompanySearchParams,
   type PeopleEnrichParams,
@@ -12,6 +13,14 @@ import {
 } from '../utils/apolloApi';
 
 type SearchMode = 'people' | 'companies';
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+// Apollo's own docs say phone delivery "can take several minutes" — this
+// caps total wait so a permanently-stuck poll (see the long comment on
+// pollWebhookResult in server/src/apollo.ts — this account's phone-reveal
+// polling hasn't been confirmed working at all yet) fails clearly instead
+// of spinning forever.
+const PHONE_POLL_MAX_MS = 3 * 60 * 1000;
 
 interface SearchState {
   mode: SearchMode;
@@ -41,7 +50,24 @@ interface SearchState {
   enrichedById: Record<string, ApolloEnrichedPerson>;
   enrichingIds: Record<string, boolean>;
   enrichErrors: Record<string, string>;
-  revealContact: (person: ApolloSearchPerson) => Promise<void>;
+  /** "Find email" — cheap (1 credit if found, 0 if not), synchronous. */
+  revealEmail: (person: ApolloSearchPerson) => Promise<void>;
+
+  // Phone is tracked separately from enrichedById/enrichErrors above:
+  // it's a slower, async, more expensive (up to +8 credits) operation
+  // with its own pending/error states, deliberately never triggered by
+  // revealEmail so clicking "Find email" never silently also spends the
+  // larger phone credit cost.
+  phoneNumbersById: Record<string, Array<{ sanitized_number: string; status_cd?: string; confidence_cd?: string | null }>>;
+  phonePendingIds: Record<string, boolean>;
+  phoneErrors: Record<string, string>;
+  /** "Find phone" — starts Apollo's async phone lookup, then polls for the
+   * result (see pollPhoneReveal in apolloApi.ts). Known to not reliably
+   * resolve yet on this account — see the long comment in server/src/
+   * apollo.ts's pollWebhookResult; this still attempts it and times out
+   * cleanly rather than skipping the feature entirely, since it may start
+   * working with no code change once the underlying cause is resolved. */
+  revealPhone: (person: ApolloSearchPerson) => Promise<void>;
 }
 
 export const useSearchStore = create<SearchState>((set, get) => ({
@@ -102,7 +128,7 @@ export const useSearchStore = create<SearchState>((set, get) => ({
   enrichedById: {},
   enrichingIds: {},
   enrichErrors: {},
-  revealContact: async (person) => {
+  revealEmail: async (person) => {
     const id = person.id;
     if (get().enrichedById[id] || get().enrichingIds[id]) return;
     set((s) => ({ enrichingIds: { ...s.enrichingIds, [id]: true }, enrichErrors: { ...s.enrichErrors, [id]: '' } }));
@@ -123,6 +149,63 @@ export const useSearchStore = create<SearchState>((set, get) => ({
         const enrichingIds = { ...s.enrichingIds };
         delete enrichingIds[id];
         return { enrichingIds };
+      });
+    }
+  },
+
+  phoneNumbersById: {},
+  phonePendingIds: {},
+  phoneErrors: {},
+  revealPhone: async (person) => {
+    const id = person.id;
+    if (get().phoneNumbersById[id] || get().phonePendingIds[id]) return;
+    set((s) => ({ phonePendingIds: { ...s.phonePendingIds, [id]: true }, phoneErrors: { ...s.phoneErrors, [id]: '' } }));
+    try {
+      const params: PeopleEnrichParams = {
+        id,
+        name: [person.first_name, person.last_name_obfuscated].filter(Boolean).join(' ') || undefined,
+        organization_name: person.organization?.name ?? undefined,
+        reveal_phone_number: true,
+      };
+      const result = await apiEnrichPerson(params);
+      // The same call also returns the primary email (unconditionally, not
+      // gated by any reveal_* flag) — worth keeping even though this
+      // button is nominally "just phone", so a subsequent "Find email"
+      // click on an already-phone-revealed person is a free no-op instead
+      // of a second billed lookup.
+      if (result.person) set((s) => ({ enrichedById: { ...s.enrichedById, [id]: result.person! } }));
+
+      const info = result.phone_enrichment;
+      if (!info?.request_id) {
+        // "skipped" (already in progress from an earlier request) or no
+        // phone_enrichment at all — nothing to poll for from this call.
+        throw new Error(info?.message ?? 'Apollo did not start a phone lookup for this person');
+      }
+
+      const requestId = info.request_id;
+      const deadline = Date.now() + PHONE_POLL_MAX_MS;
+      for (;;) {
+        const poll = await apiPollPhoneReveal(requestId);
+        if (poll.status === 'ready') {
+          set((s) => ({ phoneNumbersById: { ...s.phoneNumbersById, [id]: poll.phoneNumbers } }));
+          return;
+        }
+        if (poll.status === 'error') {
+          throw new Error(poll.message);
+        }
+        if (Date.now() >= deadline) {
+          throw new Error("Apollo hasn't returned a phone number yet — try again in a few minutes");
+        }
+        await sleep(Math.min(Math.max(poll.retryAfterSeconds, 5), 20) * 1000);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Could not reveal a phone number';
+      set((s) => ({ phoneErrors: { ...s.phoneErrors, [id]: message } }));
+    } finally {
+      set((s) => {
+        const phonePendingIds = { ...s.phonePendingIds };
+        delete phonePendingIds[id];
+        return { phonePendingIds };
       });
     }
   },

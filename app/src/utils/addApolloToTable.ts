@@ -17,7 +17,7 @@ export function useAddApolloResultToTable() {
   const updateCell = useTableStore((s) => s.updateCell);
   const showToast = useToastStore((s) => s.show);
 
-  const addPerson = (person: ApolloSearchPerson, enriched: ApolloEnrichedPerson | undefined) => {
+  const addPerson = (person: ApolloSearchPerson, enriched: ApolloEnrichedPerson | undefined, revealedPhone?: string) => {
     if (columns.length === 0) {
       showToast('Add at least one column to this table first — nothing to map Apollo data into yet');
       return;
@@ -31,7 +31,11 @@ export function useAddApolloResultToTable() {
     const lastName = enriched?.last_name ?? person.last_name_obfuscated ?? '';
     const title = enriched?.title ?? person.title ?? '';
     const email = enriched?.email ?? enriched?.contact?.email ?? '';
-    const phone = enriched?.contact?.phone_numbers?.[0]?.sanitized_number ?? '';
+    // Phone lives in useSearchStore's separate phoneNumbersById (see
+    // revealPhone/pollPhoneReveal), not on `enriched` itself — the "Find
+    // phone" button's async lookup is entirely independent of "Find
+    // email"'s enrichPerson() call, so the caller passes whatever it has.
+    const phone = revealedPhone ?? '';
     const companyName = enriched?.organization?.name ?? person.organization?.name ?? '';
 
     const rowId = addRow();

@@ -104,10 +104,8 @@ export interface ApolloCompany {
 /** Identifying fields for POST /people/match — give it as many as you
  * have; `id` from a prior search result is the most reliable. Costs real
  * credits: 1 if an email is found, +8 more if a phone number is found (0
- * if neither). reveal_phone_number needs webhook_url — Apollo delivers
- * the phone asynchronously, sometimes minutes later, not in this
- * response — not yet wired up on the frontend (see SearchView.tsx),
- * since it needs a public callback route this proxy doesn't expose yet. */
+ * if neither). Server fills in webhook_url automatically whenever
+ * reveal_phone_number is set — see server/src/index.ts. */
 export interface PeopleEnrichParams {
   id?: string;
   name?: string;
@@ -118,6 +116,7 @@ export interface PeopleEnrichParams {
   organization_name?: string;
   linkedin_url?: string;
   reveal_personal_emails?: boolean;
+  reveal_phone_number?: boolean;
 }
 
 export interface ApolloEnrichedPerson {
@@ -136,6 +135,28 @@ export interface ApolloEnrichedPerson {
   };
   organization?: { name: string | null; domain: string | null; [key: string]: unknown };
   [key: string]: unknown;
+}
+
+export interface PhoneEnrichmentInfo {
+  request_id?: string;
+  status: string;
+  message?: string;
+}
+
+/** GET /api/apollo/webhook/:requestId — polled after enrichPerson() with
+ * reveal_phone_number:true, using the response's own phone_enrichment.
+ * request_id. See server/src/apollo.ts's pollWebhookResult for the known,
+ * unresolved issue with this specific id/endpoint combination on the
+ * current account — surfaced to the UI as a graceful timeout, not a hard
+ * crash, since it may start working without any code change once
+ * resolved on Apollo's side. */
+export type PhonePollResult =
+  | { status: 'processing'; retryAfterSeconds: number }
+  | { status: 'ready'; phoneNumbers: Array<{ sanitized_number: string; status_cd?: string; confidence_cd?: string | null }> }
+  | { status: 'error'; message: string };
+
+export function pollPhoneReveal(requestId: string): Promise<PhonePollResult> {
+  return localApiRequest(`/api/apollo/webhook/${encodeURIComponent(requestId)}`);
 }
 
 export function searchPeople(
@@ -158,7 +179,9 @@ export function searchCompanies(
   });
 }
 
-export function enrichPerson(params: PeopleEnrichParams): Promise<{ person: ApolloEnrichedPerson | null }> {
+export function enrichPerson(
+  params: PeopleEnrichParams,
+): Promise<{ person: ApolloEnrichedPerson | null; phone_enrichment?: PhoneEnrichmentInfo }> {
   return localApiRequest('/api/apollo/people/enrich', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
