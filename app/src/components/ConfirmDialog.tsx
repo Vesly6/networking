@@ -17,7 +17,7 @@ export function ConfirmDialog() {
         <p className="confirm-dialog-message">{request.message}</p>
         <div className="popover-footer">
           <button type="button" onClick={() => resolveConfirm(false)}>
-            {request.cancelLabel ?? 'Cancel'}
+            {request.cancelLabel ?? 'Atšaukti'}
           </button>
           <button
             type="button"
@@ -25,7 +25,7 @@ export function ConfirmDialog() {
             className={request.danger ? 'danger' : 'primary'}
             onClick={() => resolveConfirm(true)}
           >
-            {request.confirmLabel ?? 'OK'}
+            {request.confirmLabel ?? 'Gerai'}
           </button>
         </div>
       </div>

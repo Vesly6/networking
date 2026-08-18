@@ -32,8 +32,10 @@ export function RowHeaderMenu({ x, y, rows, targetIds, insertEnabled, onCopy, on
   const firstIndex = Math.min(...indices);
   const lastIndex = Math.max(...indices);
   const count = targetIds.length;
-  const n = count > 1 ? `${count} ` : '';
-  const plural = count > 1 ? 's' : '';
+  // Same reasoning as ColumnHeaderMenu — Lithuanian nouns decline rather
+  // than take an English "-s" suffix, so plural phrasing uses a
+  // parenthetical count instead of templatized declension.
+  const suffix = count > 1 ? ` (${count})` : '';
 
   const run = (fn: () => void) => {
     fn();
@@ -45,27 +47,27 @@ export function RowHeaderMenu({ x, y, rows, targetIds, insertEnabled, onCopy, on
       {insertEnabled ? (
         <>
           <button type="button" className="context-menu-item" onClick={() => run(() => insertRows(rows[firstIndex].id, count))}>
-            Insert {n}row{plural} above
+            Įterpti {count > 1 ? 'eilutes' : 'eilutę'} virš{suffix}
           </button>
           <button
             type="button"
             className="context-menu-item"
             onClick={() => run(() => insertRows(rows[lastIndex + 1]?.id ?? null, count))}
           >
-            Insert {n}row{plural} below
+            Įterpti {count > 1 ? 'eilutes' : 'eilutę'} žemiau{suffix}
           </button>
         </>
       ) : (
         <button type="button" className="context-menu-item" onClick={() => run(() => addRow())}>
-          Add row
+          Pridėti eilutę
         </button>
       )}
       <div className="context-menu-separator" />
       <button type="button" className="context-menu-item" onClick={() => run(onCopy)}>
-        Copy row{plural}
+        Kopijuoti {count > 1 ? 'eilutes' : 'eilutę'}{suffix}
       </button>
       <button type="button" className="context-menu-item" onClick={() => run(onPaste)}>
-        Paste
+        Įklijuoti
       </button>
       <div className="context-menu-separator" />
       <button
@@ -73,13 +75,13 @@ export function RowHeaderMenu({ x, y, rows, targetIds, insertEnabled, onCopy, on
         className="context-menu-item context-menu-danger"
         onClick={async () => {
           const ok = await confirmDialog({
-            message: `Delete ${count > 1 ? `these ${count} rows` : 'this row'}?`,
+            message: `Ištrinti ${count > 1 ? `pasirinktas eilutes (${count})` : 'šią eilutę'}?`,
             danger: true,
           });
           if (ok) run(() => removeRows(targetIds));
         }}
       >
-        Delete row{plural}
+        Ištrinti {count > 1 ? 'eilutes' : 'eilutę'}{suffix}
       </button>
     </ContextMenu>
   );

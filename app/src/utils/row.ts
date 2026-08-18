@@ -6,7 +6,7 @@ export function getPrimaryLabel(row: Row, columns: Column[]): string {
   // one fall back to whatever's in the first column, as before.
   const company = getColumnByType(columns, 'company') ?? columns[0];
   const value = company ? row.cells[company.id] : '';
-  return value?.trim() || 'Untitled';
+  return value?.trim() || 'Be pavadinimo';
 }
 
 export function getNextActionColumn(columns: Column[]): Column | undefined {

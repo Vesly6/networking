@@ -38,7 +38,7 @@ export function BarChart({ data }: BarChartProps) {
       preserveAspectRatio="none"
       className="calls-bar-chart"
       role="img"
-      aria-label="Calls per day"
+      aria-label="Skambučiai per dieną"
     >
       <line x1={0} y1={PLOT_HEIGHT} x2={WIDTH} y2={PLOT_HEIGHT} className="calls-bar-chart-baseline" />
       {data.map((d, i) => {

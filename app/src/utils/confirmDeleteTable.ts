@@ -7,12 +7,12 @@ import { confirmDialog } from '../store/useConfirmStore';
  * uses. Shared by WorkspaceView's Delete button and SheetTabs' right-click
  * menu so both paths ask the same way. */
 export async function confirmDeleteTable(name: string, rowCount: number): Promise<boolean> {
-  const first = await confirmDialog({ message: `Delete table "${name}" and all of its rows?`, danger: true });
+  const first = await confirmDialog({ message: `Ištrinti lentelę „${name}“ ir visas jos eilutes?`, danger: true });
   if (!first) return false;
   return confirmDialog({
-    title: 'Are you sure?',
-    message: `This will permanently delete "${name}"${rowCount > 0 ? ` and all ${rowCount} of its rows` : ''}. This cannot be undone.`,
-    confirmLabel: 'Delete permanently',
+    title: 'Ar tikrai?',
+    message: `Tai negrįžtamai ištrins lentelę „${name}“${rowCount > 0 ? ` ir visas jos ${rowCount} eilutes` : ''}. Šio veiksmo anuliuoti negalėsite.`,
+    confirmLabel: 'Ištrinti negrįžtamai',
     danger: true,
   });
 }

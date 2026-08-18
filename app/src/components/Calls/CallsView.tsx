@@ -23,7 +23,7 @@ function defaultDateInput(daysAgo: number): string {
 function formatTotalDuration(totalSeconds: number): string {
   const h = Math.floor(totalSeconds / 3600);
   const m = Math.floor((totalSeconds % 3600) / 60);
-  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+  return h > 0 ? `${h} val. ${m} min.` : `${m} min.`;
 }
 
 export function CallsView({ onJumpToRow }: { onJumpToRow: (rowId: string) => void }) {
@@ -129,7 +129,7 @@ export function CallsView({ onJumpToRow }: { onJumpToRow: (rowId: string) => voi
   const summary = useMemo(() => {
     if (calls.length === 0) return null;
     const totalSeconds = calls.reduce((sum, c) => sum + c.seconds, 0);
-    const answered = calls.filter((c) => c.disposition === 'answered').length;
+    const answered = calls.filter((c) => c.disposition === 'answered').length; // raw API value — never translate
     const recorded = calls.filter((c) => c.is_recorded).length;
     return { count: calls.length, totalSeconds, answered, recorded };
   }, [calls]);
@@ -138,10 +138,10 @@ export function CallsView({ onJumpToRow }: { onJumpToRow: (rowId: string) => voi
     <div className="calls-view">
       <div className="calls-mode-switch">
         <button type="button" className={view === 'list' ? 'active' : ''} onClick={() => setView('list')}>
-          Calls
+          Skambučiai
         </button>
         <button type="button" className={view === 'stats' ? 'active' : ''} onClick={() => setView('stats')}>
-          Statistics
+          Statistika
         </button>
       </div>
 
@@ -151,40 +151,40 @@ export function CallsView({ onJumpToRow }: { onJumpToRow: (rowId: string) => voi
         <>
       <div className="calls-toolbar">
         <label>
-          From{' '}
+          Nuo{' '}
           <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
         </label>
         <label>
-          To <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+          Iki <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
         </label>
         <button type="button" onClick={load} disabled={rangeTooLong || cooldown > 0}>
-          {cooldown > 0 ? `Wait ${cooldown}s…` : 'Load calls'}
+          {cooldown > 0 ? `Palaukite ${cooldown} s…` : 'Įkelti skambučius'}
         </button>
-        {rangeTooLong && <span className="calls-range-error">Range can't exceed {MAX_RANGE_DAYS} days.</span>}
+        {rangeTooLong && <span className="calls-range-error">Laikotarpis negali viršyti {MAX_RANGE_DAYS} dienų.</span>}
         {summary && (
           <span className="calls-summary">
-            {summary.count} calls · {formatTotalDuration(summary.totalSeconds)} total · {summary.answered} answered ·{' '}
-            {summary.recorded} recorded
+            Skambučių: {summary.count} · Trukmė: {formatTotalDuration(summary.totalSeconds)} · Atsakyta:{' '}
+            {summary.answered} · Įrašyta: {summary.recorded}
           </span>
         )}
       </div>
 
       {!ready ? (
         <div className="app-loading">
-          <span>Loading…</span>
+          <span>Kraunama…</span>
         </div>
       ) : calls.length === 0 ? (
-        <div className="empty-state">{error ? error : 'No calls found in this date range.'}</div>
+        <div className="empty-state">{error ? error : 'Šiuo laikotarpiu skambučių nerasta.'}</div>
       ) : (
         <table className="calls-table">
           <thead>
             <tr>
-              <th>Date/Time</th>
-              <th>Extension</th>
-              <th>Number</th>
-              <th>Duration</th>
-              <th>Status</th>
-              <th>Actions</th>
+              <th>Data / laikas</th>
+              <th>Vidinis numeris</th>
+              <th>Numeris</th>
+              <th>Trukmė</th>
+              <th>Būsena</th>
+              <th>Veiksmai</th>
             </tr>
           </thead>
           <tbody>

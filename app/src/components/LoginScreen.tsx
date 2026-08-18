@@ -25,13 +25,13 @@ export function LoginScreen() {
   return (
     <div className="login-screen">
       <form className="login-card" onSubmit={handleSubmit}>
-        <h1>Cold Call Sheet</h1>
+        <h1>MyDesk</h1>
         <label className="popover-field">
-          <span>Username</span>
+          <span>Vartotojo vardas</span>
           <input autoFocus value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" />
         </label>
         <label className="popover-field">
-          <span>Password</span>
+          <span>Slaptažodis</span>
           <input
             type="password"
             value={password}
@@ -41,9 +41,9 @@ export function LoginScreen() {
         </label>
         {error && <div className="login-error">{error}</div>}
         <button type="submit" className="primary" disabled={loggingIn || !username || !password}>
-          {loggingIn ? 'Logging in…' : 'Log in'}
+          {loggingIn ? 'Jungiamasi…' : 'Prisijungti'}
         </button>
-        <p className="login-hint">Forgot your password? Your recovery password also works here.</p>
+        <p className="login-hint">Pamiršote slaptažodį? Čia taip pat veikia jūsų atkūrimo slaptažodis.</p>
       </form>
     </div>
   );

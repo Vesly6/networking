@@ -7,7 +7,7 @@ interface CalendarGridViewProps {
   onJumpToRow: (rowId: string) => void;
 }
 
-const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const WEEKDAYS = ['Pr', 'An', 'Tr', 'Kt', 'Pn', 'Št', 'Sk'];
 const MAX_VISIBLE_PER_DAY = 3;
 // A single long unbroken word (no spaces) in a chip can force the whole
 // calendar grid wider (see .calendar-day's min-width: 0 in App.css) — cap
@@ -46,8 +46,8 @@ export function CalendarGridView({ onJumpToRow }: CalendarGridViewProps) {
   if (!dateColumn) {
     return (
       <div className="empty-state">
-        No date column is marked as the "next action date". Open the menu (⋮) on the date column in the
-        table and turn on "Use in calendar / task list".
+        Joks datos stulpelis nepažymėtas kaip „kito veiksmo data“. Atidarykite datos stulpelio meniu (⋮)
+        lentelėje ir įjunkite „Naudoti kalendoriuje / užduočių sąraše“.
       </div>
     );
   }
@@ -63,7 +63,7 @@ export function CalendarGridView({ onJumpToRow }: CalendarGridViewProps) {
           →
         </button>
         <button type="button" className="calendar-today-btn" onClick={() => setMonth(new Date())}>
-          Today
+          Šiandien
         </button>
       </div>
       <div className="calendar-weekdays">
@@ -107,7 +107,7 @@ export function CalendarGridView({ onJumpToRow }: CalendarGridViewProps) {
                   );
                 })}
                 {dayEntries.length > MAX_VISIBLE_PER_DAY && (
-                  <span className="calendar-chip-more">+{dayEntries.length - MAX_VISIBLE_PER_DAY} more</span>
+                  <span className="calendar-chip-more">+{dayEntries.length - MAX_VISIBLE_PER_DAY} daugiau</span>
                 )}
               </div>
             </div>

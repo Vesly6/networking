@@ -456,8 +456,8 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
             }
             if (updates.length > 0) {
               const truncated = updateCells(updates);
-              const parts = [`Filled ${updates.length} cell${updates.length === 1 ? '' : 's'}`];
-              if (truncated > 0) parts.push(`${truncated} truncated to the Excel limit`);
+              const parts = [`Užpildyta langelių: ${updates.length}`];
+              if (truncated > 0) parts.push(`apkarpyta pagal Excel ribą: ${truncated}`);
               showToast(parts.join(' · '));
             }
           }
@@ -616,7 +616,7 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
   const submitNameBox = () => {
     const parsed = parseRangeRef(nameBoxDraft);
     if (!parsed || columns.length === 0) {
-      showToast('Type a reference like C13 or C13:D20');
+      showToast('Įveskite nuorodą, pvz., C13 arba C13:D20');
       setNameBoxDraft(activeCell ? formatCellRef(activeCell) : '');
       return;
     }
@@ -808,9 +808,9 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
     }
 
     const truncatedCells = updateCells(updates);
-    const parts = [`Pasted ${updates.length} cell${updates.length === 1 ? '' : 's'}`];
-    if (truncatedCells > 0) parts.push(`${truncatedCells} truncated to the Excel limit`);
-    if (skippedColumns) parts.push('extra columns beyond the table were skipped');
+    const parts = [`Įklijuota langelių: ${updates.length}`];
+    if (truncatedCells > 0) parts.push(`apkarpyta pagal Excel ribą: ${truncatedCells}`);
+    if (skippedColumns) parts.push('papildomi stulpeliai, nesantys lentelėje, praleisti');
     showToast(parts.join(' · '));
   };
 
@@ -825,9 +825,9 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
     const { tsv, cellCount } = buildGridTsv(rowList, columns);
     try {
       await navigator.clipboard.writeText(tsv);
-      showToast(`Copied ${targetIds.length} row${targetIds.length === 1 ? '' : 's'} (${cellCount} cell${cellCount === 1 ? '' : 's'})`);
+      showToast(`Nukopijuota eilučių: ${targetIds.length} (langelių: ${cellCount})`);
     } catch {
-      showToast('Could not copy — clipboard access was blocked');
+      showToast('Nepavyko nukopijuoti — iškarpinės prieiga užblokuota');
     }
   };
   const copyColumnsToClipboard = async (targetIds: string[]) => {
@@ -836,11 +836,9 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
     const { tsv, cellCount } = buildGridTsv(filteredSortedRows, colList);
     try {
       await navigator.clipboard.writeText(tsv);
-      showToast(
-        `Copied ${targetIds.length} column${targetIds.length === 1 ? '' : 's'} (${cellCount} cell${cellCount === 1 ? '' : 's'})`,
-      );
+      showToast(`Nukopijuota stulpelių: ${targetIds.length} (langelių: ${cellCount})`);
     } catch {
-      showToast('Could not copy — clipboard access was blocked');
+      showToast('Nepavyko nukopijuoti — iškarpinės prieiga užblokuota');
     }
   };
   const pasteAtRows = async (targetIds: string[]) => {
@@ -848,7 +846,7 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
     try {
       text = await navigator.clipboard.readText();
     } catch {
-      showToast("Could not read the clipboard — check your browser's clipboard permission");
+      showToast('Nepavyko nuskaityti iškarpinės — patikrinkite naršyklės iškarpinės leidimą');
       return;
     }
     if (!text) return;
@@ -862,7 +860,7 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
     try {
       text = await navigator.clipboard.readText();
     } catch {
-      showToast("Could not read the clipboard — check your browser's clipboard permission");
+      showToast('Nepavyko nuskaityti iškarpinės — patikrinkite naršyklės iškarpinės leidimą');
       return;
     }
     if (!text) return;
@@ -882,7 +880,7 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
       const colList = columns.slice(minC, Math.min(maxC, columns.length - 1) + 1);
       const { tsv, cellCount } = buildGridTsv(rowList, colList);
       e.clipboardData?.setData('text/plain', tsv);
-      showToast(`Copied ${cellCount} cell${cellCount === 1 ? '' : 's'}`);
+      showToast(`Nukopijuota langelių: ${cellCount}`);
     };
 
     const handlePaste = (e: ClipboardEvent) => {
@@ -930,7 +928,7 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
       }
       if (updates.length === 0) return;
       updateCells(updates);
-      showToast(`Cleared ${updates.length} cell${updates.length === 1 ? '' : 's'}`);
+      showToast(`Išvalyta langelių: ${updates.length}`);
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
@@ -1203,11 +1201,11 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
     // real "Imported N rows" one the instant it's ready) is enough to
     // close that gap without needing a real progress bar. Skipped for
     // small files, where it would just flash and disappear pointlessly.
-    if (file.size > 1_000_000) showToast(`Importing ${(file.size / 1_000_000).toFixed(1)} MB…`);
+    if (file.size > 1_000_000) showToast(`Importuojama ${(file.size / 1_000_000).toFixed(1)} MB…`);
     try {
       const { headers, rows: dataRows } = await parseCsvFile(file);
       if (headers.length === 0) {
-        showToast('The file is empty or could not be read');
+        showToast('Failas tuščias arba nepavyko jo nuskaityti');
         return;
       }
       // Hand off to the CsvImportMapping modal rather than importing
@@ -1216,7 +1214,7 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
       // create-as-text behavior.
       setPendingImport({ headers, dataRows });
     } catch {
-      showToast('Could not import the file');
+      showToast('Nepavyko importuoti failo');
     }
   };
 
@@ -1225,9 +1223,9 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
     const { headers, dataRows } = pendingImport;
     setPendingImport(null);
     const result = importCsvRows(headers, dataRows, mapping);
-    const parts = [`Imported ${result.createdRows} row${result.createdRows === 1 ? '' : 's'}`];
-    if (result.createdColumns > 0) parts.push(`${result.createdColumns} new column${result.createdColumns === 1 ? '' : 's'}`);
-    if (result.truncatedCells > 0) parts.push(`${result.truncatedCells} cell${result.truncatedCells === 1 ? '' : 's'} truncated`);
+    const parts = [`Importuota eilučių: ${result.createdRows}`];
+    if (result.createdColumns > 0) parts.push(`naujų stulpelių: ${result.createdColumns}`);
+    if (result.truncatedCells > 0) parts.push(`apkarpytų langelių: ${result.truncatedCells}`);
     showToast(parts.join(' · '));
   };
 
@@ -1249,7 +1247,7 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
 
   const handleDeleteSelected = async () => {
     if (selectedRowIds.size === 0) return;
-    const ok = await confirmDialog({ message: `Delete the selected rows (${selectedRowIds.size})?`, danger: true });
+    const ok = await confirmDialog({ message: `Ištrinti pasirinktas eilutes (${selectedRowIds.size})?`, danger: true });
     if (ok) {
       removeRows(Array.from(selectedRowIds));
       setRowRangeAnchor(null);
@@ -1298,7 +1296,7 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
       <div className="toolbar">
         <input
           className="name-box"
-          title="Name Box — type a cell or range reference (e.g. C13 or A1:A10000) and press Enter to jump-select it"
+          title="Vardo laukas — įveskite langelio ar srities nuorodą (pvz., C13 arba A1:A10000) ir spauskite Enter, kad ją pasirinktumėte"
           placeholder="A1"
           value={nameBoxDraft}
           onChange={(e) => setNameBoxDraft(e.target.value)}
@@ -1322,23 +1320,23 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
           ref={searchInputRef}
           className="search-input"
           type="search"
-          placeholder="Search the whole table… (Ctrl/Cmd+F)"
+          placeholder="Ieškoti visoje lentelėje… (Ctrl/Cmd+F)"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Escape') e.currentTarget.blur();
           }}
         />
-        <button type="button" title="Undo (Ctrl+Z)" disabled={!canUndo} onClick={undo}>
+        <button type="button" title="Anuliuoti (Ctrl+Z)" disabled={!canUndo} onClick={undo}>
           ↶
         </button>
-        <button type="button" title="Redo (Ctrl+Shift+Z)" disabled={!canRedo} onClick={redo}>
+        <button type="button" title="Grąžinti (Ctrl+Shift+Z)" disabled={!canRedo} onClick={redo}>
           ↷
         </button>
         <div className="toolbar-spacer" />
         {selectedRowIds.size > 0 && (
           <button type="button" className="danger" onClick={handleDeleteSelected}>
-            Delete selected ({selectedRowIds.size})
+            Ištrinti pasirinktas ({selectedRowIds.size})
           </button>
         )}
         <button
@@ -1350,11 +1348,11 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
             setColorPickerAnchor((prev) => (prev ? null : anchor));
           }}
         >
-          🎨 Color
+          🎨 Spalva
         </button>
         {colorPickerAnchor && (
           <Popover anchor={colorPickerAnchor} width={200}>
-            <div className="color-palette-label">Fill color</div>
+            <div className="color-palette-label">Užpildymo spalva</div>
             <div className="color-palette">
               {PRESET_COLORS.map((c) => (
                 <button key={c} type="button" className="color-swatch" style={{ background: c }} onClick={() => applyColor(c)} />
@@ -1362,13 +1360,13 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
               {recentColors.map((c) => (
                 <button key={c} type="button" className="color-swatch" style={{ background: c }} onClick={() => applyColor(c)} />
               ))}
-              <label className="color-swatch color-swatch-custom" title="Custom color">
+              <label className="color-swatch color-swatch-custom" title="Pasirinktinė spalva">
                 +
                 <ColorInput onCommit={applyColor} />
               </label>
             </div>
             <button type="button" className="color-clear-btn" onClick={() => applyColor(null)}>
-              Clear color
+              Išvalyti spalvą
             </button>
           </Popover>
         )}
@@ -1376,25 +1374,25 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
         {hiddenColumns.length > 0 && (
           <button
             type="button"
-            title="Show hidden columns"
+            title="Rodyti paslėptus stulpelius"
             onClick={(e) => {
               e.stopPropagation();
               const anchor = e.currentTarget;
               setHiddenColumnsAnchor((prev) => (prev ? null : anchor));
             }}
           >
-            🔒 {hiddenColumns.length} hidden
+            🔒 Paslėpta: {hiddenColumns.length}
           </button>
         )}
         {hiddenColumnsAnchor && (
           <HiddenColumnsPopover anchor={hiddenColumnsAnchor} columns={columns} onClose={() => setHiddenColumnsAnchor(null)} />
         )}
         <button type="button" onClick={handleImportClick}>
-          Import CSV
+          Importuoti CSV
         </button>
         <input ref={fileInputRef} type="file" accept=".csv,text/csv" hidden onChange={handleFileChange} />
         <button type="button" onClick={handleExport}>
-          Export CSV
+          Eksportuoti CSV
         </button>
         {pendingImport && (
           <CsvImportMapping
@@ -1435,7 +1433,7 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
 
       {columns.length === 0 ? (
         <div className="empty-state">
-          There are no columns yet —{' '}
+          Stulpelių dar nėra —{' '}
           <button
             type="button"
             className="empty-state-add-column"
@@ -1445,9 +1443,9 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
               setAddColumnAnchor((prev) => (prev ? null : anchor));
             }}
           >
-            + Add a column
+            + Pridėti stulpelį
           </button>{' '}
-          or import a CSV.
+          arba importuokite CSV.
         </div>
       ) : (
         <div className="table-scroll" ref={tableScrollRef}>
@@ -1495,7 +1493,7 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
                         draggable
                         onDragStart={(e) => handleColGripDragStart(e, col, index)}
                         onDragEnd={handleColumnDragEnd}
-                        title="Drag to reorder columns"
+                        title="Vilkite, kad pakeistumėte stulpelių tvarką"
                       >
                         ⠿
                       </span>
@@ -1508,7 +1506,7 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
                         }}
                         onMouseEnter={() => handleColLetterMouseEnter(index)}
                         onClick={(e) => e.stopPropagation()}
-                        title="Click, or shift+click / drag to select multiple columns — right-click for more actions"
+                        title="Spustelėkite arba shift+spustelėkite / vilkite, kad pasirinktumėte kelis stulpelius — dešiniuoju paspaudimu daugiau veiksmų"
                       >
                         {columnLetter(index)}
                       </span>
@@ -1519,7 +1517,7 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
                 <th
                   className="add-column-header"
                   rowSpan={2}
-                  title="Add column"
+                  title="Pridėti stulpelį"
                   onClick={(e) => {
                     e.stopPropagation();
                     const anchor = e.currentTarget;
@@ -1594,7 +1592,7 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
                   >
                     <td
                       className="row-gutter"
-                      title={rowDragEnabled ? undefined : 'Clear sort/search to drag-reorder rows'}
+                      title={rowDragEnabled ? undefined : 'Išjunkite rikiavimą/paiešką, kad galėtumėte vilkti eilutes'}
                       onContextMenu={(e) => handleRowContextMenu(e, row, index)}
                     >
                       <div className="row-gutter-inner">
@@ -1603,7 +1601,7 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
                           draggable={rowDragEnabled}
                           onDragStart={(e) => handleRowGripDragStart(e, row.id, index)}
                           onDragEnd={handleRowDragEnd}
-                          title="Drag to reorder rows"
+                          title="Vilkite, kad pakeistumėte eilučių tvarką"
                         >
                           ⠿
                         </span>
@@ -1616,17 +1614,17 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
                           }}
                           onMouseEnter={() => handleRowNumberMouseEnter(index)}
                           onClick={(e) => e.stopPropagation()}
-                          title="Click, or shift+click / drag to select multiple rows"
+                          title="Spustelėkite arba shift+spustelėkite / vilkite, kad pasirinktumėte kelias eilutes"
                         >
                           {index + 1}
                         </span>
                         <button
                           type="button"
                           className="row-delete"
-                          title="Delete row"
+                          title="Ištrinti eilutę"
                           onClick={async (e) => {
                             e.stopPropagation();
-                            if (await confirmDialog({ message: 'Delete this row?', danger: true })) removeRow(row.id);
+                            if (await confirmDialog({ message: 'Ištrinti šią eilutę?', danger: true })) removeRow(row.id);
                           }}
                         >
                           ×
@@ -1670,11 +1668,11 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
               )}
               {dragRowIds ? (
                 <tr className="row-drop-end" onDragOver={(e) => e.preventDefault()} onDrop={handleRowDropAtEnd}>
-                  <td colSpan={columns.length + 1}>Drop here to move to the end</td>
+                  <td colSpan={columns.length + 1}>Vilkite čia, kad perkeltumėte į pabaigą</td>
                 </tr>
               ) : (
                 <tr className="row-add-tr" onClick={handleAddRow}>
-                  <td colSpan={columns.length + 1}>+ Add row</td>
+                  <td colSpan={columns.length + 1}>+ Pridėti eilutę</td>
                 </tr>
               )}
             </tbody>
@@ -1682,7 +1680,7 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
           {fillHandlePos && (
             <div
               className="fill-handle"
-              title="Drag to fill this value into adjacent cells"
+              title="Vilkite, kad šią reikšmę užpildytumėte į gretimus langelius"
               style={{ top: fillHandlePos.top, left: fillHandlePos.left }}
               onMouseDown={handleFillHandleMouseDown}
             />
@@ -1700,15 +1698,15 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
           )}
           {filteredSortedRows.length === 0 && (
             <div className="empty-state">
-              {rows.length === 0 ? 'No companies yet — import a CSV or add a row.' : 'No results for the current search.'}
+              {rows.length === 0 ? 'Kol kas nėra įmonių — importuokite CSV arba pridėkite eilutę.' : 'Pagal dabartinę paiešką rezultatų nerasta.'}
             </div>
           )}
         </div>
       )}
 
       <div className="table-footer">
-        Rows: {filteredSortedRows.length}
-        {filteredSortedRows.length !== rows.length ? ` of ${rows.length}` : ''}
+        Eilučių: {filteredSortedRows.length}
+        {filteredSortedRows.length !== rows.length ? ` iš ${rows.length}` : ''}
       </div>
 
       {expandedCell &&

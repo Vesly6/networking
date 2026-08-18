@@ -18,20 +18,20 @@ export function HiddenColumnsPopover({ anchor, columns, onClose }: HiddenColumns
   return (
     <Popover anchor={anchor}>
       {hidden.length === 0 ? (
-        <div className="popover-field">Nothing hidden</div>
+        <div className="popover-field">Nieko paslėpta</div>
       ) : (
         hidden.map((c) => (
           <div key={c.id} className="popover-field popover-checkbox" style={{ justifyContent: 'space-between' }}>
             <span>{c.name}</span>
             <button type="button" onClick={() => setColumnHidden(c.id, false)}>
-              Show
+              Rodyti
             </button>
           </div>
         ))
       )}
       <div className="popover-footer">
         <button type="button" onClick={onClose}>
-          Close
+          Uždaryti
         </button>
       </div>
     </Popover>

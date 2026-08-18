@@ -15,10 +15,10 @@ export function CalendarView({ onJumpToRow }: CalendarViewProps) {
     <div className="calendar-view">
       <div className="calendar-mode-switch">
         <button type="button" className={mode === 'list' ? 'active' : ''} onClick={() => setMode('list')}>
-          Task list
+          Užduočių sąrašas
         </button>
         <button type="button" className={mode === 'grid' ? 'active' : ''} onClick={() => setMode('grid')}>
-          Calendar
+          Kalendorius
         </button>
       </div>
       {mode === 'list' ? <TaskListView onJumpToRow={onJumpToRow} /> : <CalendarGridView onJumpToRow={onJumpToRow} />}

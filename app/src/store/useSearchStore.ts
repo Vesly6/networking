@@ -89,7 +89,7 @@ export const useSearchStore = create<SearchState>((set, get) => ({
       // object), so result.page was always undefined here.
       set({ people: result.people, peopleTotal: result.total_entries, peoplePage: page, peopleLoading: false });
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Could not search Apollo';
+      const message = err instanceof Error ? err.message : 'Nepavyko atlikti Apollo paieškos';
       set({ peopleError: message, peopleLoading: false });
     }
   },
@@ -117,7 +117,7 @@ export const useSearchStore = create<SearchState>((set, get) => ({
         companiesLoading: false,
       });
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Could not search Apollo';
+      const message = err instanceof Error ? err.message : 'Nepavyko atlikti Apollo paieškos';
       set({ companiesError: message, companiesLoading: false });
     }
   },
@@ -136,10 +136,10 @@ export const useSearchStore = create<SearchState>((set, get) => ({
         organization_name: person.organization?.name ?? undefined,
       };
       const result = await apiEnrichPerson(params);
-      if (!result.person) throw new Error('No match found for this person');
+      if (!result.person) throw new Error('Šio žmogaus atitikmuo nerastas');
       set((s) => ({ enrichedById: { ...s.enrichedById, [id]: result.person! } }));
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Could not reveal this contact';
+      const message = err instanceof Error ? err.message : 'Nepavyko atskleisti šio kontakto';
       set((s) => ({ enrichErrors: { ...s.enrichErrors, [id]: message } }));
     } finally {
       set((s) => {
@@ -178,7 +178,7 @@ export const useSearchStore = create<SearchState>((set, get) => ({
       // apolloApi.ts's pollPhoneReveal / server/src/apollo.ts's
       // pollWebhookResult for how this was confirmed.
       if (!result.request_id) {
-        throw new Error(result.phone_enrichment?.message ?? 'Apollo did not start a phone lookup for this person');
+        throw new Error(result.phone_enrichment?.message ?? 'Apollo nepradėjo šio žmogaus telefono paieškos');
       }
       const requestId = result.request_id;
       const deadline = Date.now() + PHONE_POLL_MAX_MS;
@@ -192,12 +192,12 @@ export const useSearchStore = create<SearchState>((set, get) => ({
           throw new Error(poll.message);
         }
         if (Date.now() >= deadline) {
-          throw new Error("Apollo hasn't returned a phone number yet — try again in a few minutes");
+          throw new Error('Apollo dar negrąžino telefono numerio — bandykite dar kartą po kelių minučių');
         }
         await sleep(Math.min(Math.max(poll.retryAfterSeconds, 5), 20) * 1000);
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Could not reveal a phone number';
+      const message = err instanceof Error ? err.message : 'Nepavyko atskleisti telefono numerio';
       set((s) => ({ phoneErrors: { ...s.phoneErrors, [id]: message } }));
     } finally {
       set((s) => {

@@ -29,7 +29,7 @@ export function FormulaBar({ selection, columns, rows }: FormulaBarProps) {
     return (
       <div className="formula-bar formula-bar-empty">
         <span className="formula-bar-label">—</span>
-        <span className="formula-bar-hint">Select a cell to see its full content</span>
+        <span className="formula-bar-hint">Pasirinkite langelį, kad matytumėte visą jo turinį</span>
       </div>
     );
   }
@@ -38,7 +38,7 @@ export function FormulaBar({ selection, columns, rows }: FormulaBarProps) {
     if (draft === storedValue) return;
     const truncated = updateCell(row.id, column.id, draft);
     if (truncated) {
-      showToast(`Text truncated to Excel's cell limit — ${EXCEL_CELL_LIMIT.toLocaleString('en-US')} characters`);
+      showToast(`Tekstas apkarpytas iki Excel langelio ribos — ${EXCEL_CELL_LIMIT.toLocaleString('lt-LT')} simbolių`);
       setDraft(row.cells[column.id] ?? '');
     }
   };

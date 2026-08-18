@@ -33,7 +33,7 @@ export function SheetTabs() {
     setEditingName(name);
   };
 
-  const handleNewTable = () => setActiveTable(createTable(`Table ${tables.length + 1}`));
+  const handleNewTable = () => setActiveTable(createTable(`Lentelė ${tables.length + 1}`));
 
   const handleContextMenu = (e: ReactMouseEvent, id: string, name: string) => {
     e.preventDefault();
@@ -75,13 +75,13 @@ export function SheetTabs() {
             className={`sheet-tab ${t.id === activeTableId ? 'sheet-tab-active' : ''}`}
             onClick={() => setActiveTable(t.id)}
             onContextMenu={(e) => handleContextMenu(e, t.id, t.name)}
-            title="Click to switch tables — right-click to rename, add, duplicate, or delete"
+            title="Spustelėkite, kad perjungtumėte lenteles — dešiniuoju paspaudimu pervadinkite, pridėkite, dubliuokite ar ištrinkite"
           >
             {t.name}
           </button>
         ),
       )}
-      <button type="button" className="sheet-tab-add" title="New table" onClick={handleNewTable}>
+      <button type="button" className="sheet-tab-add" title="Nauja lentelė" onClick={handleNewTable}>
         +
       </button>
       {menu && (
@@ -94,7 +94,7 @@ export function SheetTabs() {
               setMenu(null);
             }}
           >
-            Rename
+            Pervadinti
           </button>
           <button
             type="button"
@@ -104,7 +104,7 @@ export function SheetTabs() {
               handleNewTable();
             }}
           >
-            New table
+            Nauja lentelė
           </button>
           <button
             type="button"
@@ -115,7 +115,7 @@ export function SheetTabs() {
               if (newId) setActiveTable(newId);
             }}
           >
-            Duplicate table
+            Dubliuoti lentelę
           </button>
           <button
             type="button"
@@ -128,7 +128,7 @@ export function SheetTabs() {
               if (await confirmDeleteTable(name, rows)) deleteTable(id);
             }}
           >
-            Delete table
+            Ištrinti lentelę
           </button>
         </ContextMenu>
       )}

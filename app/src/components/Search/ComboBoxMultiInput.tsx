@@ -1,13 +1,28 @@
 import { useMemo, useRef, useState } from 'react';
 
+/** A suggestion pair: `label` is what's shown/typed-against in the UI
+ * (Lithuanian), `value` is what actually ends up in the component's
+ * `value[]`/`onChange` — and, for Apollo filter lists, what's actually
+ * sent to Apollo's API, which expects English location/title strings.
+ * Plain strings are still accepted (label === value) for any use of this
+ * component where the two never diverge. */
+export interface ComboBoxOption {
+  label: string;
+  value: string;
+}
+
 interface ComboBoxMultiInputProps {
   value: string[];
   onChange: (value: string[]) => void;
-  suggestions: string[];
+  suggestions: string[] | ComboBoxOption[];
   placeholder?: string;
 }
 
 const MAX_SUGGESTIONS = 30;
+
+function toOptions(suggestions: string[] | ComboBoxOption[]): ComboBoxOption[] {
+  return suggestions.map((s) => (typeof s === 'string' ? { label: s, value: s } : s));
+}
 
 /** A "pick from a list, but can still type your own" multi-value input —
  * built on explicit request: "писать никто сейчас не любит все любят
@@ -17,18 +32,33 @@ const MAX_SUGGESTIONS = 30;
  * into a dropdown (shown immediately on focus, even before typing, so the
  * full option set is visible without having to type first); clicking one
  * adds it. Enter with no suggestion highlighted adds whatever's typed as a
- * plain custom value — this never becomes a closed/validated dropdown. */
+ * plain custom value — this never becomes a closed/validated dropdown.
+ *
+ * Suggestions can be plain strings or {label, value} pairs — added so
+ * Apollo's location/title suggestion lists could show Lithuanian labels
+ * while still emitting/sending the English value Apollo's API expects.
+ * Filtering matches against BOTH label and value, so typing either
+ * "Lietuva" or "Lithuania" finds the same suggestion. */
 export function ComboBoxMultiInput({ value, onChange, suggestions, placeholder }: ComboBoxMultiInputProps) {
   const [text, setText] = useState('');
   const [open, setOpen] = useState(false);
   const [highlighted, setHighlighted] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  const options = useMemo(() => toOptions(suggestions), [suggestions]);
+  const labelByValue = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const o of options) map.set(o.value, o.label);
+    return map;
+  }, [options]);
+
   const filtered = useMemo(() => {
     const q = text.trim().toLowerCase();
-    const pool = q ? suggestions.filter((s) => s.toLowerCase().includes(q)) : suggestions;
-    return pool.filter((s) => !value.includes(s)).slice(0, MAX_SUGGESTIONS);
-  }, [text, suggestions, value]);
+    const pool = q
+      ? options.filter((o) => o.label.toLowerCase().includes(q) || o.value.toLowerCase().includes(q))
+      : options;
+    return pool.filter((o) => !value.includes(o.value)).slice(0, MAX_SUGGESTIONS);
+  }, [text, options, value]);
 
   const addValue = (v: string) => {
     const trimmed = v.trim();
@@ -49,7 +79,7 @@ export function ComboBoxMultiInput({ value, onChange, suggestions, placeholder }
       setHighlighted((h) => Math.max(h - 1, 0));
     } else if (e.key === 'Enter') {
       e.preventDefault();
-      if (open && filtered[highlighted]) addValue(filtered[highlighted]);
+      if (open && filtered[highlighted]) addValue(filtered[highlighted].value);
       else addValue(text);
     } else if (e.key === 'Backspace' && text === '' && value.length > 0) {
       removeValue(value[value.length - 1]);
@@ -61,14 +91,17 @@ export function ComboBoxMultiInput({ value, onChange, suggestions, placeholder }
   return (
     <div className="combobox">
       <div className="combobox-chips">
-        {value.map((v) => (
-          <span key={v} className="combobox-chip">
-            {v}
-            <button type="button" className="combobox-chip-remove" onClick={() => removeValue(v)} aria-label={`Remove ${v}`}>
-              ×
-            </button>
-          </span>
-        ))}
+        {value.map((v) => {
+          const label = labelByValue.get(v) ?? v;
+          return (
+            <span key={v} className="combobox-chip">
+              {label}
+              <button type="button" className="combobox-chip-remove" onClick={() => removeValue(v)} aria-label={`Pašalinti ${label}`}>
+                ×
+              </button>
+            </span>
+          );
+        })}
         <input
           ref={inputRef}
           className="combobox-input"
@@ -86,19 +119,19 @@ export function ComboBoxMultiInput({ value, onChange, suggestions, placeholder }
       </div>
       {open && filtered.length > 0 && (
         <div className="combobox-dropdown">
-          {filtered.map((s, i) => (
+          {filtered.map((o, i) => (
             <button
               type="button"
-              key={s}
+              key={o.value}
               className={`combobox-option ${i === highlighted ? 'combobox-option-active' : ''}`}
               onMouseDown={(e) => {
                 e.preventDefault();
-                addValue(s);
+                addValue(o.value);
                 inputRef.current?.focus();
               }}
               onMouseEnter={() => setHighlighted(i)}
             >
-              {s}
+              {o.label}
             </button>
           ))}
         </div>

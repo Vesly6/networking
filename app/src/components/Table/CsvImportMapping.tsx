@@ -69,10 +69,10 @@ export function CsvImportMapping({ headers, dataRows, columns, onConfirm, onCanc
   return createPortal(
     <div className="modal-backdrop" onClick={onCancel}>
       <div className="modal csv-import-mapping" onClick={(e) => e.stopPropagation()}>
-        <h2>Import CSV — map columns</h2>
+        <h2>CSV importas — susieti stulpelius</h2>
         <p className="csv-import-mapping-hint">
-          Choose where each CSV column goes. A column that doesn't match anything existing defaults to a guess based on
-          its actual data — check it before importing, especially for Notes/Contacts.
+          Pasirinkite, kur pateks kiekvienas CSV stulpelis. Stulpelis, kuris nesutampa su jokiu esamu, pagal
+          nutylėjimą priskiriamas spėjant pagal jo duomenis — patikrinkite prieš importuodami, ypač Komentarams/Kontaktams.
         </p>
         <div className="csv-import-mapping-list">
           {headers.map((header) => {
@@ -80,14 +80,14 @@ export function CsvImportMapping({ headers, dataRows, columns, onConfirm, onCanc
             return (
               <div className="csv-import-mapping-row" key={header}>
                 <span className="csv-import-mapping-header" title={header}>
-                  {header || '(blank header)'}
+                  {header || '(tuščia antraštė)'}
                 </span>
                 <select value={selectValue(header)} onChange={(e) => setAction(header, e.target.value)}>
-                  <option value={SKIP}>Skip this column</option>
-                  <option value={NEW}>+ Create new column</option>
+                  <option value={SKIP}>Praleisti šį stulpelį</option>
+                  <option value={NEW}>+ Sukurti naują stulpelį</option>
                   {columns.map((c) => (
                     <option key={c.id} value={c.id}>
-                      Match: {c.name} ({TYPE_LABELS[c.type]})
+                      Susieti: {c.name} ({TYPE_LABELS[c.type]})
                     </option>
                   ))}
                 </select>
@@ -105,14 +105,14 @@ export function CsvImportMapping({ headers, dataRows, columns, onConfirm, onCanc
           })}
         </div>
         <div className="csv-import-mapping-summary">
-          {newCount} new column{newCount === 1 ? '' : 's'} · {skippedCount} skipped
+          Nauji stulpeliai: {newCount} · Praleista: {skippedCount}
         </div>
         <div className="popover-footer">
           <button type="button" onClick={onCancel}>
-            Cancel
+            Atšaukti
           </button>
           <button type="button" className="primary" onClick={() => onConfirm(mapping)}>
-            Import
+            Importuoti
           </button>
         </div>
       </div>

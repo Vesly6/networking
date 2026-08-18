@@ -46,7 +46,7 @@ const EMPTY_CONTACT_FIELDS: ContactFormFields = { firstName: '', lastName: '', p
 // ("sent an email", "had a meeting") — each just adds a new dated note
 // entry with this exact text, same as typing it into "Add a note…" and
 // hitting Enter, just faster for the entries logged constantly.
-const NOTE_TAGS = ['Email', 'Email follow up', 'Meeting', 'Call follow up'];
+const NOTE_TAGS = ['El. paštas', 'El. laiško tęsinys', 'Susitikimas', 'Skambučio tęsinys'];
 
 // Temporarily disabled on explicit request — kept (not deleted) since
 // callContact/requestCallback are meant to come back, not go away for
@@ -174,18 +174,18 @@ export function CellHoverEditor({
 
   const saveContactEdit = async () => {
     if (!editingContactId) return;
-    if (!(await confirmDialog('Save changes to this contact?'))) return;
+    if (!(await confirmDialog('Išsaugoti šio kontakto pakeitimus?'))) return;
     const text = joinContactFields(editFields);
     if (text) onUpdateContact(editingContactId, text);
     setEditingContactId(null);
   };
 
   const removeNoteEntry = async (id: string) => {
-    if (await confirmDialog({ message: 'Delete this note entry?', danger: true })) onRemoveNoteEntry(id);
+    if (await confirmDialog({ message: 'Ištrinti šį komentaro įrašą?', danger: true })) onRemoveNoteEntry(id);
   };
 
   const removeContact = async (id: string) => {
-    if (await confirmDialog({ message: 'Delete this contact?', danger: true })) onRemoveContact(id);
+    if (await confirmDialog({ message: 'Ištrinti šį kontaktą?', danger: true })) onRemoveContact(id);
   };
 
   const handleEditKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
@@ -213,7 +213,7 @@ export function CellHoverEditor({
       const { text } = await parseContactText(pasted);
       setContactDraft(text);
     } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Could not clean up the pasted contact');
+      showToast(err instanceof Error ? err.message : 'Nepavyko sutvarkyti įklijuoto kontakto');
       setContactDraft(pasted.replace(/\s*\n\s*/g, ', ').trim());
     } finally {
       setParsingContact(false);
@@ -225,18 +225,18 @@ export function CellHoverEditor({
     if (!number) return;
     try {
       await requestCallback(number);
-      showToast(`Calling ${number} — pick up your phone`);
+      showToast(`Skambinama ${number} — pakelkite telefoną`);
     } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Could not start the call');
+      showToast(err instanceof Error ? err.message : 'Nepavyko pradėti skambučio');
     }
   };
 
   const copyText = async (text: string, label: string) => {
     try {
       await navigator.clipboard.writeText(text);
-      showToast(`${label} copied`);
+      showToast(`${label} nukopijuotas`);
     } catch {
-      showToast('Could not copy — clipboard access denied');
+      showToast('Nepavyko nukopijuoti — nėra prieigos prie iškarpinės');
     }
   };
 
@@ -248,14 +248,14 @@ export function CellHoverEditor({
   // than before in that case, not a dead click.
   const callViaSoftphone = async (phone: string) => {
     if (insertIntoSoftphone(phone)) {
-      showToast('Number sent to the softphone — press Call there');
+      showToast('Numeris nusiųstas į telefono programėlę — spauskite skambinti ten');
       return;
     }
     try {
       await navigator.clipboard.writeText(phone);
-      showToast('Softphone not open — number copied instead');
+      showToast('Telefono programėlė neatidaryta — vietoj to numeris nukopijuotas');
     } catch {
-      showToast('Softphone not open, and could not copy the number either');
+      showToast('Telefono programėlė neatidaryta, ir numerio nukopijuoti taip pat nepavyko');
     }
   };
 
@@ -276,7 +276,7 @@ export function CellHoverEditor({
             ref={newEntryRef}
             className="cell-hover-new-entry"
             autoFocus
-            placeholder="Add a note…"
+            placeholder="Pridėti komentarą…"
             value={newEntryDraft}
             onChange={(e) => setNewEntryDraft(e.target.value)}
             onBlur={commitNewEntry}
@@ -337,7 +337,7 @@ export function CellHoverEditor({
                     <button
                       type="button"
                       className="cell-hover-history-remove"
-                      title="Delete entry"
+                      title="Ištrinti įrašą"
                       onClick={() => {
                         void removeNoteEntry(entry.id);
                       }}
@@ -353,7 +353,7 @@ export function CellHoverEditor({
       ) : (
         <>
           <div className="cell-hover-contact-structured-form">
-            <div className="cell-hover-contact-structured-label">Add a contact</div>
+            <div className="cell-hover-contact-structured-label">Pridėti kontaktą</div>
             <form
               className="cell-hover-contact-structured-grid"
               onSubmit={(e) => {
@@ -362,42 +362,42 @@ export function CellHoverEditor({
               }}
             >
               <input
-                placeholder="First name"
+                placeholder="Vardas"
                 autoFocus
                 value={addFields.firstName}
                 onChange={(e) => updateAddField('firstName', e.target.value)}
               />
               <input
-                placeholder="Last name"
+                placeholder="Pavardė"
                 value={addFields.lastName}
                 onChange={(e) => updateAddField('lastName', e.target.value)}
               />
               <input
-                placeholder="Position"
+                placeholder="Pareigos"
                 value={addFields.position}
                 onChange={(e) => updateAddField('position', e.target.value)}
               />
               <input
-                placeholder="Email"
+                placeholder="El. paštas"
                 value={addFields.email}
                 onChange={(e) => updateAddField('email', e.target.value)}
               />
               <input
-                placeholder="Phone"
+                placeholder="Telefonas"
                 value={addFields.phone}
                 onChange={(e) => updateAddField('phone', e.target.value)}
               />
               <button type="submit" className="primary cell-hover-contact-add">
-                + Add contact
+                + Pridėti kontaktą
               </button>
             </form>
           </div>
 
-          <div className="cell-hover-contact-divider">or paste freeform text</div>
+          <div className="cell-hover-contact-divider">arba įklijuokite laisvą tekstą</div>
 
           <div className="cell-hover-contact-form">
             <input
-              placeholder={parsingContact ? 'Cleaning up…' : 'Name, phone, email…'}
+              placeholder={parsingContact ? 'Tvarkoma…' : 'Vardas, telefonas, el. paštas…'}
               value={contactDraft}
               // readOnly, not disabled — disabling a *focused* input forces
               // an immediate browser blur, which (via TableView's
@@ -412,7 +412,7 @@ export function CellHoverEditor({
               onKeyDown={(e) => e.key === 'Enter' && commitContact()}
             />
             <button type="button" className="primary cell-hover-contact-add" onClick={commitContact}>
-              + Add contact
+              + Pridėti kontaktą
             </button>
           </div>
           {parseContacts(value).length > 0 && (
@@ -431,42 +431,42 @@ export function CellHoverEditor({
                         }}
                       >
                         <input
-                          placeholder="First name"
+                          placeholder="Vardas"
                           autoFocus
                           value={editFields.firstName}
                           onChange={(e) => updateEditField('firstName', e.target.value)}
                           onKeyDown={handleEditKeyDown}
                         />
                         <input
-                          placeholder="Last name"
+                          placeholder="Pavardė"
                           value={editFields.lastName}
                           onChange={(e) => updateEditField('lastName', e.target.value)}
                           onKeyDown={handleEditKeyDown}
                         />
                         <input
-                          placeholder="Position"
+                          placeholder="Pareigos"
                           value={editFields.position}
                           onChange={(e) => updateEditField('position', e.target.value)}
                           onKeyDown={handleEditKeyDown}
                         />
                         <input
-                          placeholder="Email"
+                          placeholder="El. paštas"
                           value={editFields.email}
                           onChange={(e) => updateEditField('email', e.target.value)}
                           onKeyDown={handleEditKeyDown}
                         />
                         <input
-                          placeholder="Phone"
+                          placeholder="Telefonas"
                           value={editFields.phone}
                           onChange={(e) => updateEditField('phone', e.target.value)}
                           onKeyDown={handleEditKeyDown}
                         />
                         <div className="cell-hover-contact-edit-actions">
                           <button type="submit" className="primary">
-                            💾 Save
+                            💾 Išsaugoti
                           </button>
                           <button type="button" onClick={cancelContactEdit}>
-                            ✕ Cancel
+                            ✕ Atšaukti
                           </button>
                         </div>
                       </form>
@@ -479,7 +479,7 @@ export function CellHoverEditor({
                                 <button
                                   type="button"
                                   className="cell-hover-contact-phone-value"
-                                  title="Send to the softphone"
+                                  title="Siųsti į telefono programėlę"
                                   onClick={() => void callViaSoftphone(field.value)}
                                 >
                                   {field.value}
@@ -491,8 +491,8 @@ export function CellHoverEditor({
                                 <button
                                   type="button"
                                   className="cell-hover-contact-copy"
-                                  title="Copy name"
-                                  onClick={() => void copyText(field.value, 'Name')}
+                                  title="Kopijuoti vardą"
+                                  onClick={() => void copyText(field.value, 'Vardas')}
                                 >
                                   📋
                                 </button>
@@ -501,8 +501,8 @@ export function CellHoverEditor({
                                 <button
                                   type="button"
                                   className="cell-hover-contact-copy"
-                                  title="Copy phone number"
-                                  onClick={() => void copyText(field.value, 'Phone number')}
+                                  title="Kopijuoti telefono numerį"
+                                  onClick={() => void copyText(field.value, 'Telefono numeris')}
                                 >
                                   📋
                                 </button>
@@ -511,8 +511,8 @@ export function CellHoverEditor({
                                 <button
                                   type="button"
                                   className="cell-hover-contact-copy"
-                                  title="Copy email"
-                                  onClick={() => void copyText(field.value, 'Email')}
+                                  title="Kopijuoti el. paštą"
+                                  onClick={() => void copyText(field.value, 'El. paštas')}
                                 >
                                   📋
                                 </button>
@@ -524,7 +524,7 @@ export function CellHoverEditor({
                           <button
                             type="button"
                             className="cell-hover-contact-call"
-                            title={`Call ${phone}`}
+                            title={`Skambinti ${phone}`}
                             onClick={() => void callContact(c.text)}
                           >
                             📞
@@ -533,7 +533,7 @@ export function CellHoverEditor({
                         <button
                           type="button"
                           className="cell-hover-contact-edit"
-                          title="Edit contact"
+                          title="Redaguoti kontaktą"
                           onClick={() => startEditingContact(c)}
                         >
                           ✏️
@@ -541,7 +541,7 @@ export function CellHoverEditor({
                         <button
                           type="button"
                           className="cell-hover-contact-remove"
-                          title="Remove contact"
+                          title="Pašalinti kontaktą"
                           onClick={() => {
                             void removeContact(c.id);
                           }}

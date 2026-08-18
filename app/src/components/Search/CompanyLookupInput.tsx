@@ -32,9 +32,9 @@ export function CompanyLookupInput({ value, onChange }: CompanyLookupInputProps)
     try {
       const res = await searchCompanies({ q_organization_name: q, per_page: 5 });
       setResults(res.companies);
-      if (res.companies.length === 0) setError('No matching companies found');
+      if (res.companies.length === 0) setError('Atitinkančių įmonių nerasta');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Company lookup failed');
+      setError(err instanceof Error ? err.message : 'Nepavyko surasti įmonės');
     } finally {
       setLoading(false);
     }
@@ -55,14 +55,14 @@ export function CompanyLookupInput({ value, onChange }: CompanyLookupInputProps)
         {value.map((id) => (
           <span key={id} className="combobox-chip">
             {names[id] ?? id}
-            <button type="button" className="combobox-chip-remove" onClick={() => removeCompany(id)} aria-label={`Remove ${names[id] ?? id}`}>
+            <button type="button" className="combobox-chip-remove" onClick={() => removeCompany(id)} aria-label={`Pašalinti ${names[id] ?? id}`}>
               ×
             </button>
           </span>
         ))}
         <input
           className="combobox-input"
-          placeholder={value.length === 0 ? 'Type a company name, press Enter' : ''}
+          placeholder={value.length === 0 ? 'Įveskite įmonės pavadinimą, spauskite Enter' : ''}
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
@@ -77,7 +77,7 @@ export function CompanyLookupInput({ value, onChange }: CompanyLookupInputProps)
           className="company-lookup-btn"
           onClick={() => void runLookup()}
           disabled={loading || !text.trim()}
-          title="Look up this company name (1 credit)"
+          title="Ieškoti šios įmonės (1 kreditas)"
         >
           {loading ? '…' : '🔍'}
         </button>
@@ -95,7 +95,7 @@ export function CompanyLookupInput({ value, onChange }: CompanyLookupInputProps)
                 addCompany(c);
               }}
             >
-              {c.name ?? 'Unknown'} {c.primary_domain && <span className="search-result-detail-muted">— {c.primary_domain}</span>}
+              {c.name ?? 'Nežinoma'} {c.primary_domain && <span className="search-result-detail-muted">— {c.primary_domain}</span>}
             </button>
           ))}
         </div>

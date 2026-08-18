@@ -33,7 +33,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       const now = Date.now();
       const table: TableMeta = {
         id: crypto.randomUUID(),
-        name: 'Table 1',
+        name: 'Lentelė 1',
         columns: [],
         createdAt: now,
         updatedAt: now,
@@ -51,7 +51,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     const now = Date.now();
     const table: TableMeta = {
       id: crypto.randomUUID(),
-      name: name.trim() || `Table ${get().tables.length + 1}`,
+      name: name.trim() || `Lentelė ${get().tables.length + 1}`,
       columns: [],
       createdAt: now,
       updatedAt: now,
@@ -84,7 +84,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     const now = Date.now();
     const newTable: TableMeta = {
       id: crypto.randomUUID(),
-      name: `${source.name} (copy)`,
+      name: `${source.name} (kopija)`,
       columns,
       createdAt: now,
       updatedAt: now,

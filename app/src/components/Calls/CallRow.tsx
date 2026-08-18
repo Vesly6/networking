@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useCallsStore } from '../../store/useCallsStore';
 import { useToastStore } from '../../store/useToastStore';
 import type { CallRecord } from '../../utils/callsApi';
+import { getCallDispositionLabel } from '../../utils/callDispositionLabels';
 
 function formatDuration(seconds: number): string {
   const m = Math.floor(seconds / 60);
@@ -44,9 +45,9 @@ export function CallRow({ call, matchedRow, onJumpToRow }: CallRowProps) {
   const copy = async (text: string, label: string) => {
     try {
       await navigator.clipboard.writeText(text);
-      showToast(`${label} copied`);
+      showToast(`${label} nukopijuotas`);
     } catch {
-      showToast('Could not copy — clipboard access denied');
+      showToast('Nepavyko nukopijuoti — nėra prieigos prie iškarpinės');
     }
   };
 
@@ -58,14 +59,14 @@ export function CallRow({ call, matchedRow, onJumpToRow }: CallRowProps) {
         <td>
           <div className="calls-destination">
             {call.otherParty}
-            <button type="button" className="calls-copy-btn" title="Copy number" onClick={() => void copy(call.otherParty, 'Number')}>
-              📋 Copy
+            <button type="button" className="calls-copy-btn" title="Kopijuoti numerį" onClick={() => void copy(call.otherParty, 'Numeris')}>
+              📋 Kopijuoti
             </button>
             {matchedRow && (
               <button
                 type="button"
                 className="calls-open-row-btn"
-                title="Open this company in the table"
+                title="Atverti šią įmonę lentelėje"
                 onClick={() => onJumpToRow(matchedRow.rowId)}
               >
                 🏢 {matchedRow.label} →
@@ -74,21 +75,21 @@ export function CallRow({ call, matchedRow, onJumpToRow }: CallRowProps) {
           </div>
         </td>
         <td>{formatDuration(call.seconds)}</td>
-        <td>{call.disposition}</td>
+        <td>{getCallDispositionLabel(call.disposition)}</td>
         <td>
           {!call.is_recorded ? (
-            <span className="calls-error">Not recorded</span>
+            <span className="calls-error">Neįrašyta</span>
           ) : (
             <div className="calls-row-actions">
               <div className="calls-audio">
                 <button type="button" onClick={() => void fetchRecording(call.call_id)}>
-                  ▶ Recording
+                  ▶ Įrašas
                 </button>
                 {recordingLink && (
                   <>
                     <audio controls src={recordingLink} />
                     <a href={recordingLink} target="_blank" rel="noreferrer">
-                      Open recording ↗
+                      Atverti įrašą ↗
                     </a>
                   </>
                 )}
@@ -97,17 +98,17 @@ export function CallRow({ call, matchedRow, onJumpToRow }: CallRowProps) {
               <div className="calls-transcribe-group">
                 {!transcript && !transcribing && (
                   <button type="button" className="calls-transcribe-btn" onClick={() => void transcribe(call.call_id)}>
-                    📝 Transcribe
+                    📝 Transkribuoti
                   </button>
                 )}
                 {transcribing && (
                   <button type="button" className="calls-transcribe-btn pending" disabled>
-                    Transcribing…
+                    Transkribuojama…
                   </button>
                 )}
                 {transcript && (
                   <button type="button" className="calls-transcribe-btn" onClick={() => setShowTranscript((v) => !v)}>
-                    {showTranscript ? '🔼 Hide transcript' : '🔽 Show transcript'}
+                    {showTranscript ? '🔼 Slėpti nuorašą' : '🔽 Rodyti nuorašą'}
                   </button>
                 )}
                 {transcribeError && (
@@ -118,7 +119,7 @@ export function CallRow({ call, matchedRow, onJumpToRow }: CallRowProps) {
                       className="calls-transcribe-btn error"
                       onClick={() => void transcribe(call.call_id)}
                     >
-                      Retry
+                      Bandyti dar kartą
                     </button>
                   </>
                 )}
@@ -137,35 +138,35 @@ export function CallRow({ call, matchedRow, onJumpToRow }: CallRowProps) {
                   toggles, so it rides along with showTranscript entirely. */}
               {transcript.summary && (
                 <div className="calls-summary-block">
-                  <div className="calls-summary-label">🤖 Summary</div>
+                  <div className="calls-summary-label">🤖 Santrauka</div>
                   {transcript.summary}
                 </div>
               )}
-              {transcript.text || <span className="calls-error">No speech recognized.</span>}
+              {transcript.text || <span className="calls-error">Kalba neatpažinta.</span>}
               <div className="calls-transcript-actions">
                 {transcript.text && (
-                  <button type="button" className="calls-copy-btn" onClick={() => void copy(transcript.text, 'Transcript')}>
-                    📋 Copy transcript
+                  <button type="button" className="calls-copy-btn" onClick={() => void copy(transcript.text, 'Nuorašas')}>
+                    📋 Kopijuoti nuorašą
                   </button>
                 )}
                 <button type="button" className="calls-transcribe-btn done" onClick={() => void transcribe(call.call_id)}>
-                  🔄 Re-transcribe
+                  🔄 Transkribuoti iš naujo
                 </button>
                 {transcript.text && !summarizing && (
                   <button type="button" className="calls-transcribe-btn done" onClick={() => void summarize(call.call_id)}>
-                    {transcript.summary ? '🤖 Re-summarize' : '🤖 Summary'}
+                    {transcript.summary ? '🤖 Sukurti santrauką iš naujo' : '🤖 Santrauka'}
                   </button>
                 )}
                 {summarizing && (
                   <button type="button" className="calls-transcribe-btn pending" disabled>
-                    Summarizing…
+                    Kuriama santrauka…
                   </button>
                 )}
                 {summarizeError && (
                   <span className="calls-error">{summarizeError}</span>
                 )}
                 <button type="button" className="calls-transcribe-btn" onClick={() => setShowTranscript(false)}>
-                  🔼 Hide
+                  🔼 Slėpti
                 </button>
               </div>
             </div>

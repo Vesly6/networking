@@ -94,14 +94,14 @@ function persistColumns(tableId: string | null, columns: Column[]) {
   void updateTableColumns(tableId, columns);
 }
 
-/** "Column N" for a freshly inserted blank column — mirrors Excel's own
+/** "Stulpelis N" for a freshly inserted blank column — mirrors Excel's own
  * auto-naming for inserted columns, which get renamed via the existing
  * rename UI rather than prompted for a name up front. */
 function nextColumnName(existing: Column[]): string {
   const names = new Set(existing.map((c) => c.name));
   let n = existing.length + 1;
-  while (names.has(`Column ${n}`)) n++;
-  return `Column ${n}`;
+  while (names.has(`Stulpelis ${n}`)) n++;
+  return `Stulpelis ${n}`;
 }
 
 export const useTableStore = create<TableState>((set, get) => {
@@ -180,7 +180,7 @@ export const useTableStore = create<TableState>((set, get) => {
       snapshot();
       const column: Column = {
         id: crypto.randomUUID(),
-        name: name.trim() || 'Column',
+        name: name.trim() || 'Stulpelis',
         type,
         // The default column width (160px) is enough for a bare date, but
         // not for date + time + the contact-linking button + the clear
@@ -550,7 +550,7 @@ export const useTableStore = create<TableState>((set, get) => {
           headerToColumnId.set(header, decision.columnId);
           continue;
         }
-        const column: Column = { id: crypto.randomUUID(), name: header.trim() || 'Column', type: decision.columnType };
+        const column: Column = { id: crypto.randomUUID(), name: header.trim() || 'Stulpelis', type: decision.columnType };
         columns.push(column);
         createdColumns++;
         headerToColumnId.set(header, column.id);

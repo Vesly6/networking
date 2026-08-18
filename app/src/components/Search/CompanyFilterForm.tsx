@@ -50,11 +50,11 @@ export function CompanyFilterForm({ params, onChange, onSubmit, loading }: Compa
     >
       <div className="search-filter-group">
         <label className="search-filter-field">
-          <span>Company name (partial match)</span>
+          <span>Įmonės pavadinimas (dalinė atitiktis)</span>
           <input value={params.q_organization_name ?? ''} onChange={(e) => set('q_organization_name', e.target.value || undefined)} />
         </label>
         <label className="search-filter-field">
-          <span>Domains</span>
+          <span>Domenai</span>
           <input
             placeholder="apollo.io, google.com"
             value={joinList(params.q_organization_domains_list)}
@@ -62,7 +62,7 @@ export function CompanyFilterForm({ params, onChange, onSubmit, loading }: Compa
           />
         </label>
         <div className="search-filter-field">
-          <span>HQ locations</span>
+          <span>Būstinės vieta</span>
           <ComboBoxMultiInput
             value={params.organization_locations ?? []}
             onChange={(v) => set('organization_locations', v.length > 0 ? v : undefined)}
@@ -70,7 +70,7 @@ export function CompanyFilterForm({ params, onChange, onSubmit, loading }: Compa
           />
         </div>
         <div className="search-filter-field">
-          <span>Employee count</span>
+          <span>Darbuotojų skaičius</span>
           <div className="search-filter-chips">
             {EMPLOYEE_RANGES.map((r) => (
               <button
@@ -85,7 +85,7 @@ export function CompanyFilterForm({ params, onChange, onSubmit, loading }: Compa
           </div>
         </div>
         <label className="search-filter-field">
-          <span>Keyword tags / industry</span>
+          <span>Raktažodžiai / pramonės šaka</span>
           <input
             placeholder="software, marketing, saas"
             value={joinList(params.q_organization_keyword_tags)}
@@ -95,15 +95,15 @@ export function CompanyFilterForm({ params, onChange, onSubmit, loading }: Compa
       </div>
 
       <button type="button" className="search-show-more-toggle" onClick={() => setShowMore((v) => !v)}>
-        {showMore ? '− Hide advanced filters' : '+ Show more filters'}
+        {showMore ? '− Slėpti papildomus filtrus' : '+ Rodyti daugiau filtrų'}
       </button>
 
       {showMore && (
         <>
           <div className="search-filter-group">
-            <div className="search-filter-group-title">Organization</div>
+            <div className="search-filter-group-title">Organizacija</div>
             <div className="search-filter-field">
-              <span>Exclude locations</span>
+              <span>Neįtraukti vietų</span>
               <ComboBoxMultiInput
                 value={params.organization_not_locations ?? []}
                 onChange={(v) => set('organization_not_locations', v.length > 0 ? v : undefined)}
@@ -111,7 +111,7 @@ export function CompanyFilterForm({ params, onChange, onSubmit, loading }: Compa
               />
             </div>
             <div className="search-filter-field search-filter-range">
-              <span>Revenue range ($)</span>
+              <span>Pajamų intervalas ($)</span>
               <div className="search-filter-range-inputs">
                 <input
                   type="number"
@@ -130,23 +130,23 @@ export function CompanyFilterForm({ params, onChange, onSubmit, loading }: Compa
           </div>
 
           <div className="search-filter-group">
-            <div className="search-filter-group-title">Technology</div>
+            <div className="search-filter-group-title">Technologijos</div>
             <label className="search-filter-field">
-              <span>Using ALL of</span>
+              <span>Naudoja VISAS iš</span>
               <input
                 value={joinList(params.currently_using_all_of_technology_uids)}
                 onChange={(e) => set('currently_using_all_of_technology_uids', splitList(e.target.value))}
               />
             </label>
             <label className="search-filter-field">
-              <span>Using ANY of</span>
+              <span>Naudoja BENT VIENĄ iš</span>
               <input
                 value={joinList(params.currently_using_any_of_technology_uids)}
                 onChange={(e) => set('currently_using_any_of_technology_uids', splitList(e.target.value))}
               />
             </label>
             <label className="search-filter-field">
-              <span>NOT using any of</span>
+              <span>NENAUDOJA nė vienos iš</span>
               <input
                 value={joinList(params.currently_not_using_any_of_technology_uids)}
                 onChange={(e) => set('currently_not_using_any_of_technology_uids', splitList(e.target.value))}
@@ -155,9 +155,9 @@ export function CompanyFilterForm({ params, onChange, onSubmit, loading }: Compa
           </div>
 
           <div className="search-filter-group">
-            <div className="search-filter-group-title">Funding</div>
+            <div className="search-filter-group-title">Finansavimas</div>
             <div className="search-filter-field search-filter-range">
-              <span>Latest funding amount ($)</span>
+              <span>Paskutinio finansavimo suma ($)</span>
               <div className="search-filter-range-inputs">
                 <input
                   type="number"
@@ -184,7 +184,7 @@ export function CompanyFilterForm({ params, onChange, onSubmit, loading }: Compa
               </div>
             </div>
             <div className="search-filter-field search-filter-range">
-              <span>Total funding ($)</span>
+              <span>Bendra finansavimo suma ($)</span>
               <div className="search-filter-range-inputs">
                 <input
                   type="number"
@@ -201,7 +201,7 @@ export function CompanyFilterForm({ params, onChange, onSubmit, loading }: Compa
               </div>
             </div>
             <div className="search-filter-field search-filter-range">
-              <span>Latest funding date</span>
+              <span>Paskutinio finansavimo data</span>
               <div className="search-filter-range-inputs">
                 <input
                   type="date"
@@ -218,9 +218,9 @@ export function CompanyFilterForm({ params, onChange, onSubmit, loading }: Compa
           </div>
 
           <div className="search-filter-group">
-            <div className="search-filter-group-title">Job postings</div>
+            <div className="search-filter-group-title">Darbo skelbimai</div>
             <div className="search-filter-field">
-              <span>Job titles in postings</span>
+              <span>Pareigos skelbimuose</span>
               <ComboBoxMultiInput
                 value={params.q_organization_job_titles ?? []}
                 onChange={(v) => set('q_organization_job_titles', v.length > 0 ? v : undefined)}
@@ -228,7 +228,7 @@ export function CompanyFilterForm({ params, onChange, onSubmit, loading }: Compa
               />
             </div>
             <div className="search-filter-field">
-              <span>Job posting locations</span>
+              <span>Skelbimų vieta</span>
               <ComboBoxMultiInput
                 value={params.organization_job_locations ?? []}
                 onChange={(v) => set('organization_job_locations', v.length > 0 ? v : undefined)}
@@ -236,7 +236,7 @@ export function CompanyFilterForm({ params, onChange, onSubmit, loading }: Compa
               />
             </div>
             <div className="search-filter-field search-filter-range">
-              <span>Job posted date range</span>
+              <span>Skelbimo paskelbimo data</span>
               <div className="search-filter-range-inputs">
                 <input
                   type="date"
@@ -260,7 +260,7 @@ export function CompanyFilterForm({ params, onChange, onSubmit, loading }: Compa
 
       <div className="search-filter-actions">
         <label className="search-filter-field search-filter-per-page">
-          <span>Results per page</span>
+          <span>Rezultatų per puslapį</span>
           <input
             type="number"
             min={1}
@@ -270,7 +270,7 @@ export function CompanyFilterForm({ params, onChange, onSubmit, loading }: Compa
           />
         </label>
         <button type="submit" className="primary" disabled={loading}>
-          {loading ? 'Searching…' : 'Search companies (1 credit/page)'}
+          {loading ? 'Ieškoma…' : 'Ieškoti įmonių (1 kreditas/puslapis)'}
         </button>
       </div>
     </form>

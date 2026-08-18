@@ -34,7 +34,7 @@ export const useAuthStore = create<AuthState>((set) => ({
       setAuthToken(token);
       set({ token, loggingIn: false, loggedInViaRecovery: viaRecovery });
     } catch (err) {
-      set({ loggingIn: false, error: err instanceof Error ? err.message : 'Could not log in' });
+      set({ loggingIn: false, error: err instanceof Error ? err.message : 'Nepavyko prisijungti' });
       throw err;
     }
   },

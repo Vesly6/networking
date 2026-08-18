@@ -112,7 +112,7 @@ function App() {
   if (!workspaceReady) {
     return (
       <div className="app-loading">
-        <span>Loading…</span>
+        <span>Kraunama…</span>
       </div>
     );
   }
@@ -129,10 +129,10 @@ function App() {
       <ConfirmDialog />
       {loggedInViaRecovery && (
         <div className="recovery-banner">
-          Logged in with your recovery password — update your main password in Render's dashboard (AUTH_PASSWORD) when
-          you get a chance.
+          Prisijungėte naudodami atkūrimo slaptažodį — kai turėsite laiko, atnaujinkite pagrindinį slaptažodį Render
+          valdymo skyde (AUTH_PASSWORD).
           <button type="button" onClick={dismissRecoveryNotice}>
-            Dismiss
+            Atmesti
           </button>
         </div>
       )}
@@ -148,7 +148,7 @@ function App() {
               <BrandLogo />
             </div>
             <button type="button" className="back-to-workspace" onClick={() => setActiveTable(null)}>
-              ← Workspace
+              ← Darbo sritis
             </button>
             {editingTitle ? (
               <input
@@ -168,7 +168,7 @@ function App() {
             ) : (
               <h1
                 className="table-title"
-                title="Click to rename"
+                title="Spustelėkite, kad pervadintumėte"
                 onClick={() => {
                   setTitleDraft(activeTable.name);
                   setEditingTitle(true);
@@ -179,14 +179,14 @@ function App() {
             )}
             <nav className="app-tabs">
               <button type="button" className={tab === 'table' ? 'active' : ''} onClick={() => setTab('table')}>
-                Table
+                Lentelė
               </button>
               <button
                 type="button"
                 className={tab === 'calendar' ? 'active' : ''}
                 onClick={() => setTab('calendar')}
               >
-                Calendar
+                Kalendorius
                 {(dueBadge.overdue > 0 || dueBadge.today > 0) && (
                   <span className={`tab-badge ${dueBadge.overdue > 0 ? 'tab-badge-overdue' : ''}`}>
                     {dueBadge.overdue + dueBadge.today}
@@ -194,14 +194,14 @@ function App() {
                 )}
               </button>
               <button type="button" className={tab === 'calls' ? 'active' : ''} onClick={() => setTab('calls')}>
-                Calls
+                Skambučiai
               </button>
               <button type="button" className={tab === 'search' ? 'active' : ''} onClick={() => setTab('search')}>
-                Search
+                Paieška
               </button>
             </nav>
             <button type="button" className="logout-btn" onClick={logout}>
-              Log out
+              Atsijungti
             </button>
           </header>
 
@@ -256,7 +256,7 @@ function App() {
                 />
               ) : (
                 <div className="app-loading">
-                  <span>Loading…</span>
+                  <span>Kraunama…</span>
                 </div>
               )}
             </div>
@@ -265,7 +265,7 @@ function App() {
                 <CalendarView key={activeTableId} onJumpToRow={handleJumpToRow} />
               ) : (
                 <div className="app-loading">
-                  <span>Loading…</span>
+                  <span>Kraunama…</span>
                 </div>
               )}
             </div>

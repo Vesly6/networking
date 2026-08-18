@@ -92,7 +92,7 @@ export function Softphone() {
         // generic example rather than this account's real one.
         window.zadarmaWidgetFn!(key, sip, 'square', 'en', true, { right: '10px', bottom: '5px' });
       } catch (err) {
-        showToast(err instanceof Error ? `Softphone unavailable: ${err.message}` : 'Softphone unavailable');
+        showToast(err instanceof Error ? `Telefono programėlė nepasiekiama: ${err.message}` : 'Telefono programėlė nepasiekiama');
       }
     })();
 

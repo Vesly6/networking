@@ -97,7 +97,7 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
   const header = req.headers.authorization;
   const token = header?.startsWith('Bearer ') ? header.slice(7) : null;
   if (!token || !verifyToken(token)) {
-    res.status(401).json({ error: 'Not authenticated' });
+    res.status(401).json({ error: 'Neautentifikuota' });
     return;
   }
   next();

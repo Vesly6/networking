@@ -9,6 +9,7 @@ import {
   startOfWeek,
   subMonths,
 } from 'date-fns';
+import { lt } from 'date-fns/locale';
 
 /** ISO yyyy-MM-dd strings sort lexically the same as chronologically,
  * so date comparisons can stay plain string comparisons — no timezone
@@ -54,7 +55,11 @@ export function isFuture(value: string): boolean {
 export function formatDisplayDate(value: string): string {
   if (!value) return '';
   const [y, m, d] = getDatePart(value).split('-').map(Number);
-  return format(new Date(y, m - 1, d), 'MMMM d, yyyy');
+  // Lithuanian long-date order is year-month-day ("2026 m. rugpjūčio 15
+  // d."), not English's month-day-year — bolting {locale: lt} onto an
+  // English-ordered token string would produce a Lithuanian month name in
+  // the wrong word order, so the token string itself changes too.
+  return format(new Date(y, m - 1, d), "yyyy 'm'. MMMM d 'd'.", { locale: lt });
 }
 
 export function nextMonth(date: Date): Date {
@@ -66,14 +71,15 @@ export function prevMonth(date: Date): Date {
 }
 
 export function monthLabel(date: Date): string {
-  return format(date, 'LLLL yyyy');
+  return format(date, 'LLLL yyyy', { locale: lt });
 }
 
 /** For note-history entries: a real epoch-ms timestamp (not a date-only
- * cell value), formatted as e.g. "Aug 15, 2026, 2:32 PM". */
+ * cell value), formatted as e.g. "2026 m. rugp. 15 d. 14:32" — 24-hour
+ * time, not English's 12-hour+am/pm, which has no natural LT equivalent. */
 export function formatHistoryTimestamp(ms: number): string {
   if (!ms) return '';
-  return format(new Date(ms), 'MMM d, yyyy, h:mm a');
+  return format(new Date(ms), "yyyy 'm'. MMM d 'd'. HH:mm", { locale: lt });
 }
 
 export interface MonthDay {

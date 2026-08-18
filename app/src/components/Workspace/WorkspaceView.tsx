@@ -31,7 +31,7 @@ export function WorkspaceView({ onOpenTable }: WorkspaceViewProps) {
   }, [tables]);
 
   const handleCreate = () => {
-    const id = createTable(`Table ${tables.length + 1}`);
+    const id = createTable(`Lentelė ${tables.length + 1}`);
     onOpenTable(id);
   };
 
@@ -44,20 +44,20 @@ export function WorkspaceView({ onOpenTable }: WorkspaceViewProps) {
       <div className="workspace-header">
         <div className="brand">
           <BrandLogo />
-          <h2>Workspace</h2>
+          <h2>Darbo sritis</h2>
         </div>
         <div className="workspace-header-actions">
           <button type="button" className="primary" onClick={handleCreate}>
-            + New table
+            + Nauja lentelė
           </button>
           <button type="button" onClick={logout}>
-            Log out
+            Atsijungti
           </button>
         </div>
       </div>
 
       {tables.length === 0 ? (
-        <div className="empty-state">No tables yet — create your first one.</div>
+        <div className="empty-state">Kol kas nėra lentelių — sukurkite pirmąją.</div>
       ) : (
         <div className="table-cards">
           {tables.map((t) => (
@@ -81,7 +81,7 @@ export function WorkspaceView({ onOpenTable }: WorkspaceViewProps) {
               ) : (
                 <div className="table-card-name">{t.name}</div>
               )}
-              <div className="table-card-meta">{rowCounts[t.id] ?? '…'} rows</div>
+              <div className="table-card-meta">Eilučių: {rowCounts[t.id] ?? '…'}</div>
               <div className="table-card-actions">
                 <button
                   type="button"
@@ -91,7 +91,7 @@ export function WorkspaceView({ onOpenTable }: WorkspaceViewProps) {
                     setEditingName(t.name);
                   }}
                 >
-                  Rename
+                  Pervadinti
                 </button>
                 <button
                   type="button"
@@ -101,7 +101,7 @@ export function WorkspaceView({ onOpenTable }: WorkspaceViewProps) {
                     void handleDeleteTable(t.id, t.name);
                   }}
                 >
-                  Delete
+                  Ištrinti
                 </button>
               </div>
             </div>

@@ -28,8 +28,10 @@ export function ColumnHeaderMenu({ x, y, columns, targetIds, onSort, onCopy, onP
   const firstIndex = Math.min(...indices);
   const lastIndex = Math.max(...indices);
   const count = targetIds.length;
-  const n = count > 1 ? `${count} ` : '';
-  const plural = count > 1 ? 's' : '';
+  // Lithuanian nouns decline by number/case rather than take an English-
+  // style "-s" suffix, so plural phrasing uses a parenthetical count
+  // instead of trying to templatize declension.
+  const suffix = count > 1 ? ` (${count})` : '';
 
   const run = (fn: () => void) => {
     fn();
@@ -39,24 +41,24 @@ export function ColumnHeaderMenu({ x, y, columns, targetIds, onSort, onCopy, onP
   return (
     <ContextMenu x={x} y={y}>
       <button type="button" className="context-menu-item" onClick={() => run(() => insertColumns(columns[firstIndex].id, count))}>
-        Insert {n}column{plural} left
+        Įterpti {count > 1 ? 'stulpelius' : 'stulpelį'} kairėje{suffix}
       </button>
       <button
         type="button"
         className="context-menu-item"
         onClick={() => run(() => insertColumns(columns[lastIndex + 1]?.id ?? null, count))}
       >
-        Insert {n}column{plural} right
+        Įterpti {count > 1 ? 'stulpelius' : 'stulpelį'} dešinėje{suffix}
       </button>
       <button type="button" className="context-menu-item" onClick={() => run(() => setColumnsHidden(targetIds, true))}>
-        Hide column{plural}
+        Slėpti {count > 1 ? 'stulpelius' : 'stulpelį'}{suffix}
       </button>
       <div className="context-menu-separator" />
       <button type="button" className="context-menu-item" onClick={() => run(onCopy)}>
-        Copy column{plural}
+        Kopijuoti {count > 1 ? 'stulpelius' : 'stulpelį'}{suffix}
       </button>
       <button type="button" className="context-menu-item" onClick={() => run(onPaste)}>
-        Paste
+        Įklijuoti
       </button>
       <div className="context-menu-separator" />
       <button
@@ -64,22 +66,22 @@ export function ColumnHeaderMenu({ x, y, columns, targetIds, onSort, onCopy, onP
         className="context-menu-item context-menu-danger"
         onClick={async () => {
           const ok = await confirmDialog({
-            message: `Delete ${count > 1 ? `these ${count} columns` : 'this column'}? Data will be lost.`,
+            message: `Ištrinti ${count > 1 ? `pasirinktus stulpelius (${count})` : 'šį stulpelį'}? Duomenys bus prarasti.`,
             danger: true,
           });
           if (ok) run(() => removeColumns(targetIds));
         }}
       >
-        Delete column{plural}
+        Ištrinti {count > 1 ? 'stulpelius' : 'stulpelį'}{suffix}
       </button>
       {count === 1 && (
         <>
           <div className="context-menu-separator" />
           <button type="button" className="context-menu-item" onClick={() => run(() => onSort('asc'))}>
-            Sort A → Z
+            Rikiuoti A → Z
           </button>
           <button type="button" className="context-menu-item" onClick={() => run(() => onSort('desc'))}>
-            Sort Z → A
+            Rikiuoti Z → A
           </button>
         </>
       )}

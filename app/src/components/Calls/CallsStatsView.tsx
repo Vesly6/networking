@@ -17,7 +17,7 @@ import { BarChart, type BarChartPoint } from './BarChart';
 
 type Period = 'week' | 'month';
 
-const WEEKDAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const WEEKDAY_LABELS = ['Pr', 'An', 'Tr', 'Kt', 'Pn', 'Št', 'Sk'];
 
 function dayLabel(date: string, period: Period): string {
   if (period === 'week') return WEEKDAY_LABELS[dayOfWeek(date)];
@@ -26,9 +26,9 @@ function dayLabel(date: string, period: Period): string {
 
 function rangeTitle(start: string, end: string, period: Period): string {
   const fmt = (d: string) =>
-    new Date(`${d}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    new Date(`${d}T00:00:00`).toLocaleDateString('lt-LT', { month: 'short', day: 'numeric', year: 'numeric' });
   if (period === 'month') {
-    return new Date(`${start}T00:00:00`).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+    return new Date(`${start}T00:00:00`).toLocaleDateString('lt-LT', { month: 'long', year: 'numeric' });
   }
   return `${fmt(start)} – ${fmt(end)}`;
 }
@@ -87,7 +87,7 @@ export function CallsStatsView() {
   const chartData: BarChartPoint[] = useMemo(() => {
     return bucketByDay(periodRecords, start, end).map((b) => ({
       label: dayLabel(b.date, period),
-      fullLabel: `${b.date}: ${b.total} calls, ${b.answered} answered, ${formatDuration(b.seconds)}`,
+      fullLabel: `${b.date}: skambučių ${b.total}, atsakyta ${b.answered}, ${formatDuration(b.seconds)}`,
       total: b.total,
       answered: b.answered,
     }));
@@ -101,8 +101,8 @@ export function CallsStatsView() {
     return (
       <div className="calls-stats-view">
         <div className="empty-state">
-          No call history saved locally yet. Open the Calls tab with a normal internet connection and it'll start
-          filling in automatically — check back in a minute.
+          Kol kas nėra lokaliai išsaugotos skambučių istorijos. Atidarykite skambučių skirtuką turėdami įprastą
+          interneto ryšį, ir duomenys pradės pildytis automatiškai — patikrinkite po minutės.
         </div>
       </div>
     );
@@ -113,29 +113,29 @@ export function CallsStatsView() {
       <div className="calls-stats-toolbar">
         <div className="calls-stats-period-toggle">
           <button type="button" className={period === 'week' ? 'active' : ''} onClick={() => setPeriod('week')}>
-            Week
+            Savaitė
           </button>
           <button type="button" className={period === 'month' ? 'active' : ''} onClick={() => setPeriod('month')}>
-            Month
+            Mėnuo
           </button>
         </div>
         <div className="calls-stats-range-nav">
-          <button type="button" onClick={() => shift(-1)} title="Previous">
+          <button type="button" onClick={() => shift(-1)} title="Ankstesnis">
             ←
           </button>
           <span className="calls-stats-range-title">{rangeTitle(start, end, period)}</span>
-          <button type="button" onClick={() => shift(1)} title="Next">
+          <button type="button" onClick={() => shift(1)} title="Kitas">
             →
           </button>
         </div>
         {historySyncing && historySyncProgress && (
           <span className="calls-stats-syncing">
-            Syncing history… {historySyncProgress.done}/{historySyncProgress.total}
+            Sinchronizuojama istorija… {historySyncProgress.done}/{historySyncProgress.total}
           </span>
         )}
         {catchingUp && (
-          <span className="calls-stats-syncing" title="Zadarma limits how fast we can fetch history — this catches up automatically over your next few visits to this tab.">
-            Local history synced through {latestSyncedDate} — still catching up
+          <span className="calls-stats-syncing" title="Zadarma riboja, kaip greitai galime atsisiųsti istoriją — tai automatiškai pasivys per kelis kitus apsilankymus šiame skirtuke.">
+            Lokali istorija sinchronizuota iki {latestSyncedDate} — dar vejamasi
           </span>
         )}
       </div>
@@ -143,19 +143,19 @@ export function CallsStatsView() {
       <div className="calls-stats-cards">
         <div className="calls-stats-card">
           <div className="calls-stats-card-value">{summary.totalCalls}</div>
-          <div className="calls-stats-card-label">Dials</div>
+          <div className="calls-stats-card-label">Skambučiai</div>
         </div>
         <div className="calls-stats-card">
           <div className="calls-stats-card-value">{summary.answered}</div>
-          <div className="calls-stats-card-label">Answered</div>
+          <div className="calls-stats-card-label">Atsakyta</div>
         </div>
         <div className="calls-stats-card">
           <div className="calls-stats-card-value">{Math.round(summary.answerRate * 100)}%</div>
-          <div className="calls-stats-card-label">Answer rate</div>
+          <div className="calls-stats-card-label">Atsakymo dažnis</div>
         </div>
         <div className="calls-stats-card">
           <div className="calls-stats-card-value">{formatDuration(summary.totalSeconds)}</div>
-          <div className="calls-stats-card-label">Talk time</div>
+          <div className="calls-stats-card-label">Pokalbio trukmė</div>
         </div>
       </div>
 
@@ -163,10 +163,10 @@ export function CallsStatsView() {
         <BarChart data={chartData} />
         <div className="calls-bar-chart-legend">
           <span>
-            <i className="calls-bar-chart-swatch calls-bar-chart-swatch-total" /> Dials
+            <i className="calls-bar-chart-swatch calls-bar-chart-swatch-total" /> Skambučiai
           </span>
           <span>
-            <i className="calls-bar-chart-swatch calls-bar-chart-swatch-answered" /> Answered
+            <i className="calls-bar-chart-swatch calls-bar-chart-swatch-answered" /> Atsakyta
           </span>
         </div>
       </div>

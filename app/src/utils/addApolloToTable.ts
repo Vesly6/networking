@@ -19,7 +19,7 @@ export function useAddApolloResultToTable() {
 
   const addPerson = (person: ApolloSearchPerson, enriched: ApolloEnrichedPerson | undefined, revealedPhone?: string) => {
     if (columns.length === 0) {
-      showToast('Add at least one column to this table first — nothing to map Apollo data into yet');
+      showToast('Pirmiausia pridėkite bent vieną stulpelį — kol kas nėra kur sudėti Apollo duomenų');
       return;
     }
     const companyColumn = getColumnByType(columns, 'company');
@@ -43,7 +43,7 @@ export function useAddApolloResultToTable() {
     if (companyColumn) {
       if (companyName) updateCell(rowId, companyColumn.id, companyName);
     } else if (companyName) {
-      skipped.push('Company');
+      skipped.push('Įmonė');
     }
 
     if (contactColumn) {
@@ -55,17 +55,17 @@ export function useAddApolloResultToTable() {
     } else if (phone && phoneColumn) {
       updateCell(rowId, phoneColumn.id, phone);
     } else if ((firstName || phone || email) && !contactColumn) {
-      skipped.push('Contact');
+      skipped.push('Kontaktai');
     }
 
-    const parts = [`Added ${[firstName, lastName].filter(Boolean).join(' ') || 'row'} to the table`];
-    if (skipped.length > 0) parts.push(`no ${skipped.join('/')} column — that data was skipped`);
+    const parts = [`Į lentelę pridėta: ${[firstName, lastName].filter(Boolean).join(' ') || 'eilutė'}`];
+    if (skipped.length > 0) parts.push(`nėra stulpelio „${skipped.join('/')}“ — šie duomenys praleisti`);
     showToast(parts.join(' — '));
   };
 
   const addCompany = (company: ApolloCompany) => {
     if (columns.length === 0) {
-      showToast('Add at least one column to this table first — nothing to map Apollo data into yet');
+      showToast('Pirmiausia pridėkite bent vieną stulpelį — kol kas nėra kur sudėti Apollo duomenų');
       return;
     }
     const companyColumn = getColumnByType(columns, 'company');
@@ -78,21 +78,21 @@ export function useAddApolloResultToTable() {
     if (companyColumn) {
       if (company.name) updateCell(rowId, companyColumn.id, company.name);
     } else if (company.name) {
-      skipped.push('Company');
+      skipped.push('Įmonė');
     }
 
     if (phoneColumn && company.phone) {
       updateCell(rowId, phoneColumn.id, company.phone);
     } else if (company.phone) {
-      skipped.push('Phone');
+      skipped.push('Telefonas');
     }
 
     if (linkColumn && (company.website_url || company.primary_domain)) {
       updateCell(rowId, linkColumn.id, company.primary_domain ?? company.website_url ?? '');
     }
 
-    const parts = [`Added ${company.name ?? 'company'} to the table`];
-    if (skipped.length > 0) parts.push(`no ${skipped.join('/')} column — that data was skipped`);
+    const parts = [`Į lentelę pridėta: ${company.name ?? 'įmonė'}`];
+    if (skipped.length > 0) parts.push(`nėra stulpelio „${skipped.join('/')}“ — šie duomenys praleisti`);
     showToast(parts.join(' — '));
   };
 

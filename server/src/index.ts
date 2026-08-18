@@ -52,7 +52,7 @@ app.post(
     const password = typeof req.body?.password === 'string' ? req.body.password : '';
     const match = checkCredentials(username, password);
     if (!match) {
-      res.status(401).json({ error: 'Incorrect username or password' });
+      res.status(401).json({ error: 'Neteisingas vartotojo vardas arba slaptažodis' });
       return;
     }
     res.json({ token: issueToken(username), viaRecovery: match === 'recovery' });
@@ -84,13 +84,13 @@ app.get(
   asyncHandler(async (req, res) => {
     const { start, end, sip, skip, limit } = req.query;
     if (typeof start !== 'string' || typeof end !== 'string' || !DATE_RE.test(start) || !DATE_RE.test(end)) {
-      res.status(400).json({ error: 'start/end must be "YYYY-MM-DD HH:MM:SS"' });
+      res.status(400).json({ error: 'start/end formatas turi būti „YYYY-MM-DD HH:MM:SS“' });
       return;
     }
     const startMs = Date.parse(start.replace(' ', 'T'));
     const endMs = Date.parse(end.replace(' ', 'T'));
     if (Number.isFinite(startMs) && Number.isFinite(endMs) && endMs - startMs > 31 * 24 * 60 * 60 * 1000) {
-      res.status(400).json({ error: 'Date range cannot exceed 31 days' });
+      res.status(400).json({ error: 'Laikotarpis negali viršyti 31 dienos' });
       return;
     }
     const result = await getStatistics({
@@ -124,7 +124,7 @@ app.post(
     const recording = await requestRecording({ callId: req.params.callId });
     const link = recording.link ?? recording.links?.[0];
     if (!link) {
-      res.status(502).json({ error: 'No recording available for this call' });
+      res.status(502).json({ error: 'Šiam skambučiui įrašo nėra' });
       return;
     }
     const result = await transcribeFromUrl(link, lang);

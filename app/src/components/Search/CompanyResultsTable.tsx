@@ -5,7 +5,7 @@ function CompanyRow({ company }: { company: ApolloCompany }) {
   const { addCompany } = useAddApolloResultToTable();
   return (
     <tr>
-      <td className="search-results-table-name">{company.name ?? 'Unknown company'}</td>
+      <td className="search-results-table-name">{company.name ?? 'Nežinoma įmonė'}</td>
       <td>{company.primary_domain ?? company.website_url ?? '—'}</td>
       <td>{[company.organization_city, company.organization_country].filter(Boolean).join(', ') || '—'}</td>
       <td>{company.phone ?? '—'}</td>
@@ -14,7 +14,7 @@ function CompanyRow({ company }: { company: ApolloCompany }) {
       <td>
         <div className="search-results-table-actions">
           <button type="button" className="primary" onClick={() => addCompany(company)}>
-            + Add
+            + Pridėti
           </button>
         </div>
       </td>
@@ -27,13 +27,13 @@ export function CompanyResultsTable({ companies }: { companies: ApolloCompany[] 
     <table className="search-results-table search-results-table-company">
       <thead>
         <tr>
-          <th>Company</th>
-          <th>Domain</th>
-          <th>Location</th>
-          <th>Phone</th>
-          <th>Revenue</th>
-          <th>Contacts</th>
-          <th>Actions</th>
+          <th>Įmonė</th>
+          <th>Domenas</th>
+          <th>Vieta</th>
+          <th>Telefonas</th>
+          <th>Pajamos</th>
+          <th>Kontaktai</th>
+          <th>Veiksmai</th>
         </tr>
       </thead>
       <tbody>

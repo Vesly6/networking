@@ -150,7 +150,7 @@ export function monthRange(date: string): { start: string; end: string } {
 export function formatDuration(totalSeconds: number): string {
   const h = Math.floor(totalSeconds / 3600);
   const m = Math.floor((totalSeconds % 3600) / 60);
-  if (h > 0) return `${h}h ${m}m`;
+  if (h > 0) return `${h} val. ${m} min.`;
   const s = totalSeconds % 60;
-  return m > 0 ? `${m}m ${s}s` : `${s}s`;
+  return m > 0 ? `${m} min. ${s} s.` : `${s} s.`;
 }

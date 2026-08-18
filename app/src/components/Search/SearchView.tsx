@@ -62,10 +62,10 @@ export function SearchView() {
       <aside className="search-sidebar">
         <div className="search-mode-switch">
           <button type="button" className={mode === 'people' ? 'active' : ''} onClick={() => setMode('people')}>
-            People
+            Žmonės
           </button>
           <button type="button" className={mode === 'companies' ? 'active' : ''} onClick={() => setMode('companies')}>
-            Companies
+            Įmonės
           </button>
         </div>
         {mode === 'people' ? (
@@ -89,8 +89,8 @@ export function SearchView() {
         {total > 0 && (
           <div className="search-results-header">
             <span>
-              {total.toLocaleString('en-US')} result{total === 1 ? '' : 's'} — page {page} of{' '}
-              {totalPages.toLocaleString('en-US')}
+              Rezultatų: {total.toLocaleString('lt-LT')} — puslapis {page} iš{' '}
+              {totalPages.toLocaleString('lt-LT')}
             </span>
             <div className="search-pagination">
               <button
@@ -98,14 +98,14 @@ export function SearchView() {
                 disabled={page <= 1 || loading}
                 onClick={() => void (mode === 'people' ? runPeopleSearch(page - 1) : runCompanySearch(page - 1))}
               >
-                ← Previous
+                ← Atgal
               </button>
               <button
                 type="button"
                 disabled={page >= totalPages || loading}
                 onClick={() => void (mode === 'people' ? runPeopleSearch(page + 1) : runCompanySearch(page + 1))}
               >
-                Next →
+                Pirmyn →
               </button>
             </div>
           </div>
@@ -115,12 +115,12 @@ export function SearchView() {
           people.length > 0 ? (
             <PeopleResultsTable people={people} />
           ) : (
-            !peopleLoading && <div className="empty-state">Set some filters and search to see people here.</div>
+            !peopleLoading && <div className="empty-state">Nustatykite filtrus ir ieškokite, kad čia pamatytumėte žmones.</div>
           )
         ) : companies.length > 0 ? (
           <CompanyResultsTable companies={companies} />
         ) : (
-          !companiesLoading && <div className="empty-state">Set some filters and search to see companies here.</div>
+          !companiesLoading && <div className="empty-state">Nustatykite filtrus ir ieškokite, kad čia pamatytumėte įmones.</div>
         )}
       </div>
     </div>

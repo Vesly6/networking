@@ -29,7 +29,7 @@ export function ColumnMenu({ column, anchor, onClose }: ColumnMenuProps) {
   return (
     <Popover anchor={anchor}>
       <label className="popover-field">
-        <span>Name</span>
+        <span>Pavadinimas</span>
         <input
           value={name}
           onChange={(e) => setName(e.target.value)}
@@ -41,7 +41,7 @@ export function ColumnMenu({ column, anchor, onClose }: ColumnMenuProps) {
       </label>
 
       <label className="popover-field">
-        <span>Type</span>
+        <span>Tipas</span>
         <select value={column.type} onChange={(e) => setColumnType(column.id, e.target.value as ColumnType)}>
           {(Object.keys(TYPE_LABELS) as ColumnType[]).map((t) => (
             <option key={t} value={t}>
@@ -53,7 +53,7 @@ export function ColumnMenu({ column, anchor, onClose }: ColumnMenuProps) {
 
       {column.type === 'dropdown' && (
         <div className="popover-field">
-          <span>List values</span>
+          <span>Sąrašo reikšmės</span>
           <div className="option-chips">
             {options.map((opt) => {
               const color = column.optionColors?.[opt];
@@ -61,7 +61,7 @@ export function ColumnMenu({ column, anchor, onClose }: ColumnMenuProps) {
                 <span key={opt} className="chip" style={color ? { backgroundColor: color } : undefined}>
                   <ColorInput
                     className="chip-color"
-                    title="Pick a color"
+                    title="Pasirinkti spalvą"
                     value={color ?? '#e5e7eb'}
                     onCommit={(newColor) => setOptionColor(column.id, opt, newColor)}
                   />
@@ -70,7 +70,7 @@ export function ColumnMenu({ column, anchor, onClose }: ColumnMenuProps) {
                     <button
                       type="button"
                       className="chip-remove"
-                      title="Clear color"
+                      title="Išvalyti spalvą"
                       onClick={() => setOptionColor(column.id, opt, null)}
                     >
                       ⊘
@@ -79,7 +79,7 @@ export function ColumnMenu({ column, anchor, onClose }: ColumnMenuProps) {
                   <button
                     type="button"
                     className="chip-remove"
-                    title="Delete value"
+                    title="Ištrinti reikšmę"
                     onClick={() => setDropdownOptions(column.id, options.filter((o) => o !== opt))}
                   >
                     ×
@@ -90,7 +90,7 @@ export function ColumnMenu({ column, anchor, onClose }: ColumnMenuProps) {
           </div>
           <div className="option-add-row">
             <input
-              placeholder="New status…"
+              placeholder="Nauja būsena…"
               value={newOption}
               onChange={(e) => setNewOption(e.target.value)}
               onKeyDown={(e) => {
@@ -124,7 +124,7 @@ export function ColumnMenu({ column, anchor, onClose }: ColumnMenuProps) {
               e.target.checked ? setNextActionDateColumn(column.id) : clearNextActionDateColumn()
             }
           />
-          <span>Use in calendar / task list</span>
+          <span>Naudoti kalendoriuje / užduočių sąraše</span>
         </label>
       )}
 
@@ -133,17 +133,17 @@ export function ColumnMenu({ column, anchor, onClose }: ColumnMenuProps) {
           type="button"
           className="danger"
           onClick={async () => {
-            const ok = await confirmDialog({ message: `Delete column "${column.name}"? Its data will be lost.`, danger: true });
+            const ok = await confirmDialog({ message: `Ištrinti stulpelį „${column.name}“? Jo duomenys bus prarasti.`, danger: true });
             if (ok) {
               removeColumn(column.id);
               onClose();
             }
           }}
         >
-          Delete column
+          Ištrinti stulpelį
         </button>
         <button type="button" onClick={onClose}>
-          Done
+          Baigta
         </button>
       </div>
     </Popover>

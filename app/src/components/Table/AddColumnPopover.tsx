@@ -31,7 +31,7 @@ export function AddColumnPopover({ anchor, onClose }: AddColumnPopoverProps) {
   return (
     <Popover anchor={anchor}>
       <label className="popover-field">
-        <span>Column name</span>
+        <span>Stulpelio pavadinimas</span>
         <input
           autoFocus
           value={name}
@@ -43,7 +43,7 @@ export function AddColumnPopover({ anchor, onClose }: AddColumnPopoverProps) {
         />
       </label>
       <label className="popover-field">
-        <span>Type</span>
+        <span>Tipas</span>
         <select value={type} onChange={(e) => setType(e.target.value as ColumnType)}>
           {(Object.keys(TYPE_LABELS) as ColumnType[]).map((t) => (
             <option key={t} value={t}>
@@ -54,9 +54,9 @@ export function AddColumnPopover({ anchor, onClose }: AddColumnPopoverProps) {
       </label>
       {type === 'dropdown' && (
         <label className="popover-field">
-          <span>List values (comma-separated)</span>
+          <span>Sąrašo reikšmės (atskirtos kableliais)</span>
           <input
-            placeholder="no answer, call back, declined"
+            placeholder="neatsakė, perskambinti, atsisakė"
             value={optionsText}
             onChange={(e) => setOptionsText(e.target.value)}
           />
@@ -64,10 +64,10 @@ export function AddColumnPopover({ anchor, onClose }: AddColumnPopoverProps) {
       )}
       <div className="popover-footer">
         <button type="button" onClick={onClose}>
-          Cancel
+          Atšaukti
         </button>
         <button type="button" className="primary" onClick={submit} disabled={!name.trim()}>
-          Add
+          Pridėti
         </button>
       </div>
     </Popover>

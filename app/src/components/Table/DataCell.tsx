@@ -91,7 +91,7 @@ function DataCellImpl({
     if (draft === storedValue) return;
     const truncated = updateCell(row.id, column.id, draft);
     if (truncated) {
-      showToast(`Text truncated to Excel's cell limit — ${EXCEL_CELL_LIMIT.toLocaleString('en-US')} characters`);
+      showToast(`Tekstas apkarpytas iki Excel langelio ribos — ${EXCEL_CELL_LIMIT.toLocaleString('lt-LT')} simbolių`);
       setDraft(row.cells[column.id] ?? '');
     }
   };
@@ -176,7 +176,7 @@ function DataCellImpl({
               <button
                 type="button"
                 className="date-cell-add-time"
-                title="Add a specific time"
+                title="Nurodyti konkretų laiką"
                 onClick={(e) => {
                   e.stopPropagation();
                   setTimeExpanded(true);
@@ -202,8 +202,8 @@ function DataCellImpl({
                   className={`date-cell-contact-btn ${linked ? 'date-cell-contact-linked' : ''}`}
                   title={
                     linked
-                      ? `Calling: ${contactTextToFields(linked.text).firstName || linked.text}`
-                      : "Pick who you're calling"
+                      ? `Skambinama: ${contactTextToFields(linked.text).firstName || linked.text}`
+                      : 'Pasirinkite, kam skambinate'
                   }
                   onClick={(e) => {
                     e.stopPropagation();
@@ -219,7 +219,7 @@ function DataCellImpl({
             <button
               type="button"
               className="date-cell-clear-all"
-              title="Clear date, time, and linked contact"
+              title="Išvalyti datą, laiką ir susietą kontaktą"
               onClick={(e) => {
                 e.stopPropagation();
                 updateCell(row.id, column.id, '');
@@ -234,7 +234,7 @@ function DataCellImpl({
         {contactPickerAnchor && (
           <Popover anchor={contactPickerAnchor} width={220}>
             <div className="popover-field">
-              <span>Who are you calling?</span>
+              <span>Kam skambinate?</span>
             </div>
             {parseContacts(contactsRaw ?? '').map((c) => (
               <button
@@ -258,7 +258,7 @@ function DataCellImpl({
                   setContactPickerAnchor(null);
                 }}
               >
-                Clear
+                Išvalyti
               </button>
             )}
           </Popover>
@@ -299,7 +299,7 @@ function DataCellImpl({
           {previewText ? (
             highlightQuery ? highlightMatches(previewText, highlightQuery) : previewText
           ) : (
-            <span className="cell-empty">{column.type === 'note' ? '+ note' : '+ contact'}</span>
+            <span className="cell-empty">{column.type === 'note' ? '+ komentaras' : '+ kontaktas'}</span>
           )}
         </button>
       </td>
@@ -360,7 +360,7 @@ function DataCellImpl({
             {storedValue ? (
               highlightQuery ? highlightMatches(storedValue, highlightQuery) : storedValue
             ) : (
-              <span className="cell-empty">+ link</span>
+              <span className="cell-empty">+ nuoroda</span>
             )}
           </button>
           {href && (

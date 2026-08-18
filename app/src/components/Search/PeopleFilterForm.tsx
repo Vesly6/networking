@@ -5,6 +5,8 @@ import { CompanyLookupInput } from './CompanyLookupInput';
 import { COUNTRIES } from '../../utils/countries';
 import { JOB_TITLES } from '../../utils/jobTitles';
 import { EMPLOYEE_RANGES } from '../../utils/employeeRanges';
+import { SENIORITIES } from '../../utils/seniorities';
+import { EMAIL_STATUSES } from '../../utils/emailStatuses';
 
 interface PeopleFilterFormProps {
   params: PeopleSearchParams;
@@ -12,9 +14,6 @@ interface PeopleFilterFormProps {
   onSubmit: () => void;
   loading: boolean;
 }
-
-const SENIORITIES = ['owner', 'founder', 'c_suite', 'partner', 'vp', 'head', 'director', 'manager', 'senior', 'entry', 'intern'];
-const EMAIL_STATUSES = ['verified', 'unverified', 'likely_to_engage', 'unavailable'];
 
 const splitList = (v: string): string[] | undefined => {
   const parts = v
@@ -75,7 +74,7 @@ export function PeopleFilterForm({ params, onChange, onSubmit, loading }: People
       {/* Basic — always visible, matching Apollo's own default filter set */}
       <div className="search-filter-group">
         <label className="search-filter-field">
-          <span>Name or keywords</span>
+          <span>Vardas arba raktažodžiai</span>
           <input
             placeholder="Aurimas Griciunas"
             value={params.q_keywords ?? ''}
@@ -83,9 +82,9 @@ export function PeopleFilterForm({ params, onChange, onSubmit, loading }: People
           />
         </label>
         <div className="search-filter-field">
-          <span>Job titles</span>
+          <span>Pareigos</span>
           <ComboBoxMultiInput
-            placeholder="CEO, Marketing Manager, Head of Sales"
+            placeholder="CEO, Rinkodaros vadybininkas, Pardavimų vadovas"
             value={params.person_titles ?? []}
             onChange={(v) => set('person_titles', v.length > 0 ? v : undefined)}
             suggestions={JOB_TITLES}
@@ -97,32 +96,32 @@ export function PeopleFilterForm({ params, onChange, onSubmit, loading }: People
             checked={params.include_similar_titles !== false}
             onChange={(e) => set('include_similar_titles', e.target.checked)}
           />
-          <span>Include similar titles</span>
+          <span>Įtraukti panašias pareigas</span>
         </label>
         <div className="search-filter-field">
-          <span>Seniority</span>
+          <span>Pareigų lygis</span>
           <div className="search-filter-chips">
             {SENIORITIES.map((s) => (
               <button
                 type="button"
-                key={s}
-                className={`search-filter-chip ${seniorities.includes(s) ? 'search-filter-chip-active' : ''}`}
-                onClick={() => toggleSeniority(s)}
+                key={s.value}
+                className={`search-filter-chip ${seniorities.includes(s.value) ? 'search-filter-chip-active' : ''}`}
+                onClick={() => toggleSeniority(s.value)}
               >
-                {s.replace('_', ' ')}
+                {s.label}
               </button>
             ))}
           </div>
         </div>
         <div className="search-filter-field">
-          <span>Company name</span>
+          <span>Įmonės pavadinimas</span>
           <CompanyLookupInput
             value={params.organization_ids ?? []}
             onChange={(ids) => set('organization_ids', ids.length > 0 ? ids : undefined)}
           />
         </div>
         <label className="search-filter-field">
-          <span>Company domain</span>
+          <span>Įmonės domenas</span>
           <input
             placeholder="apollo.io, google.com"
             value={joinList(params.q_organization_domains_list)}
@@ -130,16 +129,16 @@ export function PeopleFilterForm({ params, onChange, onSubmit, loading }: People
           />
         </label>
         <div className="search-filter-field">
-          <span>Person locations</span>
+          <span>Asmens vieta</span>
           <ComboBoxMultiInput
-            placeholder="Vilnius, Lithuania"
+            placeholder="Vilnius, Lietuva"
             value={params.person_locations ?? []}
             onChange={(v) => set('person_locations', v.length > 0 ? v : undefined)}
             suggestions={COUNTRIES}
           />
         </div>
         <div className="search-filter-field">
-          <span>Company size</span>
+          <span>Įmonės dydis</span>
           <div className="search-filter-chips">
             {EMPLOYEE_RANGES.map((r) => (
               <button
@@ -156,24 +155,24 @@ export function PeopleFilterForm({ params, onChange, onSubmit, loading }: People
       </div>
 
       <button type="button" className="search-show-more-toggle" onClick={() => setShowMore((v) => !v)}>
-        {showMore ? '− Hide advanced filters' : '+ Show more filters'}
+        {showMore ? '− Slėpti papildomus filtrus' : '+ Rodyti daugiau filtrų'}
       </button>
 
       {showMore && (
         <>
           <div className="search-filter-group">
-            <div className="search-filter-group-title">Contact</div>
+            <div className="search-filter-group-title">Kontaktas</div>
             <div className="search-filter-field">
-              <span>Email status</span>
+              <span>El. pašto statusas</span>
               <div className="search-filter-chips">
                 {EMAIL_STATUSES.map((s) => (
                   <button
                     type="button"
-                    key={s}
-                    className={`search-filter-chip ${emailStatuses.includes(s) ? 'search-filter-chip-active' : ''}`}
-                    onClick={() => toggleEmailStatus(s)}
+                    key={s.value}
+                    className={`search-filter-chip ${emailStatuses.includes(s.value) ? 'search-filter-chip-active' : ''}`}
+                    onClick={() => toggleEmailStatus(s.value)}
                   >
-                    {s.replace(/_/g, ' ')}
+                    {s.label}
                   </button>
                 ))}
               </div>
@@ -181,9 +180,9 @@ export function PeopleFilterForm({ params, onChange, onSubmit, loading }: People
           </div>
 
           <div className="search-filter-group">
-            <div className="search-filter-group-title">Organization</div>
+            <div className="search-filter-group-title">Organizacija</div>
             <div className="search-filter-field">
-              <span>Org. HQ locations</span>
+              <span>Įmonės būstinės vieta</span>
               <ComboBoxMultiInput
                 value={params.organization_locations ?? []}
                 onChange={(v) => set('organization_locations', v.length > 0 ? v : undefined)}
@@ -191,7 +190,7 @@ export function PeopleFilterForm({ params, onChange, onSubmit, loading }: People
               />
             </div>
             <div className="search-filter-field search-filter-range">
-              <span>Revenue range ($)</span>
+              <span>Pajamų intervalas ($)</span>
               <div className="search-filter-range-inputs">
                 <input
                   type="number"
@@ -210,9 +209,9 @@ export function PeopleFilterForm({ params, onChange, onSubmit, loading }: People
           </div>
 
           <div className="search-filter-group">
-            <div className="search-filter-group-title">Technology</div>
+            <div className="search-filter-group-title">Technologijos</div>
             <label className="search-filter-field">
-              <span>Using ALL of (underscored ids)</span>
+              <span>Naudoja VISAS iš (id su pabraukimais)</span>
               <input
                 placeholder="salesforce, hubspot"
                 value={joinList(params.currently_using_all_of_technology_uids)}
@@ -220,14 +219,14 @@ export function PeopleFilterForm({ params, onChange, onSubmit, loading }: People
               />
             </label>
             <label className="search-filter-field">
-              <span>Using ANY of</span>
+              <span>Naudoja BENT VIENĄ iš</span>
               <input
                 value={joinList(params.currently_using_any_of_technology_uids)}
                 onChange={(e) => set('currently_using_any_of_technology_uids', splitList(e.target.value))}
               />
             </label>
             <label className="search-filter-field">
-              <span>NOT using any of</span>
+              <span>NENAUDOJA nė vienos iš</span>
               <input
                 value={joinList(params.currently_not_using_any_of_technology_uids)}
                 onChange={(e) => set('currently_not_using_any_of_technology_uids', splitList(e.target.value))}
@@ -236,9 +235,9 @@ export function PeopleFilterForm({ params, onChange, onSubmit, loading }: People
           </div>
 
           <div className="search-filter-group">
-            <div className="search-filter-group-title">Job postings</div>
+            <div className="search-filter-group-title">Darbo skelbimai</div>
             <div className="search-filter-field">
-              <span>Job titles in postings</span>
+              <span>Pareigos skelbimuose</span>
               <ComboBoxMultiInput
                 value={params.q_organization_job_titles ?? []}
                 onChange={(v) => set('q_organization_job_titles', v.length > 0 ? v : undefined)}
@@ -246,7 +245,7 @@ export function PeopleFilterForm({ params, onChange, onSubmit, loading }: People
               />
             </div>
             <div className="search-filter-field">
-              <span>Job posting locations</span>
+              <span>Skelbimų vieta</span>
               <ComboBoxMultiInput
                 value={params.organization_job_locations ?? []}
                 onChange={(v) => set('organization_job_locations', v.length > 0 ? v : undefined)}
@@ -254,7 +253,7 @@ export function PeopleFilterForm({ params, onChange, onSubmit, loading }: People
               />
             </div>
             <div className="search-filter-field search-filter-range">
-              <span>Number of open jobs</span>
+              <span>Atvirų darbo vietų skaičius</span>
               <div className="search-filter-range-inputs">
                 <input
                   type="number"
@@ -281,7 +280,7 @@ export function PeopleFilterForm({ params, onChange, onSubmit, loading }: People
               </div>
             </div>
             <div className="search-filter-field search-filter-range">
-              <span>Job posted date range</span>
+              <span>Skelbimo paskelbimo data</span>
               <div className="search-filter-range-inputs">
                 <input
                   type="date"
@@ -305,7 +304,7 @@ export function PeopleFilterForm({ params, onChange, onSubmit, loading }: People
 
       <div className="search-filter-actions">
         <label className="search-filter-field search-filter-per-page">
-          <span>Results per page</span>
+          <span>Rezultatų per puslapį</span>
           <input
             type="number"
             min={1}
@@ -315,7 +314,7 @@ export function PeopleFilterForm({ params, onChange, onSubmit, loading }: People
           />
         </label>
         <button type="submit" className="primary" disabled={loading}>
-          {loading ? 'Searching…' : 'Search people'}
+          {loading ? 'Ieškoma…' : 'Ieškoti žmonių'}
         </button>
       </div>
     </form>

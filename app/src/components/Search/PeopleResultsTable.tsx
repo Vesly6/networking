@@ -29,9 +29,9 @@ function PersonRow({ person }: { person: ApolloSearchPerson }) {
   return (
     <tr>
       <td className="search-results-table-name">
-        {displayName || 'Unknown'}
+        {displayName || 'Nežinoma'}
         {enriched?.linkedin_url && (
-          <a href={enriched.linkedin_url} target="_blank" rel="noreferrer" className="search-results-linkedin" title="Open LinkedIn profile">
+          <a href={enriched.linkedin_url} target="_blank" rel="noreferrer" className="search-results-linkedin" title="Atverti LinkedIn profilį">
             🔗 LinkedIn
           </a>
         )}
@@ -42,15 +42,15 @@ function PersonRow({ person }: { person: ApolloSearchPerson }) {
         {email && <div>✉️ {email}</div>}
         {phone && <div>📞 {phone}</div>}
         {!email && !enriching && (
-          <span className="search-result-detail-muted">{person.has_email ? 'Email available' : 'No email on file'}</span>
+          <span className="search-result-detail-muted">{person.has_email ? 'El. paštas žinomas' : 'El. pašto nėra'}</span>
         )}
         {!phone && !phonePending && (
           <span className="search-result-detail-muted">
             {' '}
-            · {person.has_direct_phone === 'Yes' ? 'Phone available' : 'Phone unlikely'}
+            · {person.has_direct_phone === 'Yes' ? 'Telefonas žinomas' : 'Telefonas mažai tikėtinas'}
           </span>
         )}
-        {phonePending && <div className="search-result-detail-muted">Waiting for phone number…</div>}
+        {phonePending && <div className="search-result-detail-muted">Laukiama telefono numerio…</div>}
         {enrichError && <div className="search-result-detail-error">{enrichError}</div>}
         {phoneError && <div className="search-result-detail-error">{phoneError}</div>}
       </td>
@@ -58,16 +58,16 @@ function PersonRow({ person }: { person: ApolloSearchPerson }) {
         <div className="search-results-table-actions">
           {!email && (
             <button type="button" onClick={() => void revealEmail(person)} disabled={!!enriching}>
-              {enriching ? 'Finding…' : 'Find email'}
+              {enriching ? 'Ieškoma…' : 'Ieškoti el. pašto'}
             </button>
           )}
           {!phone && (
             <button type="button" onClick={() => void revealPhone(person)} disabled={!!phonePending}>
-              {phonePending ? 'Finding…' : 'Find phone'}
+              {phonePending ? 'Ieškoma…' : 'Ieškoti telefono'}
             </button>
           )}
           <button type="button" className="primary" onClick={() => addPerson(person, enriched, phone)}>
-            + Add
+            + Pridėti
           </button>
         </div>
       </td>
@@ -80,11 +80,11 @@ export function PeopleResultsTable({ people }: { people: ApolloSearchPerson[] })
     <table className="search-results-table search-results-table-people">
       <thead>
         <tr>
-          <th>Name</th>
-          <th>Title</th>
-          <th>Company</th>
-          <th>Contact</th>
-          <th>Actions</th>
+          <th>Vardas</th>
+          <th>Pareigos</th>
+          <th>Įmonė</th>
+          <th>Kontaktas</th>
+          <th>Veiksmai</th>
         </tr>
       </thead>
       <tbody>
