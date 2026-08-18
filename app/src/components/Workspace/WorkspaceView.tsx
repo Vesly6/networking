@@ -3,6 +3,7 @@ import { useWorkspaceStore } from '../../store/useWorkspaceStore';
 import { useAuthStore } from '../../store/useAuthStore';
 import { confirmDeleteTable } from '../../utils/confirmDeleteTable';
 import { countRowsForTable } from '../../db/db';
+import { BrandLogo } from '../BrandLogo';
 
 interface WorkspaceViewProps {
   onOpenTable: (id: string) => void;
@@ -42,7 +43,7 @@ export function WorkspaceView({ onOpenTable }: WorkspaceViewProps) {
     <div className="workspace-view">
       <div className="workspace-header">
         <div className="brand">
-          <img src="/favicon.png" alt="" className="brand-logo" />
+          <BrandLogo />
           <h2>Workspace</h2>
         </div>
         <div className="workspace-header-actions">

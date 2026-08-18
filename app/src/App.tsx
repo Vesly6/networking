@@ -11,6 +11,7 @@ import { ConfirmDialog } from './components/ConfirmDialog';
 import { Softphone } from './components/Softphone';
 import { SheetTabs } from './components/SheetTabs';
 import { LoginScreen } from './components/LoginScreen';
+import { BrandLogo } from './components/BrandLogo';
 import { getNextActionColumn } from './utils/row';
 import { isOverdue, isDueToday } from './utils/date';
 import './App.css';
@@ -128,7 +129,7 @@ function App() {
         <div className="app">
           <header className="app-header">
             <div className="brand">
-              <img src="/favicon.png" alt="" className="brand-logo" />
+              <BrandLogo />
             </div>
             <button type="button" className="back-to-workspace" onClick={() => setActiveTable(null)}>
               ← Workspace
