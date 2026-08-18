@@ -1,0 +1,96 @@
+import { useTableStore } from '../store/useTableStore';
+import { useToastStore } from '../store/useToastStore';
+import { getColumnByType } from './row';
+import { addContact, joinContactFields } from './contacts';
+import type { ApolloSearchPerson, ApolloCompany, ApolloEnrichedPerson } from './apolloApi';
+
+/** Maps an Apollo person (search result, optionally already enriched) into
+ * a new row of the active table — deliberately maps into EXISTING columns
+ * only, never auto-creates one: matches the same "explicit, not silent"
+ * choice CSV import already made (CLAUDE.md) — a column silently appearing
+ * with a name Apollo picked wasn't something anyone asked for. Whatever
+ * doesn't have a matching column is dropped, and the toast says exactly
+ * what was skipped so it's not a silent data loss. */
+export function useAddApolloResultToTable() {
+  const columns = useTableStore((s) => s.columns);
+  const addRow = useTableStore((s) => s.addRow);
+  const updateCell = useTableStore((s) => s.updateCell);
+  const showToast = useToastStore((s) => s.show);
+
+  const addPerson = (person: ApolloSearchPerson, enriched: ApolloEnrichedPerson | undefined) => {
+    if (columns.length === 0) {
+      showToast('Add at least one column to this table first — nothing to map Apollo data into yet');
+      return;
+    }
+    const companyColumn = getColumnByType(columns, 'company');
+    const contactColumn = getColumnByType(columns, 'contact');
+    const phoneColumn = getColumnByType(columns, 'phone');
+    const skipped: string[] = [];
+
+    const firstName = enriched?.first_name ?? person.first_name ?? '';
+    const lastName = enriched?.last_name ?? person.last_name_obfuscated ?? '';
+    const title = enriched?.title ?? person.title ?? '';
+    const email = enriched?.email ?? enriched?.contact?.email ?? '';
+    const phone = enriched?.contact?.phone_numbers?.[0]?.sanitized_number ?? '';
+    const companyName = enriched?.organization?.name ?? person.organization?.name ?? '';
+
+    const rowId = addRow();
+
+    if (companyColumn) {
+      if (companyName) updateCell(rowId, companyColumn.id, companyName);
+    } else if (companyName) {
+      skipped.push('Company');
+    }
+
+    if (contactColumn) {
+      const text = joinContactFields({ firstName, lastName, position: title, email, phone });
+      if (text) {
+        const current = useTableStore.getState().rows.find((r) => r.id === rowId)?.cells[contactColumn.id] ?? '';
+        updateCell(rowId, contactColumn.id, addContact(current, text));
+      }
+    } else if (phone && phoneColumn) {
+      updateCell(rowId, phoneColumn.id, phone);
+    } else if ((firstName || phone || email) && !contactColumn) {
+      skipped.push('Contact');
+    }
+
+    const parts = [`Added ${[firstName, lastName].filter(Boolean).join(' ') || 'row'} to the table`];
+    if (skipped.length > 0) parts.push(`no ${skipped.join('/')} column — that data was skipped`);
+    showToast(parts.join(' — '));
+  };
+
+  const addCompany = (company: ApolloCompany) => {
+    if (columns.length === 0) {
+      showToast('Add at least one column to this table first — nothing to map Apollo data into yet');
+      return;
+    }
+    const companyColumn = getColumnByType(columns, 'company');
+    const phoneColumn = getColumnByType(columns, 'phone');
+    const linkColumn = getColumnByType(columns, 'link');
+    const skipped: string[] = [];
+
+    const rowId = addRow();
+
+    if (companyColumn) {
+      if (company.name) updateCell(rowId, companyColumn.id, company.name);
+    } else if (company.name) {
+      skipped.push('Company');
+    }
+
+    if (phoneColumn && company.phone) {
+      updateCell(rowId, phoneColumn.id, company.phone);
+    } else if (company.phone) {
+      skipped.push('Phone');
+    }
+
+    if (linkColumn && (company.website_url || company.primary_domain)) {
+      updateCell(rowId, linkColumn.id, company.primary_domain ?? company.website_url ?? '');
+    }
+
+    const parts = [`Added ${company.name ?? 'company'} to the table`];
+    if (skipped.length > 0) parts.push(`no ${skipped.join('/')} column — that data was skipped`);
+    showToast(parts.join(' — '));
+  };
+
+  return { addPerson, addCompany };
+}

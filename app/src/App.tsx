@@ -6,6 +6,7 @@ import { TableView } from './components/Table/TableView';
 import { CalendarView } from './components/Calendar/CalendarView';
 import { WorkspaceView } from './components/Workspace/WorkspaceView';
 import { CallsView } from './components/Calls/CallsView';
+import { SearchView } from './components/Search/SearchView';
 import { Toast } from './components/Toast';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { Softphone } from './components/Softphone';
@@ -16,7 +17,7 @@ import { getNextActionColumn } from './utils/row';
 import { isOverdue, isDueToday } from './utils/date';
 import './App.css';
 
-type Tab = 'table' | 'calendar' | 'calls';
+type Tab = 'table' | 'calendar' | 'calls' | 'search';
 
 function App() {
   const token = useAuthStore((s) => s.token);
@@ -195,6 +196,9 @@ function App() {
               <button type="button" className={tab === 'calls' ? 'active' : ''} onClick={() => setTab('calls')}>
                 Calls
               </button>
+              <button type="button" className={tab === 'search' ? 'active' : ''} onClick={() => setTab('search')}>
+                Search
+              </button>
             </nav>
             <button type="button" className="logout-btn" onClick={logout}>
               Log out
@@ -231,6 +235,17 @@ function App() {
                 all). Calls has no such key: it isn't scoped to a table. */}
             <div className={`tab-panel ${tab === 'calls' ? 'tab-panel-active' : ''}`}>
               <CallsView onJumpToRow={handleJumpToRow} />
+            </div>
+            {/* Not gated on tableReady/keyed by activeTableId like Table/
+                Calendar — SearchView's own state (useSearchStore) has
+                nothing to do with which table is active; it only reads
+                useTableStore live, at the moment "Add to table" is
+                actually clicked (see utils/addApolloToTable.ts), so
+                switching tables while search results are on screen just
+                means the next "Add to table" click lands in the newly
+                active table — no stale-state risk to guard against. */}
+            <div className={`tab-panel ${tab === 'search' ? 'tab-panel-active' : ''}`}>
+              <SearchView />
             </div>
             <div className={`tab-panel ${tab === 'table' ? 'tab-panel-active' : ''}`}>
               {tableReady ? (

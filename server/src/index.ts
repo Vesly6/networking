@@ -5,6 +5,7 @@ import { ZadarmaApiError, getStatistics, requestRecording, requestCallback, getW
 import { TranscriptionError, transcribeFromUrl } from './elevenlabs.js';
 import { ContactParseError, parseContactText, SummarizeError, summarizeCall } from './openai.js';
 import { AuthError, checkCredentials, issueToken, requireAuth } from './auth.js';
+import { ApolloApiError, searchPeople, searchCompanies, enrichPerson } from './apollo.js';
 
 const PORT = Number(process.env.PORT) || 4000;
 // Binds 127.0.0.1 by default — deliberately not reachable from the local
@@ -197,6 +198,42 @@ app.post(
   }),
 );
 
+// The three Apollo routes below just forward the request body through to
+// apollo.ts's typed wrappers — validation stays minimal (this is a single-
+// operator tool, not a public API), the frontend's filter panel is
+// responsible for building a well-formed body. Free to call (0 credits).
+app.post(
+  '/api/apollo/people/search',
+  asyncHandler(async (req, res) => {
+    const result = await searchPeople(req.body ?? {});
+    res.json(result);
+  }),
+);
+
+// Costs Apollo credits — "1 credit per page" (up to 100 results), unlike
+// people search above. The frontend surfaces this before calling it (see
+// SearchView.tsx) rather than the server silently spending money on every
+// keystroke of a filter form.
+app.post(
+  '/api/apollo/companies/search',
+  asyncHandler(async (req, res) => {
+    const result = await searchCompanies(req.body ?? {});
+    res.json(result);
+  }),
+);
+
+// Costs Apollo credits (1 for email, +8 more for a phone number) — this is
+// the one Apollo route in the whole app that's never called automatically,
+// only from an explicit "Reveal contact" click per person, same philosophy
+// as Calls' manual per-call "Transcribe" button (CLAUDE.md).
+app.post(
+  '/api/apollo/people/enrich',
+  asyncHandler(async (req, res) => {
+    const result = await enrichPerson(req.body ?? {});
+    res.json(result);
+  }),
+);
+
 app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
   if (err instanceof AuthError) {
     console.error('Auth config error:', err.message);
@@ -215,6 +252,11 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
   }
   if (err instanceof ContactParseError || err instanceof SummarizeError) {
     console.error('OpenAI error:', err.message);
+    res.status(502).json({ error: err.message });
+    return;
+  }
+  if (err instanceof ApolloApiError) {
+    console.error('Apollo API error:', err.message, err.raw);
     res.status(502).json({ error: err.message });
     return;
   }
