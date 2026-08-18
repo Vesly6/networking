@@ -168,17 +168,6 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
   useEffect(() => {
     saveViewState(tableId, search, sort);
   }, [tableId, search, sort]);
-  // handleCellCommitted (below) is handed to every DataCell as a prop that
-  // its memo comparator deliberately doesn't compare (same as onSelect/
-  // onExtend/onOpenEditor) — so a cell whose row/column/selected/etc. don't
-  // change when a sort is applied never re-renders, and keeps whatever
-  // handleCellCommitted closure it captured on its *last actual* render,
-  // which may have closed over `sort` from before sorting existed. Reading
-  // sortRef.current instead of `sort` directly makes the closure's
-  // identity irrelevant — any copy, however old, sees the current value.
-  // Same pattern as filteredSortedRowsRef just above for the same reason.
-  const sortRef = useRef(sort);
-  sortRef.current = sort;
   // note/contact cells expand into CellHoverEditor on click (see DataCell's
   // note/contact branch) — closed the same way every other popover in this
   // file is: `.table-view`'s onClick={closePopovers} below, or a click on
@@ -313,6 +302,22 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusRowId, onFocusHandled]);
 
+  // Sort is applied as a one-time snapshot (an ordered list of row ids),
+  // recomputed only when `sort` itself changes (a fresh column/direction
+  // pick) — NOT every time `rows` changes. This was a real, reported bug:
+  // with sort continuously re-applied live, changing a cell's value in the
+  // sort column (e.g. a Status dropdown while sorted by Status) re-sorted
+  // the row out from under the cursor the instant it committed, and a
+  // rapid sequence of edits would land on whatever row the reflow left
+  // under the mouse rather than the one actually clicked — reported as
+  // "sometimes it just won't let me change the status." Matches how
+  // Excel/Sheets' own sort behaves too: a deliberate action that arranges
+  // rows once, not a continuously-live rule. Values inside cells always
+  // stay live and correct regardless — only the row's *position* is
+  // frozen until sort is next (re-)applied (a different column, or the
+  // other direction).
+  const sortSnapshotRef = useRef<{ sort: ViewSort; order: string[] } | null>(null);
+
   const filteredSortedRows = useMemo(() => {
     let result = rows;
 
@@ -322,13 +327,39 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
     }
 
     if (sort) {
-      const { columnId, direction } = sort;
-      result = [...result].sort((a, b) => {
-        const av = a.cells[columnId] ?? '';
-        const bv = b.cells[columnId] ?? '';
-        const cmp = av.localeCompare(bv, 'en');
-        return direction === 'asc' ? cmp : -cmp;
-      });
+      const prev = sortSnapshotRef.current;
+      const sortUnchanged = prev?.sort?.columnId === sort.columnId && prev?.sort?.direction === sort.direction;
+      if (!sortUnchanged) {
+        const { columnId, direction } = sort;
+        const order = [...rows]
+          .sort((a, b) => {
+            const av = a.cells[columnId] ?? '';
+            const bv = b.cells[columnId] ?? '';
+            const cmp = av.localeCompare(bv, 'en');
+            return direction === 'asc' ? cmp : -cmp;
+          })
+          .map((r) => r.id);
+        sortSnapshotRef.current = { sort, order };
+      }
+
+      const byId = new Map(result.map((r) => [r.id, r]));
+      const ordered: Row[] = [];
+      for (const id of sortSnapshotRef.current!.order) {
+        const r = byId.get(id);
+        if (r) {
+          ordered.push(r);
+          byId.delete(id);
+        }
+      }
+      // Anything left over — a row added since the snapshot was taken —
+      // is appended in its natural order rather than dropped; its exact
+      // sorted position lands correctly next time sort is re-applied.
+      for (const r of result) {
+        if (byId.has(r.id)) ordered.push(r);
+      }
+      result = ordered;
+    } else {
+      sortSnapshotRef.current = null;
     }
 
     return result;
@@ -377,27 +408,6 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
     if (index >= 0) scrollToRowIndex(index);
   };
 
-  /** Editing a cell in the table's current sort column re-sorts the row out
-   * from under the cursor the instant the value commits — the edit itself
-   * succeeded, but whatever row now occupies that same screen position
-   * shows a different value, which reads as "the edit didn't take" (a real,
-   * reported bug: changing a Status dropdown while sorted by Status). This
-   * doesn't change that re-sort behavior — the row moving is correct and
-   * expected — it just makes the move visible: scroll to the row's new
-   * position and flash it, the same treatment "jump to row" already gets
-   * elsewhere (Calendar → Open in table, the Name Box). rAF because the
-   * commit that triggered this hasn't re-rendered filteredSortedRows yet;
-   * by the next frame it has, so scrollToRowId finds the row's new index
-   * rather than its old one. */
-  const handleCellCommitted = (rowId: string, columnId: string) => {
-    if (sortRef.current?.columnId !== columnId) return;
-    requestAnimationFrame(() => {
-      if (!filteredSortedRowsRef.current.some((r) => r.id === rowId)) return;
-      scrollToRowId(rowId);
-      setFlashRowId(rowId);
-      setTimeout(() => setFlashRowId(null), 1600);
-    });
-  };
 
   const rowDragEnabled = sort === null && search.trim() === '';
 
@@ -1689,7 +1699,6 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
                         onOpenEditor={(anchor) => openCellEditor(row.id, col.id, anchor)}
                         highlightQuery={search.trim() || undefined}
                         contactsRaw={contactColumn ? row.cells[contactColumn.id] : undefined}
-                        onCellCommitted={handleCellCommitted}
                       />
                     ))}
                   </tr>

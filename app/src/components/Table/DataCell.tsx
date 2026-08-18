@@ -44,17 +44,6 @@ interface DataCellProps {
    * if any — see getColumnByType), for the next-action-date cell's "who to
    * call" picker. Only read by the `date` branch when `column.isNextActionDate`. */
   contactsRaw?: string;
-  /** Called after any value commit (dropdown/date onChange, text/phone/
-   * company/link autosave) — lets TableView notice when the edited column
-   * is the table's current sort column, in which case the row is about to
-   * jump to a new position the instant this render commits. Without this,
-   * changing e.g. a Status dropdown while sorted by Status silently
-   * re-sorts the edited row out from under the user's cursor — the value
-   * *did* change, but whatever row now sits in that same screen position
-   * shows a different, unrelated value, which reads as "the edit didn't
-   * take" or "it won't let me change this one." TableView uses this to
-   * scroll to and flash-highlight the row's new position instead. */
-  onCellCommitted?: (rowId: string, columnId: string) => void;
 }
 
 function DataCellImpl({
@@ -68,7 +57,6 @@ function DataCellImpl({
   onOpenEditor,
   highlightQuery,
   contactsRaw,
-  onCellCommitted,
 }: DataCellProps) {
   const updateCell = useTableStore((s) => s.updateCell);
   const setLinkedContact = useTableStore((s) => s.setLinkedContact);
@@ -102,7 +90,6 @@ function DataCellImpl({
     }
     if (draft === storedValue) return;
     const truncated = updateCell(row.id, column.id, draft);
-    onCellCommitted?.(row.id, column.id);
     if (truncated) {
       showToast(`Tekstas apkarpytas iki Excel langelio ribos — ${EXCEL_CELL_LIMIT.toLocaleString('lt-LT')} simbolių`);
       setDraft(row.cells[column.id] ?? '');
@@ -143,10 +130,7 @@ function DataCellImpl({
           value={storedValue}
           style={selectColor ? { backgroundColor: selectColor } : undefined}
           onFocus={onSelect}
-          onChange={(e) => {
-            updateCell(row.id, column.id, e.target.value);
-            onCellCommitted?.(row.id, column.id);
-          }}
+          onChange={(e) => updateCell(row.id, column.id, e.target.value)}
         >
           <option value="">—</option>
           {(column.options ?? []).map((opt) => (
@@ -176,10 +160,7 @@ function DataCellImpl({
             style={cellStyle}
             value={datePart}
             onFocus={onSelect}
-            onChange={(e) => {
-              updateCell(row.id, column.id, combineDateTime(e.target.value, timePart));
-              onCellCommitted?.(row.id, column.id);
-            }}
+            onChange={(e) => updateCell(row.id, column.id, combineDateTime(e.target.value, timePart))}
           />
           {showTimeInput ? (
             <input
@@ -188,10 +169,7 @@ function DataCellImpl({
               style={cellStyle}
               value={timePart}
               onFocus={onSelect}
-              onChange={(e) => {
-                updateCell(row.id, column.id, combineDateTime(datePart, e.target.value));
-                onCellCommitted?.(row.id, column.id);
-              }}
+              onChange={(e) => updateCell(row.id, column.id, combineDateTime(datePart, e.target.value))}
             />
           ) : (
             datePart && (
