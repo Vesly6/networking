@@ -57,6 +57,14 @@ const NOTE_TAGS: Array<{ label: string; color: string }> = [
   { label: 'Susitikimas įvykdytas', color: '#f5e3ec' },
   { label: 'Skambutis', color: '#f6e9dd' },
 ];
+// A history entry logged via one of the quick-tag buttons above carries the
+// exact tag label as its text — this maps that label back to the same
+// color for the history list, so a comment's origin tag stays visually
+// identifiable there too. An entry whose text doesn't exactly match a tag
+// (typed free text, or a tag entry since edited into something else) just
+// falls back to no color — no error, since notes are free text and were
+// never guaranteed to match a tag in the first place.
+const NOTE_TAG_COLORS: Record<string, string> = Object.fromEntries(NOTE_TAGS.map((t) => [t.label, t.color]));
 
 // Temporarily disabled on explicit request — kept (not deleted) since
 // callContact/requestCallback are meant to come back, not go away for
@@ -317,7 +325,15 @@ export function CellHoverEditor({
           {parseNoteHistory(value).length > 0 && (
             <div className="cell-hover-history">
               {parseNoteHistory(value).map((entry) => (
-                <div key={entry.id} className="cell-hover-history-entry">
+                <div
+                  key={entry.id}
+                  className="cell-hover-history-entry"
+                  style={
+                    NOTE_TAG_COLORS[entry.text]
+                      ? { backgroundColor: NOTE_TAG_COLORS[entry.text], borderRadius: '6px' }
+                      : undefined
+                  }
+                >
                   {entry.createdAt > 0 && (
                     <div className="cell-hover-history-time">{formatHistoryTimestamp(entry.createdAt)}</div>
                   )}
