@@ -16,10 +16,9 @@ type SearchMode = 'people' | 'companies';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 // Apollo's own docs say phone delivery "can take several minutes" — this
-// caps total wait so a permanently-stuck poll (see the long comment on
-// pollWebhookResult in server/src/apollo.ts — this account's phone-reveal
-// polling hasn't been confirmed working at all yet) fails clearly instead
-// of spinning forever.
+// caps total wait so a genuinely stuck poll fails clearly instead of
+// spinning forever. In practice, confirmed against a live account, a
+// result is often ready on the very first poll.
 const PHONE_POLL_MAX_MS = 3 * 60 * 1000;
 
 interface SearchState {
@@ -62,11 +61,9 @@ interface SearchState {
   phonePendingIds: Record<string, boolean>;
   phoneErrors: Record<string, string>;
   /** "Find phone" — starts Apollo's async phone lookup, then polls for the
-   * result (see pollPhoneReveal in apolloApi.ts). Known to not reliably
-   * resolve yet on this account — see the long comment in server/src/
-   * apollo.ts's pollWebhookResult; this still attempts it and times out
-   * cleanly rather than skipping the feature entirely, since it may start
-   * working with no code change once the underlying cause is resolved. */
+   * result (see pollPhoneReveal in apolloApi.ts). Confirmed working
+   * end-to-end against a live account after fixing a numeric-precision bug
+   * in the polling id — see server/src/apollo.ts's pollWebhookResult. */
   revealPhone: (person: ApolloSearchPerson) => Promise<void>;
 }
 
@@ -175,14 +172,15 @@ export const useSearchStore = create<SearchState>((set, get) => ({
       // of a second billed lookup.
       if (result.person) set((s) => ({ enrichedById: { ...s.enrichedById, [id]: result.person! } }));
 
-      const info = result.phone_enrichment;
-      if (!info?.request_id) {
-        // "skipped" (already in progress from an earlier request) or no
-        // phone_enrichment at all — nothing to poll for from this call.
-        throw new Error(info?.message ?? 'Apollo did not start a phone lookup for this person');
+      // The TOP-LEVEL request_id is the one to poll with — NOT
+      // result.phone_enrichment.request_id, which looks like it should be
+      // it but is a different id the polling endpoint always rejects. See
+      // apolloApi.ts's pollPhoneReveal / server/src/apollo.ts's
+      // pollWebhookResult for how this was confirmed.
+      if (!result.request_id) {
+        throw new Error(result.phone_enrichment?.message ?? 'Apollo did not start a phone lookup for this person');
       }
-
-      const requestId = info.request_id;
+      const requestId = result.request_id;
       const deadline = Date.now() + PHONE_POLL_MAX_MS;
       for (;;) {
         const poll = await apiPollPhoneReveal(requestId);

@@ -39,7 +39,25 @@ async function callApollo<T>(path: string, body: Record<string, unknown>): Promi
     throw new ApolloApiError('Could not reach Apollo API', 0, null);
   }
 
-  const json: unknown = await res.json().catch(() => null);
+  // people/match's top-level `request_id` (used for phone-reveal polling,
+  // see pollWebhookResult below) is an up-to-19-digit signed integer —
+  // beyond Number.MAX_SAFE_INTEGER (2^53-1) — so a plain res.json() (i.e.
+  // JSON.parse) silently rounds it to the nearest representable double,
+  // producing a DIFFERENT number than Apollo actually sent. Confirmed
+  // directly against a real response: raw digits -6763434991299099720
+  // came back from JSON.parse as -6763434991299100000. Quoting the digits
+  // before parsing keeps it as a string instead, preserving exact
+  // precision — every other field in every Apollo response this proxy
+  // handles is either a small int, a string, or an object, so this
+  // targeted rewrite can't affect anything else.
+  const rawText = await res.text();
+  const safeText = rawText.replace(/"request_id":\s*(-?\d+)/g, '"request_id":"$1"');
+  let json: unknown = null;
+  try {
+    json = safeText ? JSON.parse(safeText) : null;
+  } catch {
+    json = null;
+  }
   if (!res.ok) {
     const message =
       (json && typeof json === 'object' && 'error' in json && typeof (json as { error: unknown }).error === 'string'
@@ -284,18 +302,24 @@ export interface ApolloEnrichedPerson {
 
 export async function enrichPerson(params: PeopleEnrichParams): Promise<{
   person: ApolloEnrichedPerson | null;
-  request_id?: string | number;
-  // Only present when reveal_phone_number was requested — its own
-  // request_id is what pollWebhookResult()/GET /webhook_result/:id below
-  // actually needs, NOT the top-level request_id above (confirmed by
-  // testing both against a real account: the top-level id — a large
-  // signed int, matching what the polling endpoint's docs describe —
-  // consistently comes back "request_id_unknown" even freshly issued and
-  // exactly as received with no precision loss; this nested id is a
-  // different, Mongo-ObjectId-shaped string that the polling endpoint
-  // instead rejects outright as "invalid_request_id". Neither candidate
-  // has been made to work end-to-end — see the long comment on
-  // pollWebhookResult below).
+  // The id pollWebhookResult()/GET /webhook_result/:id below actually
+  // needs — a string (see callApollo's precision-preserving parse above).
+  // RESOLVED, after this being long unresolved: this is the TOP-LEVEL
+  // request_id, not the nested phone_enrichment.request_id — Apollo's own
+  // "pending" message says so explicitly ("Retrieve the result by polling
+  // GET /api/v1/webhook_result/{request_id} with the top-level
+  // `request_id` field from this response"), and confirmed end-to-end
+  // against a real account: polling with this id, preserved at full
+  // precision, correctly returns "result_pending" while processing and
+  // then a real phone number once ready. The nested id was never the
+  // right one to poll with at all (see phone_enrichment.request_id below).
+  request_id?: string;
+  // Only present when reveal_phone_number was requested. Its own
+  // request_id looks superficially like it should be the polling id (it's
+  // named the same thing, right there in the sub-object) but isn't — it's
+  // a different, Mongo-ObjectId-shaped string that GET /webhook_result
+  // rejects outright as "invalid_request_id". Kept here only for its
+  // status/message fields; use the top-level request_id above for polling.
   phone_enrichment?: { request_id?: string; status: string; message?: string };
 }> {
   return callApollo('/people/match', params as Record<string, unknown>);
@@ -316,23 +340,24 @@ export async function enrichPerson(params: PeopleEnrichParams): Promise<{
  * polling again. 400/410 are terminal (bad id / result expired after 30
  * days) and shouldn't be retried.
  *
- * UNRESOLVED as of writing: neither id this app has access to — the
- * top-level enrichPerson() response's `request_id` (a large signed int,
- * matching this endpoint's documented format) nor the nested
- * `phone_enrichment.request_id` (a Mongo-ObjectId-shaped string) — was
- * made to work against a real account. The signed-int one consistently
- * comes back 404 "request_id_unknown" (tested with the exact, unaltered
- * value straight from Apollo's own response — precision loss in transit
- * was ruled out explicitly); the ObjectId one comes back 400
- * "invalid_request_id" outright. Both were tested repeatedly, including
- * waiting several minutes for "still processing" to plausibly resolve.
- * Given this codebase's own precedent (the ElevenLabs speech-to-text
- * permission gap, resolved only by checking scopes on ElevenLabs'
- * dashboard directly — see the Calls tab section of CLAUDE.md), the most
- * likely explanation is a similar per-key scope/permission gap on this
- * Apollo account for webhook_result_read specifically, not a bug in this
- * request. If phone reveal ever needs debugging again, check that before
- * re-suspecting the id/format logic here — it's been ruled out. */
+ * RESOLVED — this was reported at length as unresolved for a while; the
+ * actual bug, found by testing with a fresh API key at the user's request,
+ * was a plain JS numeric-precision bug, not an Apollo-side permission gap
+ * as previously theorized. Two things were wrong at once: (1) the code was
+ * polling with the WRONG id — the nested phone_enrichment.request_id,
+ * which GET /webhook_result flatly rejects as "invalid_request_id" no
+ * matter what, since it was never the right field (see enrichPerson
+ * above); and (2) even the correct top-level request_id — an up-to-19-
+ * digit signed integer, past Number.MAX_SAFE_INTEGER — was being silently
+ * corrupted by a plain res.json() before it ever reached this function:
+ * confirmed directly, raw digits -6763434991299099720 came back from a
+ * standard JSON.parse as -6763434991299100000, a different number Apollo
+ * had never issued, which is exactly why every poll came back
+ * "request_id_unknown" — the id being asked about literally didn't exist.
+ * callApollo() now quotes request_id before parsing so it stays a
+ * precision-exact string; combined with polling the right field, a full
+ * enrich→poll→ready round trip (with a real phone number back) was
+ * confirmed working end-to-end against a live account. */
 export type WebhookPollResult =
   | { status: 'processing'; retryAfterSeconds: number }
   | { status: 'ready'; phoneNumbers: Array<{ sanitized_number: string; status_cd?: string; confidence_cd?: string | null }> }
@@ -357,17 +382,21 @@ export async function pollWebhookResult(requestId: string): Promise<WebhookPollR
     return { status: 'processing', retryAfterSeconds };
   }
   if (res.status === 400 || res.status === 410) {
-    // 400 here is the known, unresolved account-level issue documented at
-    // length above ("Invalid lookup id" is Apollo's own raw wording for a
-    // request_id it won't accept, on either candidate id this app has
-    // tried) — reworded so the UI doesn't read as a fresh, unexplained
-    // failure on every single attempt.
+    // Per Apollo's own reference for this endpoint: 400 = request_id isn't
+    // a validly-formed 64-bit integer at all (error_code
+    // "invalid_request_id"); 410 = a real, valid request_id whose result
+    // has aged out (30-day window, error_code "request_id_expired"). With
+    // callApollo's precision-preserving parse (see enrichPerson above),
+    // the id passed in here should always be well-formed, so a 400 in
+    // practice now most likely means something upstream (frontend state,
+    // a stale cached id) is passing a corrupted or truncated value rather
+    // than this being expected/routine.
     return {
       status: 'error',
       message:
         res.status === 410
           ? 'This phone lookup result has expired (older than 30 days)'
-          : "Apollo isn't accepting phone lookups on this account right now (a known, account-level issue — not specific to this contact). Email reveal is unaffected.",
+          : "Apollo rejected this lookup id as malformed — try clicking Find phone again to start a fresh lookup.",
     };
   }
 

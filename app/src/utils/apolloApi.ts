@@ -144,12 +144,13 @@ export interface PhoneEnrichmentInfo {
 }
 
 /** GET /api/apollo/webhook/:requestId — polled after enrichPerson() with
- * reveal_phone_number:true, using the response's own phone_enrichment.
- * request_id. See server/src/apollo.ts's pollWebhookResult for the known,
- * unresolved issue with this specific id/endpoint combination on the
- * current account — surfaced to the UI as a graceful timeout, not a hard
- * crash, since it may start working without any code change once
- * resolved on Apollo's side. */
+ * reveal_phone_number:true, using the response's own top-level
+ * `request_id` — NOT `phone_enrichment.request_id`, which looks like it
+ * should be the right one but is a different, unrelated id that this
+ * endpoint always rejects. See server/src/apollo.ts's pollWebhookResult
+ * for how this was confirmed (a real JS number-precision bug, not an
+ * Apollo-side permission issue as first suspected) and enrichPerson for
+ * why the top-level id is the correct one to use. */
 export type PhonePollResult =
   | { status: 'processing'; retryAfterSeconds: number }
   | { status: 'ready'; phoneNumbers: Array<{ sanitized_number: string; status_cd?: string; confidence_cd?: string | null }> }
@@ -181,7 +182,7 @@ export function searchCompanies(
 
 export function enrichPerson(
   params: PeopleEnrichParams,
-): Promise<{ person: ApolloEnrichedPerson | null; phone_enrichment?: PhoneEnrichmentInfo }> {
+): Promise<{ person: ApolloEnrichedPerson | null; request_id?: string; phone_enrichment?: PhoneEnrichmentInfo }> {
   return localApiRequest('/api/apollo/people/enrich', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
