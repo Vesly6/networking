@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTableStore } from './store/useTableStore';
 import { useWorkspaceStore } from './store/useWorkspaceStore';
 import { useAuthStore } from './store/useAuthStore';
@@ -42,7 +42,22 @@ function App() {
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
 
+  // Guards against React StrictMode's dev-only mount→cleanup→mount
+  // double-invoke — without it, two overlapping initWorkspace() calls
+  // could both see zero tables (the first call's saveTable() for the
+  // auto-created "Table 1" hadn't landed yet when the second one checked)
+  // and each create their own "Table 1", leaving two duplicate tables
+  // after the very first load in dev. Reproduced directly: a real page
+  // reload against the Vite dev server left two "Table 1" sheet tabs;
+  // the same reload against a production build (no double-invoke) never
+  // did. Same fix CallsView already uses for its own StrictMode-only
+  // double-fire (hasAutoLoadedRef) — a ref survives the simulated
+  // unmount, so it only suppresses the fake double-call, not a genuine
+  // remount later.
+  const hasInitedWorkspaceRef = useRef(false);
   useEffect(() => {
+    if (hasInitedWorkspaceRef.current) return;
+    hasInitedWorkspaceRef.current = true;
     void initWorkspace();
   }, [initWorkspace]);
 

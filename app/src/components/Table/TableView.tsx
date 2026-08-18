@@ -41,6 +41,7 @@ import {
   MIN_ROW_HEIGHT,
   PRESET_COLORS,
   RECENT_COLORS_KEY,
+  TABLE_VIEW_STATE_KEY_PREFIX,
 } from '../../constants';
 
 interface TableViewProps {
@@ -52,6 +53,43 @@ type SortDirection = 'asc' | 'desc';
 interface CellPos {
   r: number;
   c: number;
+}
+type ViewSort = { columnId: string; direction: SortDirection } | null;
+
+// Search text and sort survive a full page reload (not just switching
+// tabs — see App.tsx's tab-panel comment for that half of "my work keeps
+// disappearing"), keyed per table id so a filter left over in one table
+// can never silently hide rows in a different one after a reload. Scroll
+// position and the active cell/range aren't included here — restoring
+// those meaningfully after an async table load, potentially against rows
+// that no longer exist, is a fair bit more machinery for less payoff than
+// the two things actually reported as "resetting to some default."
+function loadPersistedViewState(tableId: string | null): { search: string; sort: ViewSort } {
+  if (!tableId) return { search: '', sort: null };
+  try {
+    const raw = localStorage.getItem(`${TABLE_VIEW_STATE_KEY_PREFIX}${tableId}`);
+    if (!raw) return { search: '', sort: null };
+    const parsed = JSON.parse(raw) as { search?: unknown; sort?: unknown };
+    const search = typeof parsed.search === 'string' ? parsed.search : '';
+    const sort =
+      parsed.sort && typeof parsed.sort === 'object' && 'columnId' in parsed.sort && 'direction' in parsed.sort
+        ? (parsed.sort as { columnId: string; direction: SortDirection })
+        : null;
+    return { search, sort };
+  } catch {
+    return { search: '', sort: null };
+  }
+}
+
+function saveViewState(tableId: string | null, search: string, sort: ViewSort) {
+  if (!tableId) return;
+  try {
+    localStorage.setItem(`${TABLE_VIEW_STATE_KEY_PREFIX}${tableId}`, JSON.stringify({ search, sort }));
+  } catch {
+    // localStorage can throw (quota exceeded, private-browsing
+    // restrictions) — persistence here is a nice-to-have, not required
+    // for the table itself to keep working.
+  }
 }
 
 function loadRecentColors(): string[] {
@@ -71,6 +109,7 @@ function saveRecentColor(color: string) {
 }
 
 export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
+  const tableId = useTableStore((s) => s.tableId);
   const columns = useTableStore((s) => s.columns);
   const rows = useTableStore((s) => s.rows);
   const hiddenColumns = columns.filter((c) => c.hidden);
@@ -96,8 +135,11 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
   const canRedo = useTableStore((s) => s.redoStack.length > 0);
   const showToast = useToastStore((s) => s.show);
 
-  const [search, setSearch] = useState('');
-  const [sort, setSort] = useState<{ columnId: string; direction: SortDirection } | null>(null);
+  const [search, setSearch] = useState(() => loadPersistedViewState(tableId).search);
+  const [sort, setSort] = useState<ViewSort>(() => loadPersistedViewState(tableId).sort);
+  useEffect(() => {
+    saveViewState(tableId, search, sort);
+  }, [tableId, search, sort]);
   // note/contact cells expand into CellHoverEditor on click (see DataCell's
   // note/contact branch) — closed the same way every other popover in this
   // file is: `.table-view`'s onClick={closePopovers} below, or a click on

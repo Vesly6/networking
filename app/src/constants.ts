@@ -14,6 +14,12 @@ export const ADD_COLUMN_WIDTH = 40;
 
 export const RECENT_COLORS_KEY = 'cold-crm:recent-colors';
 
+/** Prefix for the per-table view-state key (search text, sort column) —
+ * see TableView.tsx's loadPersistedViewState/persist effect. Keyed by
+ * table id, appended at the call site, so a search left over in one
+ * table can never silently filter a different one after a reload. */
+export const TABLE_VIEW_STATE_KEY_PREFIX = 'cold-crm:table-view-state:';
+
 export const PRESET_COLORS = [
   '#fecaca',
   '#fed7aa',
