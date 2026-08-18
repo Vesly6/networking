@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 
 const FRAME_COUNT = 6;
-const FRAME_INTERVAL_MS = 90;
+const FRAME_INTERVAL_MS = 180; // 2x slower than the original 90ms, per feedback
 const FRAME_SRCS = Array.from({ length: FRAME_COUNT }, (_, i) => `/logo-anim/${i + 1}.png`);
 
 // Preloaded once, module-level — every <BrandLogo> instance (Workspace
