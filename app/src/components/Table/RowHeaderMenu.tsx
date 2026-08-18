@@ -17,10 +17,12 @@ interface RowHeaderMenuProps {
    * rather than silently inserting somewhere that doesn't match what's on
    * screen. */
   insertEnabled: boolean;
+  onCopy: () => void;
+  onPaste: () => void;
   onClose: () => void;
 }
 
-export function RowHeaderMenu({ x, y, rows, targetIds, insertEnabled, onClose }: RowHeaderMenuProps) {
+export function RowHeaderMenu({ x, y, rows, targetIds, insertEnabled, onCopy, onPaste, onClose }: RowHeaderMenuProps) {
   const insertRows = useTableStore((s) => s.insertRows);
   const removeRows = useTableStore((s) => s.removeRows);
   const addRow = useTableStore((s) => s.addRow);
@@ -58,6 +60,14 @@ export function RowHeaderMenu({ x, y, rows, targetIds, insertEnabled, onClose }:
           Add row
         </button>
       )}
+      <div className="context-menu-separator" />
+      <button type="button" className="context-menu-item" onClick={() => run(onCopy)}>
+        Copy row{plural}
+      </button>
+      <button type="button" className="context-menu-item" onClick={() => run(onPaste)}>
+        Paste
+      </button>
+      <div className="context-menu-separator" />
       <button
         type="button"
         className="context-menu-item context-menu-danger"

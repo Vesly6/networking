@@ -486,24 +486,158 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
   };
 
   // --- Copy / paste (Excel & Google Sheets interop via the system clipboard) ---
+  // buildGridTsv/applyPastedGrid are shared by two entry points: the native
+  // copy/paste DOM events below (Ctrl+C/Ctrl+V, driven by the cell range)
+  // and the row/column header menus' own Copy/Paste items (driven directly
+  // by targetIds, since a right-click doesn't update the cell range — see
+  // the note on handleRowContextMenu/handleColumnContextMenu).
+  const buildGridTsv = (rowList: Row[], colList: Column[]) => {
+    const grid: string[][] = [];
+    let cellCount = 0;
+    for (const row of rowList) {
+      const cells: string[] = [];
+      for (const col of colList) {
+        cells.push(row.cells[col.id] ?? '');
+        cellCount++;
+      }
+      grid.push(cells);
+    }
+    return { tsv: buildTsv(grid), cellCount };
+  };
+
+  const applyPastedGrid = (grid: string[][], anchor: CellPos, focus: CellPos) => {
+    if (grid.length === 0) return;
+    const spansMultiple = anchor.r !== focus.r || anchor.c !== focus.c;
+    const singleValue = grid.length === 1 && grid[0].length === 1 ? grid[0][0] : null;
+    const minR = Math.min(anchor.r, focus.r);
+    const minC = Math.min(anchor.c, focus.c);
+
+    const rowIdAt = (r: number): string => {
+      if (r < filteredSortedRows.length) return filteredSortedRows[r].id;
+      return addRow();
+    };
+
+    const updates: CellUpdate[] = [];
+    let skippedColumns = false;
+
+    if (singleValue !== null && spansMultiple) {
+      const maxR = Math.max(anchor.r, focus.r);
+      const maxC = Math.max(anchor.c, focus.c);
+      for (let r = minR; r <= maxR; r++) {
+        const rowId = rowIdAt(r);
+        for (let c = minC; c <= maxC; c++) {
+          if (c >= columns.length) {
+            skippedColumns = true;
+            continue;
+          }
+          updates.push({ rowId, columnId: columns[c].id, value: singleValue });
+        }
+      }
+    } else {
+      grid.forEach((rowValues, i) => {
+        const rowId = rowIdAt(minR + i);
+        rowValues.forEach((value, j) => {
+          const c = minC + j;
+          if (c >= columns.length) {
+            skippedColumns = true;
+            return;
+          }
+          updates.push({ rowId, columnId: columns[c].id, value });
+        });
+      });
+    }
+
+    // Pasting a value into a dropdown column that doesn't have it yet extends the option list
+    // instead of silently dropping the data.
+    const extrasByColumn = new Map<string, Set<string>>();
+    for (const u of updates) {
+      const col = columns.find((c) => c.id === u.columnId);
+      if (col?.type === 'dropdown' && u.value && !(col.options ?? []).includes(u.value)) {
+        const set = extrasByColumn.get(col.id) ?? new Set<string>();
+        set.add(u.value);
+        extrasByColumn.set(col.id, set);
+      }
+    }
+    for (const [columnId, extras] of extrasByColumn) {
+      const col = columns.find((c) => c.id === columnId)!;
+      setDropdownOptions(columnId, [...(col.options ?? []), ...extras]);
+    }
+
+    const truncatedCells = updateCells(updates);
+    const parts = [`Pasted ${updates.length} cell${updates.length === 1 ? '' : 's'}`];
+    if (truncatedCells > 0) parts.push(`${truncatedCells} truncated to the Excel limit`);
+    if (skippedColumns) parts.push('extra columns beyond the table were skipped');
+    showToast(parts.join(' · '));
+  };
+
+  // Row/column header menus' Copy — deliberately independent of rangeBounds:
+  // a right-click that lands outside the current selection only updates
+  // rowRangeAnchor/colRangeAnchor (see handleRowContextMenu below), not the
+  // cell range, so reading rangeBounds here could copy stale, unrelated
+  // cells instead of the rows/columns actually right-clicked.
+  const copyRowsToClipboard = async (targetIds: string[]) => {
+    const targetSet = new Set(targetIds);
+    const rowList = filteredSortedRows.filter((r) => targetSet.has(r.id));
+    const { tsv, cellCount } = buildGridTsv(rowList, columns);
+    try {
+      await navigator.clipboard.writeText(tsv);
+      showToast(`Copied ${targetIds.length} row${targetIds.length === 1 ? '' : 's'} (${cellCount} cell${cellCount === 1 ? '' : 's'})`);
+    } catch {
+      showToast('Could not copy — clipboard access was blocked');
+    }
+  };
+  const copyColumnsToClipboard = async (targetIds: string[]) => {
+    const targetSet = new Set(targetIds);
+    const colList = columns.filter((c) => targetSet.has(c.id));
+    const { tsv, cellCount } = buildGridTsv(filteredSortedRows, colList);
+    try {
+      await navigator.clipboard.writeText(tsv);
+      showToast(
+        `Copied ${targetIds.length} column${targetIds.length === 1 ? '' : 's'} (${cellCount} cell${cellCount === 1 ? '' : 's'})`,
+      );
+    } catch {
+      showToast('Could not copy — clipboard access was blocked');
+    }
+  };
+  const pasteAtRows = async (targetIds: string[]) => {
+    let text: string;
+    try {
+      text = await navigator.clipboard.readText();
+    } catch {
+      showToast("Could not read the clipboard — check your browser's clipboard permission");
+      return;
+    }
+    if (!text) return;
+    const targetSet = new Set(targetIds);
+    const firstIndex = filteredSortedRows.findIndex((r) => targetSet.has(r.id));
+    if (firstIndex < 0) return;
+    applyPastedGrid(parseTsv(text), { r: firstIndex, c: 0 }, { r: firstIndex, c: 0 });
+  };
+  const pasteAtColumns = async (targetIds: string[]) => {
+    let text: string;
+    try {
+      text = await navigator.clipboard.readText();
+    } catch {
+      showToast("Could not read the clipboard — check your browser's clipboard permission");
+      return;
+    }
+    if (!text) return;
+    const targetSet = new Set(targetIds);
+    const firstIndex = columns.findIndex((c) => targetSet.has(c.id));
+    if (firstIndex < 0) return;
+    applyPastedGrid(parseTsv(text), { r: 0, c: firstIndex }, { r: 0, c: firstIndex });
+  };
+
   useEffect(() => {
     const handleCopy = (e: ClipboardEvent) => {
       if (!withinTableFocus() || !rangeBounds) return;
       const { minR, maxR, minC, maxC } = rangeBounds;
       if (minR >= filteredSortedRows.length || minC >= columns.length) return;
       e.preventDefault();
-      const grid: string[][] = [];
-      let cellCount = 0;
-      for (let r = minR; r <= Math.min(maxR, filteredSortedRows.length - 1); r++) {
-        const row = filteredSortedRows[r];
-        const cells: string[] = [];
-        for (let c = minC; c <= Math.min(maxC, columns.length - 1); c++) {
-          cells.push(row.cells[columns[c].id] ?? '');
-          cellCount++;
-        }
-        grid.push(cells);
-      }
-      e.clipboardData?.setData('text/plain', buildTsv(grid));
+      const rowList = filteredSortedRows.slice(minR, Math.min(maxR, filteredSortedRows.length - 1) + 1);
+      const colList = columns.slice(minC, Math.min(maxC, columns.length - 1) + 1);
+      const { tsv, cellCount } = buildGridTsv(rowList, colList);
+      e.clipboardData?.setData('text/plain', tsv);
       showToast(`Copied ${cellCount} cell${cellCount === 1 ? '' : 's'}`);
     };
 
@@ -512,73 +646,7 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
       const text = e.clipboardData?.getData('text/plain');
       if (!text) return;
       e.preventDefault();
-
-      const grid = parseTsv(text);
-      if (grid.length === 0) return;
-
-      const anchor = rangeAnchor ?? rangeFocus;
-      const focus = rangeFocus;
-      const spansMultiple = anchor.r !== focus.r || anchor.c !== focus.c;
-      const singleValue = grid.length === 1 && grid[0].length === 1 ? grid[0][0] : null;
-      const minR = Math.min(anchor.r, focus.r);
-      const minC = Math.min(anchor.c, focus.c);
-
-      const rowIdAt = (r: number): string => {
-        if (r < filteredSortedRows.length) return filteredSortedRows[r].id;
-        return addRow();
-      };
-
-      const updates: CellUpdate[] = [];
-      let skippedColumns = false;
-
-      if (singleValue !== null && spansMultiple) {
-        const maxR = Math.max(anchor.r, focus.r);
-        const maxC = Math.max(anchor.c, focus.c);
-        for (let r = minR; r <= maxR; r++) {
-          const rowId = rowIdAt(r);
-          for (let c = minC; c <= maxC; c++) {
-            if (c >= columns.length) {
-              skippedColumns = true;
-              continue;
-            }
-            updates.push({ rowId, columnId: columns[c].id, value: singleValue });
-          }
-        }
-      } else {
-        grid.forEach((rowValues, i) => {
-          const rowId = rowIdAt(minR + i);
-          rowValues.forEach((value, j) => {
-            const c = minC + j;
-            if (c >= columns.length) {
-              skippedColumns = true;
-              return;
-            }
-            updates.push({ rowId, columnId: columns[c].id, value });
-          });
-        });
-      }
-
-      // Pasting a value into a dropdown column that doesn't have it yet extends the option list
-      // instead of silently dropping the data.
-      const extrasByColumn = new Map<string, Set<string>>();
-      for (const u of updates) {
-        const col = columns.find((c) => c.id === u.columnId);
-        if (col?.type === 'dropdown' && u.value && !(col.options ?? []).includes(u.value)) {
-          const set = extrasByColumn.get(col.id) ?? new Set<string>();
-          set.add(u.value);
-          extrasByColumn.set(col.id, set);
-        }
-      }
-      for (const [columnId, extras] of extrasByColumn) {
-        const col = columns.find((c) => c.id === columnId)!;
-        setDropdownOptions(columnId, [...(col.options ?? []), ...extras]);
-      }
-
-      const truncatedCells = updateCells(updates);
-      const parts = [`Pasted ${updates.length} cell${updates.length === 1 ? '' : 's'}`];
-      if (truncatedCells > 0) parts.push(`${truncatedCells} truncated to the Excel limit`);
-      if (skippedColumns) parts.push('extra columns beyond the table were skipped');
-      showToast(parts.join(' · '));
+      applyPastedGrid(parseTsv(text), rangeAnchor ?? rangeFocus, rangeFocus);
     };
 
     document.addEventListener('copy', handleCopy);
@@ -587,6 +655,15 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
       document.removeEventListener('copy', handleCopy);
       document.removeEventListener('paste', handlePaste);
     };
+    // applyPastedGrid is deliberately omitted below: it's a plain,
+    // unmemoized closure recreated every render (matching how this file
+    // handles helper functions elsewhere), and every reactive value it
+    // reads from — filteredSortedRows, columns, addRow, updateCells,
+    // setDropdownOptions, showToast — is already listed, so there's no
+    // actual staleness risk; adding it here would just make this effect
+    // tear down and resubscribe its listeners on every render instead of
+    // only when something it actually depends on changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rangeBounds, rangeAnchor, rangeFocus, filteredSortedRows, columns, addRow, updateCells, setDropdownOptions, showToast]);
 
   // Delete/Backspace on a selected cell (or range) clears its contents
@@ -1091,6 +1168,8 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
             columns={columns}
             targetIds={columnContextMenu.targetIds}
             onSort={(direction) => setSort({ columnId: columnContextMenu.targetIds[0], direction })}
+            onCopy={() => copyColumnsToClipboard(columnContextMenu.targetIds)}
+            onPaste={() => pasteAtColumns(columnContextMenu.targetIds)}
             onClose={() => setColumnContextMenu(null)}
           />
         )}
@@ -1101,6 +1180,8 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
             rows={filteredSortedRows}
             targetIds={rowContextMenu.targetIds}
             insertEnabled={rowDragEnabled}
+            onCopy={() => copyRowsToClipboard(rowContextMenu.targetIds)}
+            onPaste={() => pasteAtRows(rowContextMenu.targetIds)}
             onClose={() => setRowContextMenu(null)}
           />
         )}

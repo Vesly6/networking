@@ -13,10 +13,12 @@ interface ColumnHeaderMenuProps {
    * collapses it to just the clicked column first, matching Excel). */
   targetIds: string[];
   onSort: (direction: 'asc' | 'desc') => void;
+  onCopy: () => void;
+  onPaste: () => void;
   onClose: () => void;
 }
 
-export function ColumnHeaderMenu({ x, y, columns, targetIds, onSort, onClose }: ColumnHeaderMenuProps) {
+export function ColumnHeaderMenu({ x, y, columns, targetIds, onSort, onCopy, onPaste, onClose }: ColumnHeaderMenuProps) {
   const insertColumns = useTableStore((s) => s.insertColumns);
   const removeColumns = useTableStore((s) => s.removeColumns);
   const setColumnsHidden = useTableStore((s) => s.setColumnsHidden);
@@ -49,6 +51,14 @@ export function ColumnHeaderMenu({ x, y, columns, targetIds, onSort, onClose }: 
       <button type="button" className="context-menu-item" onClick={() => run(() => setColumnsHidden(targetIds, true))}>
         Hide column{plural}
       </button>
+      <div className="context-menu-separator" />
+      <button type="button" className="context-menu-item" onClick={() => run(onCopy)}>
+        Copy column{plural}
+      </button>
+      <button type="button" className="context-menu-item" onClick={() => run(onPaste)}>
+        Paste
+      </button>
+      <div className="context-menu-separator" />
       <button
         type="button"
         className="context-menu-item context-menu-danger"

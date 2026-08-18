@@ -455,6 +455,16 @@ export function CellHoverEditor({
                               ) : (
                                 field.value
                               )}
+                              {field.kind === 'name' && (
+                                <button
+                                  type="button"
+                                  className="cell-hover-contact-copy"
+                                  title="Copy name"
+                                  onClick={() => void copyText(field.value, 'Name')}
+                                >
+                                  📋
+                                </button>
+                              )}
                               {field.kind === 'phone' && (
                                 <button
                                   type="button"
