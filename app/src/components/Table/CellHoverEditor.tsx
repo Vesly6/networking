@@ -42,11 +42,21 @@ const MARGIN = 8;
 
 const EMPTY_CONTACT_FIELDS: ContactFormFields = { firstName: '', lastName: '', position: '', email: '', phone: '' };
 
-// Quick-log buttons for the common one-word entries in a call workflow
-// ("sent an email", "had a meeting") — each just adds a new dated note
-// entry with this exact text, same as typing it into "Add a note…" and
-// hitting Enter, just faster for the entries logged constantly.
-const NOTE_TAGS = ['El. paštas', 'El. laiško tęsinys', 'Susitikimas', 'Skambučio tęsinys'];
+// Quick-log buttons for the common entries in a call/sales workflow (sent
+// an email, scheduled a meeting) — each just adds a new dated comment
+// entry with this exact text, same as typing it into "Pridėti komentarą…"
+// and hitting Enter, just faster for the entries logged constantly. Each
+// carries its own muted (never bright) background so the tags are visually
+// distinct at a glance in the history list below.
+const NOTE_TAGS: Array<{ label: string; color: string }> = [
+  { label: 'Laiškas', color: '#e3ecf7' },
+  { label: 'Laiško priminimas', color: '#e1f0ef' },
+  { label: 'Pasiūlymas', color: '#e5f0e3' },
+  { label: 'Pasiūlymo priminimas', color: '#f3f0dd' },
+  { label: 'Susitikimas suderintas', color: '#eee3f3' },
+  { label: 'Susitikimas įvykdytas', color: '#f5e3ec' },
+  { label: 'Skambutis', color: '#f6e9dd' },
+];
 
 // Temporarily disabled on explicit request — kept (not deleted) since
 // callContact/requestCallback are meant to come back, not go away for
@@ -293,8 +303,14 @@ export function CellHoverEditor({
           />
           <div className="cell-hover-tags">
             {NOTE_TAGS.map((tag) => (
-              <button type="button" key={tag} className="cell-hover-tag" onClick={() => onAddNoteEntry(tag)}>
-                {tag}
+              <button
+                type="button"
+                key={tag.label}
+                className="cell-hover-tag"
+                style={{ backgroundColor: tag.color }}
+                onClick={() => onAddNoteEntry(tag.label)}
+              >
+                {tag.label}
               </button>
             ))}
           </div>
