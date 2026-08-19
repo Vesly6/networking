@@ -502,7 +502,27 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
   };
 
 
-  const rowDragEnabled = sort === null && search.trim() === '';
+  // Search still blocks drag — a search-filtered view isn't the table's
+  // real row order, so "drag to position N" wouldn't mean anything stable
+  // once the search clears. Sort no longer blocks it: handleRowDrop/
+  // handleRowDropAtEnd splice the drop directly into sortSnapshotRef's
+  // frozen order (spliceSortSnapshot, below) immediately after moveRows,
+  // so a drag while sorted updates both the real `rows` order and the
+  // visible sorted position in the same tick — matching Excel/Sheets,
+  // where a manual drag while sorted is allowed and just repositions the
+  // row in the current view. This was a real, reported complaint: on the
+  // production site, dragging a row while sorted by Status silently did
+  // nothing, which only became clear once the user sent a screenshot of
+  // the exact sorted view they were stuck in.
+  const rowDragEnabled = search.trim() === '';
+  // "Insert N rows above/below" is a different action from dragging an
+  // existing row — inserting a brand-new row has no id yet to splice into
+  // sortSnapshotRef, so a new row would land at the *end* of the sorted
+  // view (filteredSortedRows' own "append leftovers" fallback) instead of
+  // the position the menu implied, regardless of any drag fix. Keeping
+  // this gated on sort===null avoids that mismatch; only plain drag of an
+  // *existing* row got the fix above.
+  const rowInsertEnabled = sort === null && search.trim() === '';
 
   // --- Row-header (number) range selection: click / shift+click / drag ---
   const selectedRowIds = useMemo(() => {
@@ -1290,6 +1310,25 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
     setDragRowIds(ids);
     e.dataTransfer.effectAllowed = 'move';
   };
+  // While sort is active, filteredSortedRows renders from the frozen
+  // sortSnapshotRef.current.order rather than recomputing live (see the
+  // big comment above sortSnapshotRef's declaration) — so moveRows() alone
+  // correctly updates the underlying rows' `order` field, but the visible
+  // position wouldn't reflect the drop until sort was toggled off and back
+  // on. This splices the dragged id(s) out of their old slot in that same
+  // frozen list and into the new one, using the identical "insert
+  // immediately before targetId, or append at the end if targetId is
+  // null" semantics moveRows itself uses — so the two always agree.
+  const spliceSortSnapshot = (draggedIds: string[], targetId: string | null) => {
+    const snap = sortSnapshotRef.current;
+    if (!snap) return;
+    const draggedSet = new Set(draggedIds);
+    const remaining = snap.order.filter((id) => !draggedSet.has(id));
+    let insertAt = targetId === null ? remaining.length : remaining.indexOf(targetId);
+    if (insertAt === -1) insertAt = remaining.length;
+    remaining.splice(insertAt, 0, ...draggedIds);
+    sortSnapshotRef.current = { ...snap, order: remaining };
+  };
   const dropRowIndexFromEvent = (e: DragEvent, rowIndex: number) => {
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const after = e.clientY > rect.top + rect.height / 2;
@@ -1308,6 +1347,7 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
       const { targetIndex } = dropRowIndexFromEvent(e, rowIndex);
       const target = targetIndex < filteredSortedRows.length ? filteredSortedRows[targetIndex] : null;
       moveRows(dragRowIds, target ? target.id : null);
+      spliceSortSnapshot(dragRowIds, target ? target.id : null);
       pendingRowSelectionSyncRef.current = dragRowIds;
     }
     setDragRowIds(null);
@@ -1318,6 +1358,7 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
     e.preventDefault();
     if (dragRowIds) {
       moveRows(dragRowIds, null);
+      spliceSortSnapshot(dragRowIds, null);
       pendingRowSelectionSyncRef.current = dragRowIds;
     }
     setDragRowIds(null);
@@ -1640,7 +1681,7 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
             y={rowContextMenu.y}
             rows={filteredSortedRows}
             targetIds={rowContextMenu.targetIds}
-            insertEnabled={rowDragEnabled}
+            insertEnabled={rowInsertEnabled}
             onCopy={() => copyRowsToClipboard(rowContextMenu.targetIds)}
             onPaste={() => pasteAtRows(rowContextMenu.targetIds)}
             onClose={() => setRowContextMenu(null)}
@@ -1811,7 +1852,7 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
                   >
                     <td
                       className="row-gutter"
-                      title={rowDragEnabled ? undefined : 'Išjunkite rikiavimą/paiešką, kad galėtumėte vilkti eilutes'}
+                      title={rowDragEnabled ? undefined : 'Išjunkite paiešką, kad galėtumėte vilkti eilutes'}
                       onContextMenu={(e) => handleRowContextMenu(e, row, index)}
                     >
                       <div className="row-gutter-inner">
@@ -1825,14 +1866,14 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
                           // to drag just silently does nothing, which reads
                           // as "the drag feature doesn't work" rather than
                           // "it's off right now because of the active
-                          // sort/search." The row-gutter <td>'s own title
+                          // search." The row-gutter <td>'s own title
                           // already explains this, but only as a native
                           // hover tooltip — easy to miss when you're
                           // actively trying to drag, not hovering and
                           // waiting. This fires the same explanation as an
                           // immediate toast on the actual attempt.
                           onMouseDown={() => {
-                            if (!rowDragEnabled) showToast('Išjunkite rikiavimą arba paiešką, kad galėtumėte vilkti eilutes');
+                            if (!rowDragEnabled) showToast('Išjunkite paiešką, kad galėtumėte vilkti eilutes');
                           }}
                           title="Vilkite, kad pakeistumėte eilučių tvarką"
                         >
