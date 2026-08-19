@@ -59,9 +59,31 @@ const SUMMARIZE_MODEL = 'gpt-4o-mini';
 // person reading this is working the account in Lithuanian day to day,
 // so a summary in a different language than the call itself is a worse
 // fit than the original "faster skim" reasoning assumed.
-const SUMMARIZE_SYSTEM_PROMPT = `You summarize Lithuanian B2B sales/cold-call transcripts for a CRM record. The call may be entirely in Lithuanian, or code-switch into English business jargon mid-sentence — read all of it.
-Write a concise summary IN LITHUANIAN, 3-5 sentences: what was discussed, the prospect's reaction/interest level, and any agreed next steps or objections raised. If the call was very short or nothing meaningful was said (e.g. wrong number, immediate hangup), say so plainly in one sentence instead of padding it out.
-Output ONLY the summary text, in Lithuanian — no headers, no bullet points, no preamble.`;
+//
+// The fixed "3-5 sentences" cap this used to have was a real, reported
+// problem: on a genuinely long, detail-dense call it compressed down to a
+// few generic sentences — "summary came out to 5-10% of what was actually
+// discussed," in the user's own words. Removing the cap and switching to
+// one-bullet-per-topic (below) helped a lot, but wasn't the whole fix: a
+// second round of the exact same real call still silently dropped an
+// entire topic (a several-exchange-long tangent about possibly expanding
+// into Indonesia/Vietnam/South America) even though everything else was
+// covered in good detail. The model was implicitly triaging "important
+// vs. skippable" mid-summary and treating an exploratory, hedged tangent
+// (the caller couldn't fully answer it, said a sales manager would know
+// more) as skippable — reproduced directly, confirmed against the same
+// transcript twice. The fix is the "first inventory, then write" structure
+// below, plus an explicit instruction that hedged/hypothetical/tangential
+// exchanges still count, plus temperature 0 (was 0.3) so this doesn't
+// vary run to run on the same input.
+const SUMMARIZE_SYSTEM_PROMPT = `You summarize Lithuanian B2B sales/cold-call transcripts for a CRM record. The call may be entirely in Lithuanian, or code-switch into English business jargon mid-sentence — read all of it, start to finish, before writing anything.
+
+Step 1 (internal, do not output): mentally walk through the call in chronological order and list every distinct topic, question, or exchange that came up — including ones that were brief, tangential, speculative/hypothetical, or that the speaker explicitly said they couldn't fully answer (e.g. "would you consider expanding into region X", "I don't have experience there but let me check", a side-question that trailed off). A topic being short, uncertain, or not fully resolved is NOT a reason to leave it out — it still gets its own bullet in step 2. Do not silently triage topics as "important" vs "skippable"; every distinct thing that was actually raised belongs in the summary.
+
+Step 2 (output): write the summary IN LITHUANIAN as bullet points (each starting with "- "), one bullet per topic/exchange from your step-1 list, in the same chronological order they came up in the call. There is no fixed bullet count and no length cap — a short, thin call gets few bullets (or the one-sentence fallback below); a call with 10, 15, or more distinct exchanges should get that many bullets, not a handful that only gesture at the busiest ones. For each bullet, keep every concrete detail exact — names, companies, roles, numbers, percentages, money amounts, dates, named locations/countries/regions — never round a number, generalize a name, or drop a detail that was actually said.
+
+If the call was very short or nothing meaningful was said (e.g. wrong number, immediate hangup, pure voicemail), skip the bullet format and write one plain sentence instead.
+Output ONLY the final summary from step 2 (bullets or the one-sentence fallback) — no headers, no preamble, no closing remarks, and none of your step-1 working notes.`;
 
 /** Same cheap chat-completion model as parseContactText — this is a
  * derived, secondary artifact of an already-paid-for transcript, not a
@@ -82,7 +104,12 @@ export async function summarizeCall(transcriptText: string): Promise<{ summary: 
           { role: 'system', content: SUMMARIZE_SYSTEM_PROMPT },
           { role: 'user', content: transcriptText },
         ],
-        temperature: 0.3,
+        // 0, not 0.3 — this used to visibly vary run to run on the exact
+        // same transcript (confirmed: one run covered the Indonesia
+        // tangent, a second one on the same input dropped it entirely).
+        // Lower variance matters more here than any benefit more
+        // "creative" phrasing would add to a factual summary.
+        temperature: 0,
       }),
     });
   } catch {

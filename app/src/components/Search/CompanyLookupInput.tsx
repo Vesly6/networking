@@ -4,7 +4,11 @@ import type { ApolloCompany } from '../../utils/apolloApi';
 
 interface CompanyLookupInputProps {
   value: string[];
-  onChange: (organizationIds: string[]) => void;
+  /** `domains` is every resolved company's primary_domain, for whichever
+   * of `value`'s ids actually has one — see the doc comment below for why
+   * the caller should prefer sending *this* to Apollo over the ids
+   * themselves. */
+  onChange: (organizationIds: string[], domains: string[]) => void;
 }
 
 /** People Search has no free-text company-name parameter — confirmed
@@ -16,13 +20,28 @@ interface CompanyLookupInputProps {
  * per lookup — same cost already shown on the Companies tab), fired only
  * on Enter/the 🔍 button, never per keystroke, so a credit is never spent
  * without an explicit ask — same reasoning as the separate Find email/
- * Find phone buttons. Picking a result adds its id to organization_ids. */
+ * Find phone buttons.
+ *
+ * Picking a result used to add only its id to organization_ids — a real,
+ * confirmed bug (reported directly: searching "Softera Baltic" this way
+ * found the company but then 0 people, even though the same company by
+ * domain finds 82). Verified directly against the live API for several
+ * real companies: organization_ids alone returns 0 for a lot of genuinely
+ * real companies (their Apollo org record exists but isn't fully linked
+ * to their people internally), while the same company's domain hits a far
+ * more complete index (Vinted: 0 via id vs 2140 via domain; Softera
+ * Baltic 0 vs 82; SEB 0 vs 13097). This now also tracks each picked
+ * company's primary_domain and hands it back via onChange, so the caller
+ * can search by domain (reliable) instead of id (unreliable) whenever one
+ * is available — id is kept as a last-resort fallback only for the rare
+ * company with no domain on file at all. */
 export function CompanyLookupInput({ value, onChange }: CompanyLookupInputProps) {
   const [text, setText] = useState('');
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState<ApolloCompany[]>([]);
   const [error, setError] = useState('');
   const [names, setNames] = useState<Record<string, string>>({});
+  const [domainsById, setDomainsById] = useState<Record<string, string>>({});
 
   const runLookup = async () => {
     const q = text.trim();
@@ -42,12 +61,18 @@ export function CompanyLookupInput({ value, onChange }: CompanyLookupInputProps)
 
   const addCompany = (c: ApolloCompany) => {
     if (!c.id || value.includes(c.id)) return;
-    onChange([...value, c.id]);
+    const nextIds = [...value, c.id];
+    const nextDomainsById = c.primary_domain ? { ...domainsById, [c.id]: c.primary_domain } : domainsById;
     setNames((n) => ({ ...n, [c.id]: c.name ?? c.id }));
+    setDomainsById(nextDomainsById);
+    onChange(nextIds, nextIds.map((id) => nextDomainsById[id]).filter((d): d is string => !!d));
     setResults([]);
     setText('');
   };
-  const removeCompany = (id: string) => onChange(value.filter((x) => x !== id));
+  const removeCompany = (id: string) => {
+    const nextIds = value.filter((x) => x !== id);
+    onChange(nextIds, nextIds.map((i) => domainsById[i]).filter((d): d is string => !!d));
+  };
 
   return (
     <div className="company-lookup">

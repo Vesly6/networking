@@ -13,10 +13,15 @@ function formatDuration(seconds: number): string {
 interface CallRowProps {
   call: CallRecord;
   matchedRow?: { rowId: string; label: string };
+  /** A specific person (not just the row's own Phone column) whose
+   * Contacts-entry number matched this call — see CallsView.tsx's
+   * phoneToContact for how this is resolved. */
+  matchedContact?: { rowId: string; columnId: string; contactId: string; label: string };
   onJumpToRow: (rowId: string) => void;
+  onJumpToContact: (rowId: string, columnId: string, contactId: string) => void;
 }
 
-export function CallRow({ call, matchedRow, onJumpToRow }: CallRowProps) {
+export function CallRow({ call, matchedRow, matchedContact, onJumpToRow, onJumpToContact }: CallRowProps) {
   const showToast = useToastStore((s) => s.show);
   const fetchRecording = useCallsStore((s) => s.fetchRecording);
   const recordingLink = useCallsStore((s) => s.recordingLinks[call.call_id]);
@@ -61,6 +66,24 @@ export function CallRow({ call, matchedRow, onJumpToRow }: CallRowProps) {
             {call.otherParty}
             <button type="button" className="calls-copy-btn" title="Kopijuoti numerį" onClick={() => void copy(call.otherParty, 'Numeris')}>
               📋 Kopijuoti
+            </button>
+            <button
+              type="button"
+              className="calls-copy-btn"
+              title="Ieškoti šio numerio kontaktuose"
+              onClick={() => {
+                if (matchedContact) {
+                  onJumpToContact(matchedContact.rowId, matchedContact.columnId, matchedContact.contactId);
+                  showToast(`Rasta: ${matchedContact.label}`);
+                } else if (matchedRow) {
+                  onJumpToRow(matchedRow.rowId);
+                  showToast(`Rasta įmonė: ${matchedRow.label} (konkretus kontaktas nerastas)`);
+                } else {
+                  showToast('Šis numeris nerastas jūsų kontaktuose');
+                }
+              }}
+            >
+              🔍 Ieškoti
             </button>
             {matchedRow && (
               <button
@@ -138,7 +161,16 @@ export function CallRow({ call, matchedRow, onJumpToRow }: CallRowProps) {
                   toggles, so it rides along with showTranscript entirely. */}
               {transcript.summary && (
                 <div className="calls-summary-block">
-                  <div className="calls-summary-label">🤖 Santrauka</div>
+                  <div className="calls-summary-label-row">
+                    <div className="calls-summary-label">🤖 Santrauka</div>
+                    <button
+                      type="button"
+                      className="calls-copy-btn"
+                      onClick={() => void copy(transcript.summary!, 'Santrauka')}
+                    >
+                      📋 Kopijuoti
+                    </button>
+                  </div>
                   {transcript.summary}
                 </div>
               )}

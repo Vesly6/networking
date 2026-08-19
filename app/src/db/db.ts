@@ -138,6 +138,15 @@ export async function saveTranscription(record: TranscriptionRecord): Promise<vo
   await db.put('transcriptions', record);
 }
 
+/** Every cached transcription/summary, unfiltered — used by the Comment
+ * editor's "last summary" quick-tag to find the single most-recently-saved
+ * one (by `savedAt`) without needing to know its `callId` up front. Same
+ * bulk-read shape as getAllCallStats() below. */
+export async function getAllTranscriptions(): Promise<TranscriptionRecord[]> {
+  const db = await getDB();
+  return db.getAll('transcriptions');
+}
+
 /** Bulk upsert, same pattern as saveRows() — one transaction, not one
  * put-and-await per record. Called after every successful Zadarma fetch
  * (both the manual "Load calls" list and the background history sync

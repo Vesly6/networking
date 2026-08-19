@@ -284,6 +284,15 @@ function DataCellImpl({
       <td
         className={cellClassName}
         style={cellStyle}
+        // Only note/contact cells need these — they're the one place
+        // something outside the normal click flow (the Calls tab's "find
+        // this caller in my contacts" jump) needs to locate a specific
+        // cell's real DOM node to use as CellHoverEditor's popup anchor,
+        // for a row that may not even be mounted yet (virtualized) at the
+        // time the jump is requested. See TableView.tsx's focusContact
+        // effect for the query that reads these back.
+        data-row-id={row.id}
+        data-column-id={column.id}
         onMouseDown={onSelect}
         onMouseEnter={onExtend}
         onClick={(e) => {

@@ -1,9 +1,11 @@
 import { useState } from 'react';
 import type { CompanySearchParams } from '../../utils/apolloApi';
 import { ComboBoxMultiInput } from './ComboBoxMultiInput';
+import { FilterAccordionSection } from './FilterAccordionSection';
 import { COUNTRIES } from '../../utils/countries';
 import { JOB_TITLES } from '../../utils/jobTitles';
 import { EMPLOYEE_RANGES } from '../../utils/employeeRanges';
+import { INDUSTRIES } from '../../utils/industries';
 
 interface CompanyFilterFormProps {
   params: CompanySearchParams;
@@ -20,17 +22,30 @@ const splitList = (v: string): string[] | undefined => {
   return parts.length > 0 ? parts : undefined;
 };
 const joinList = (v?: string[]) => (v ?? []).join(', ');
+const count = (...vals: Array<unknown>) => vals.filter((v) => v !== undefined && v !== null && v !== '').length;
 
-/** Same basic/advanced split as PeopleFilterForm, mirroring apollo.io's own
- * pattern: Company name, Domains, Location, Employee count, Industry
- * keywords shown by default; Exclude-locations, Revenue, Technology,
- * Funding, and Job postings behind "Show more filters". Every field maps
- * to a real, documented /mixed_companies/search parameter — only the
- * grouping changed, nothing invented. Unlike people search, each page of
- * this one costs 1 Apollo credit, called out explicitly in the submit
- * button rather than hidden. */
+/** One collapsible section per filter group — on explicit request, to match
+ * Apollo's own Company Search sidebar (a list of collapsed rows like
+ * "Location", "# Employees", "Industry & Keywords", each expanding only
+ * when clicked — see FilterAccordionSection.tsx). Every field here still
+ * maps to a real, documented /mixed_companies/search parameter (confirmed
+ * against Apollo's own published API reference, docs.apollo.io/reference/
+ * organization-search — not invented); only the layout matches Apollo's
+ * product now, not just the field list. This also answers a real question
+ * asked about parity with Apollo's own UI: their product sidebar has 20+
+ * categories (SIC and NAICS, Buying Intent, AI Filters, Signals, Website
+ * Visitors, Lookalikes, …) that simply aren't parameters on the public
+ * /organization-search endpoint at all — verified directly against
+ * Apollo's own API docs, which list *only* `q_organization_keyword_tags`
+ * for anything industry-related. Those categories are Apollo's own product
+ * UI querying internal, non-public endpoints (and/or gated behind specific
+ * plans) — there's no way to wire them up through the API this app
+ * actually has access to, so building UI for them would just be
+ * decorative controls that silently filter nothing. "Industry & Keywords"
+ * below is the one real match — same param, now presented as the same
+ * kind of removable-chip multi-value field Apollo's own UI uses for it,
+ * instead of a plain comma-separated text box. */
 export function CompanyFilterForm({ params, onChange, onSubmit, loading }: CompanyFilterFormProps) {
-  const [showMore, setShowMore] = useState(false);
   const [employeeRanges, setEmployeeRanges] = useState<string[]>(params.organization_num_employees_ranges ?? []);
   const set = <K extends keyof CompanySearchParams>(key: K, value: CompanySearchParams[K]) =>
     onChange({ ...params, [key]: value });
@@ -48,7 +63,7 @@ export function CompanyFilterForm({ params, onChange, onSubmit, loading }: Compa
         onSubmit();
       }}
     >
-      <div className="search-filter-group">
+      <FilterAccordionSection title="Įmonė" activeCount={count(params.q_organization_name, ...(params.q_organization_domains_list ?? []))} defaultOpen>
         <label className="search-filter-field">
           <span>Įmonės pavadinimas (dalinė atitiktis)</span>
           <input value={params.q_organization_name ?? ''} onChange={(e) => set('q_organization_name', e.target.value || undefined)} />
@@ -61,6 +76,9 @@ export function CompanyFilterForm({ params, onChange, onSubmit, loading }: Compa
             onChange={(e) => set('q_organization_domains_list', splitList(e.target.value))}
           />
         </label>
+      </FilterAccordionSection>
+
+      <FilterAccordionSection title="Lokacija" activeCount={(params.organization_locations?.length ?? 0) + (params.organization_not_locations?.length ?? 0)}>
         <div className="search-filter-field">
           <span>Būstinės vieta</span>
           <ComboBoxMultiInput
@@ -70,7 +88,17 @@ export function CompanyFilterForm({ params, onChange, onSubmit, loading }: Compa
           />
         </div>
         <div className="search-filter-field">
-          <span>Darbuotojų skaičius</span>
+          <span>Neįtraukti vietų</span>
+          <ComboBoxMultiInput
+            value={params.organization_not_locations ?? []}
+            onChange={(v) => set('organization_not_locations', v.length > 0 ? v : undefined)}
+            suggestions={COUNTRIES}
+          />
+        </div>
+      </FilterAccordionSection>
+
+      <FilterAccordionSection title="# Darbuotojai" activeCount={employeeRanges.length}>
+        <div className="search-filter-field">
           <div className="search-filter-chips">
             {EMPLOYEE_RANGES.map((r) => (
               <button
@@ -84,179 +112,188 @@ export function CompanyFilterForm({ params, onChange, onSubmit, loading }: Compa
             ))}
           </div>
         </div>
-        <label className="search-filter-field">
-          <span>Raktažodžiai / pramonės šaka</span>
-          <input
+      </FilterAccordionSection>
+
+      <FilterAccordionSection title="Industry & Keywords" activeCount={params.q_organization_keyword_tags?.length ?? 0}>
+        <div className="search-filter-field">
+          <span>Industrija / raktažodžiai</span>
+          <ComboBoxMultiInput
             placeholder="software, marketing, saas"
-            value={joinList(params.q_organization_keyword_tags)}
-            onChange={(e) => set('q_organization_keyword_tags', splitList(e.target.value))}
+            value={params.q_organization_keyword_tags ?? []}
+            onChange={(v) => set('q_organization_keyword_tags', v.length > 0 ? v : undefined)}
+            suggestions={INDUSTRIES}
+          />
+        </div>
+      </FilterAccordionSection>
+
+      <FilterAccordionSection title="Pajamos" activeCount={count(params.revenue_range?.min, params.revenue_range?.max)}>
+        <div className="search-filter-field search-filter-range">
+          <span>Pajamų intervalas ($)</span>
+          <div className="search-filter-range-inputs">
+            <input
+              type="number"
+              placeholder="min"
+              value={params.revenue_range?.min ?? ''}
+              onChange={(e) => set('revenue_range', { ...params.revenue_range, min: e.target.value ? Number(e.target.value) : undefined })}
+            />
+            <input
+              type="number"
+              placeholder="max"
+              value={params.revenue_range?.max ?? ''}
+              onChange={(e) => set('revenue_range', { ...params.revenue_range, max: e.target.value ? Number(e.target.value) : undefined })}
+            />
+          </div>
+        </div>
+      </FilterAccordionSection>
+
+      <FilterAccordionSection
+        title="Technologijos"
+        activeCount={count(
+          ...(params.currently_using_all_of_technology_uids ?? []),
+          ...(params.currently_using_any_of_technology_uids ?? []),
+          ...(params.currently_not_using_any_of_technology_uids ?? []),
+        )}
+      >
+        <label className="search-filter-field">
+          <span>Naudoja VISAS iš</span>
+          <input
+            value={joinList(params.currently_using_all_of_technology_uids)}
+            onChange={(e) => set('currently_using_all_of_technology_uids', splitList(e.target.value))}
           />
         </label>
-      </div>
+        <label className="search-filter-field">
+          <span>Naudoja BENT VIENĄ iš</span>
+          <input
+            value={joinList(params.currently_using_any_of_technology_uids)}
+            onChange={(e) => set('currently_using_any_of_technology_uids', splitList(e.target.value))}
+          />
+        </label>
+        <label className="search-filter-field">
+          <span>NENAUDOJA nė vienos iš</span>
+          <input
+            value={joinList(params.currently_not_using_any_of_technology_uids)}
+            onChange={(e) => set('currently_not_using_any_of_technology_uids', splitList(e.target.value))}
+          />
+        </label>
+      </FilterAccordionSection>
 
-      <button type="button" className="search-show-more-toggle" onClick={() => setShowMore((v) => !v)}>
-        {showMore ? '− Slėpti papildomus filtrus' : '+ Rodyti daugiau filtrų'}
-      </button>
-
-      {showMore && (
-        <>
-          <div className="search-filter-group">
-            <div className="search-filter-group-title">Organizacija</div>
-            <div className="search-filter-field">
-              <span>Neįtraukti vietų</span>
-              <ComboBoxMultiInput
-                value={params.organization_not_locations ?? []}
-                onChange={(v) => set('organization_not_locations', v.length > 0 ? v : undefined)}
-                suggestions={COUNTRIES}
-              />
-            </div>
-            <div className="search-filter-field search-filter-range">
-              <span>Pajamų intervalas ($)</span>
-              <div className="search-filter-range-inputs">
-                <input
-                  type="number"
-                  placeholder="min"
-                  value={params.revenue_range?.min ?? ''}
-                  onChange={(e) => set('revenue_range', { ...params.revenue_range, min: e.target.value ? Number(e.target.value) : undefined })}
-                />
-                <input
-                  type="number"
-                  placeholder="max"
-                  value={params.revenue_range?.max ?? ''}
-                  onChange={(e) => set('revenue_range', { ...params.revenue_range, max: e.target.value ? Number(e.target.value) : undefined })}
-                />
-              </div>
-            </div>
+      <FilterAccordionSection
+        title="Finansavimas"
+        activeCount={count(
+          params.latest_funding_amount_range?.min,
+          params.latest_funding_amount_range?.max,
+          params.total_funding_range?.min,
+          params.total_funding_range?.max,
+          params.latest_funding_date_range?.min,
+          params.latest_funding_date_range?.max,
+        )}
+      >
+        <div className="search-filter-field search-filter-range">
+          <span>Paskutinio finansavimo suma ($)</span>
+          <div className="search-filter-range-inputs">
+            <input
+              type="number"
+              placeholder="min"
+              value={params.latest_funding_amount_range?.min ?? ''}
+              onChange={(e) =>
+                set('latest_funding_amount_range', {
+                  ...params.latest_funding_amount_range,
+                  min: e.target.value ? Number(e.target.value) : undefined,
+                })
+              }
+            />
+            <input
+              type="number"
+              placeholder="max"
+              value={params.latest_funding_amount_range?.max ?? ''}
+              onChange={(e) =>
+                set('latest_funding_amount_range', {
+                  ...params.latest_funding_amount_range,
+                  max: e.target.value ? Number(e.target.value) : undefined,
+                })
+              }
+            />
           </div>
-
-          <div className="search-filter-group">
-            <div className="search-filter-group-title">Technologijos</div>
-            <label className="search-filter-field">
-              <span>Naudoja VISAS iš</span>
-              <input
-                value={joinList(params.currently_using_all_of_technology_uids)}
-                onChange={(e) => set('currently_using_all_of_technology_uids', splitList(e.target.value))}
-              />
-            </label>
-            <label className="search-filter-field">
-              <span>Naudoja BENT VIENĄ iš</span>
-              <input
-                value={joinList(params.currently_using_any_of_technology_uids)}
-                onChange={(e) => set('currently_using_any_of_technology_uids', splitList(e.target.value))}
-              />
-            </label>
-            <label className="search-filter-field">
-              <span>NENAUDOJA nė vienos iš</span>
-              <input
-                value={joinList(params.currently_not_using_any_of_technology_uids)}
-                onChange={(e) => set('currently_not_using_any_of_technology_uids', splitList(e.target.value))}
-              />
-            </label>
+        </div>
+        <div className="search-filter-field search-filter-range">
+          <span>Bendra finansavimo suma ($)</span>
+          <div className="search-filter-range-inputs">
+            <input
+              type="number"
+              placeholder="min"
+              value={params.total_funding_range?.min ?? ''}
+              onChange={(e) => set('total_funding_range', { ...params.total_funding_range, min: e.target.value ? Number(e.target.value) : undefined })}
+            />
+            <input
+              type="number"
+              placeholder="max"
+              value={params.total_funding_range?.max ?? ''}
+              onChange={(e) => set('total_funding_range', { ...params.total_funding_range, max: e.target.value ? Number(e.target.value) : undefined })}
+            />
           </div>
-
-          <div className="search-filter-group">
-            <div className="search-filter-group-title">Finansavimas</div>
-            <div className="search-filter-field search-filter-range">
-              <span>Paskutinio finansavimo suma ($)</span>
-              <div className="search-filter-range-inputs">
-                <input
-                  type="number"
-                  placeholder="min"
-                  value={params.latest_funding_amount_range?.min ?? ''}
-                  onChange={(e) =>
-                    set('latest_funding_amount_range', {
-                      ...params.latest_funding_amount_range,
-                      min: e.target.value ? Number(e.target.value) : undefined,
-                    })
-                  }
-                />
-                <input
-                  type="number"
-                  placeholder="max"
-                  value={params.latest_funding_amount_range?.max ?? ''}
-                  onChange={(e) =>
-                    set('latest_funding_amount_range', {
-                      ...params.latest_funding_amount_range,
-                      max: e.target.value ? Number(e.target.value) : undefined,
-                    })
-                  }
-                />
-              </div>
-            </div>
-            <div className="search-filter-field search-filter-range">
-              <span>Bendra finansavimo suma ($)</span>
-              <div className="search-filter-range-inputs">
-                <input
-                  type="number"
-                  placeholder="min"
-                  value={params.total_funding_range?.min ?? ''}
-                  onChange={(e) => set('total_funding_range', { ...params.total_funding_range, min: e.target.value ? Number(e.target.value) : undefined })}
-                />
-                <input
-                  type="number"
-                  placeholder="max"
-                  value={params.total_funding_range?.max ?? ''}
-                  onChange={(e) => set('total_funding_range', { ...params.total_funding_range, max: e.target.value ? Number(e.target.value) : undefined })}
-                />
-              </div>
-            </div>
-            <div className="search-filter-field search-filter-range">
-              <span>Paskutinio finansavimo data</span>
-              <div className="search-filter-range-inputs">
-                <input
-                  type="date"
-                  value={params.latest_funding_date_range?.min ?? ''}
-                  onChange={(e) => set('latest_funding_date_range', { ...params.latest_funding_date_range, min: e.target.value || undefined })}
-                />
-                <input
-                  type="date"
-                  value={params.latest_funding_date_range?.max ?? ''}
-                  onChange={(e) => set('latest_funding_date_range', { ...params.latest_funding_date_range, max: e.target.value || undefined })}
-                />
-              </div>
-            </div>
+        </div>
+        <div className="search-filter-field search-filter-range">
+          <span>Paskutinio finansavimo data</span>
+          <div className="search-filter-range-inputs">
+            <input
+              type="date"
+              value={params.latest_funding_date_range?.min ?? ''}
+              onChange={(e) => set('latest_funding_date_range', { ...params.latest_funding_date_range, min: e.target.value || undefined })}
+            />
+            <input
+              type="date"
+              value={params.latest_funding_date_range?.max ?? ''}
+              onChange={(e) => set('latest_funding_date_range', { ...params.latest_funding_date_range, max: e.target.value || undefined })}
+            />
           </div>
+        </div>
+      </FilterAccordionSection>
 
-          <div className="search-filter-group">
-            <div className="search-filter-group-title">Darbo skelbimai</div>
-            <div className="search-filter-field">
-              <span>Pareigos skelbimuose</span>
-              <ComboBoxMultiInput
-                value={params.q_organization_job_titles ?? []}
-                onChange={(v) => set('q_organization_job_titles', v.length > 0 ? v : undefined)}
-                suggestions={JOB_TITLES}
-              />
-            </div>
-            <div className="search-filter-field">
-              <span>Skelbimų vieta</span>
-              <ComboBoxMultiInput
-                value={params.organization_job_locations ?? []}
-                onChange={(v) => set('organization_job_locations', v.length > 0 ? v : undefined)}
-                suggestions={COUNTRIES}
-              />
-            </div>
-            <div className="search-filter-field search-filter-range">
-              <span>Skelbimo paskelbimo data</span>
-              <div className="search-filter-range-inputs">
-                <input
-                  type="date"
-                  value={params.organization_job_posted_at_range?.min ?? ''}
-                  onChange={(e) =>
-                    set('organization_job_posted_at_range', { ...params.organization_job_posted_at_range, min: e.target.value || undefined })
-                  }
-                />
-                <input
-                  type="date"
-                  value={params.organization_job_posted_at_range?.max ?? ''}
-                  onChange={(e) =>
-                    set('organization_job_posted_at_range', { ...params.organization_job_posted_at_range, max: e.target.value || undefined })
-                  }
-                />
-              </div>
-            </div>
+      <FilterAccordionSection
+        title="Darbo skelbimai"
+        activeCount={count(
+          ...(params.q_organization_job_titles ?? []),
+          ...(params.organization_job_locations ?? []),
+          params.organization_job_posted_at_range?.min,
+          params.organization_job_posted_at_range?.max,
+        )}
+      >
+        <div className="search-filter-field">
+          <span>Pareigos skelbimuose</span>
+          <ComboBoxMultiInput
+            value={params.q_organization_job_titles ?? []}
+            onChange={(v) => set('q_organization_job_titles', v.length > 0 ? v : undefined)}
+            suggestions={JOB_TITLES}
+          />
+        </div>
+        <div className="search-filter-field">
+          <span>Skelbimų vieta</span>
+          <ComboBoxMultiInput
+            value={params.organization_job_locations ?? []}
+            onChange={(v) => set('organization_job_locations', v.length > 0 ? v : undefined)}
+            suggestions={COUNTRIES}
+          />
+        </div>
+        <div className="search-filter-field search-filter-range">
+          <span>Skelbimo paskelbimo data</span>
+          <div className="search-filter-range-inputs">
+            <input
+              type="date"
+              value={params.organization_job_posted_at_range?.min ?? ''}
+              onChange={(e) =>
+                set('organization_job_posted_at_range', { ...params.organization_job_posted_at_range, min: e.target.value || undefined })
+              }
+            />
+            <input
+              type="date"
+              value={params.organization_job_posted_at_range?.max ?? ''}
+              onChange={(e) =>
+                set('organization_job_posted_at_range', { ...params.organization_job_posted_at_range, max: e.target.value || undefined })
+              }
+            />
           </div>
-        </>
-      )}
+        </div>
+      </FilterAccordionSection>
 
       <div className="search-filter-actions">
         <label className="search-filter-field search-filter-per-page">

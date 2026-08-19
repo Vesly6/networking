@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import cors from 'cors';
-import { ZadarmaApiError, getStatistics, requestRecording, requestCallback, getWebrtcKey } from './zadarma.js';
+import { ZadarmaApiError, getStatistics, requestRecording, requestCallback, getWebrtcKey, sendSms } from './zadarma.js';
 import { TranscriptionError, transcribeFromUrl } from './elevenlabs.js';
 import { ContactParseError, parseContactText, SummarizeError, summarizeCall } from './openai.js';
 import { AuthError, checkCredentials, issueToken, requireAuth } from './auth.js';
@@ -166,6 +166,27 @@ app.post(
       return;
     }
     const result = await requestCallback({ from, to });
+    res.json(result);
+  }),
+);
+
+// Sends a real SMS the instant it's called — no confirmation/dry-run layer
+// here on the server side, that's the frontend's job (a real, unrecoverable
+// side effect once this fires, same category as /api/callback above).
+// ZADARMA_SMS_CALLER_ID is optional: unset sends under the account's
+// default sender name; set it only to a sender id already verified in
+// Zadarma's own Sender ID settings, since an unverified one is rejected.
+app.post(
+  '/api/sms/send',
+  asyncHandler(async (req, res) => {
+    const number = typeof req.body?.number === 'string' ? req.body.number : undefined;
+    const message = typeof req.body?.message === 'string' ? req.body.message : undefined;
+    if (!number || !message) {
+      res.status(400).json({ error: 'Missing "number" or "message"' });
+      return;
+    }
+    const callerId = process.env.ZADARMA_SMS_CALLER_ID;
+    const result = await sendSms({ number, message, ...(callerId ? { callerId } : {}) });
     res.json(result);
   }),
 );

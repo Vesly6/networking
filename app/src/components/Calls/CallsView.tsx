@@ -3,7 +3,8 @@ import { useCallsStore } from '../../store/useCallsStore';
 import { useToastStore } from '../../store/useToastStore';
 import { useTableStore } from '../../store/useTableStore';
 import { phoneMatchKey } from '../../utils/phoneMatch';
-import { getPrimaryLabel } from '../../utils/row';
+import { getPrimaryLabel, getColumnByType } from '../../utils/row';
+import { parseContacts, extractPhoneNumber, contactTextToFields } from '../../utils/contacts';
 import { CallRow } from './CallRow';
 import { CallsStatsView } from './CallsStatsView';
 
@@ -26,7 +27,16 @@ function formatTotalDuration(totalSeconds: number): string {
   return h > 0 ? `${h} val. ${m} min.` : `${m} min.`;
 }
 
-export function CallsView({ onJumpToRow }: { onJumpToRow: (rowId: string) => void }) {
+interface CallsViewProps {
+  onJumpToRow: (rowId: string) => void;
+  /** Jumps to a row *and* opens its Kontaktai editor with one specific
+   * entry highlighted — used by the "🔍 Ieškoti" button below for a call
+   * whose number matched a person inside a Contacts-column entry, not the
+   * row's own phone column (see phoneToContact below). */
+  onJumpToContact: (rowId: string, columnId: string, contactId: string) => void;
+}
+
+export function CallsView({ onJumpToRow, onJumpToContact }: CallsViewProps) {
   const calls = useCallsStore((s) => s.calls);
   const ready = useCallsStore((s) => s.ready);
   const error = useCallsStore((s) => s.error);
@@ -126,6 +136,36 @@ export function CallsView({ onJumpToRow }: { onJumpToRow: (rowId: string) => voi
     return map;
   }, [columns, rows]);
 
+  // Same idea as phoneToRow above, but one level more specific: a missed
+  // call's number often belongs to a *person*, not the row's own Phone
+  // column (a company usually has one Phone field but a Contacts column
+  // can hold several people, each with their own number embedded in
+  // freeform text) — added on explicit request ("я хочу быстро найти в
+  // моих контактах, о кого именно я пропустил звонок"). Scans every entry
+  // of the table's one contact-type column (see CLAUDE.md: at most one in
+  // practice), pulling a phone-shaped number out of each entry's freeform
+  // text via extractPhoneNumber() — the same regex the click-to-call
+  // buttons in CellHoverEditor already use for this exact purpose.
+  const phoneToContact = useMemo(() => {
+    const map = new Map<string, { rowId: string; columnId: string; contactId: string; label: string }>();
+    const contactColumn = getColumnByType(columns, 'contact');
+    if (!contactColumn) return map;
+    for (const row of rows) {
+      const raw = row.cells[contactColumn.id];
+      if (!raw) continue;
+      for (const entry of parseContacts(raw)) {
+        const phone = extractPhoneNumber(entry.text);
+        if (!phone) continue;
+        const key = phoneMatchKey(phone);
+        if (!key) continue;
+        const { firstName, lastName } = contactTextToFields(entry.text);
+        const label = [firstName, lastName].filter(Boolean).join(' ') || entry.text;
+        map.set(key, { rowId: row.id, columnId: contactColumn.id, contactId: entry.id, label });
+      }
+    }
+    return map;
+  }, [columns, rows]);
+
   const summary = useMemo(() => {
     if (calls.length === 0) return null;
     const totalSeconds = calls.reduce((sum, c) => sum + c.seconds, 0);
@@ -191,7 +231,17 @@ export function CallsView({ onJumpToRow }: { onJumpToRow: (rowId: string) => voi
             {calls.map((call) => {
               const key = phoneMatchKey(call.otherParty);
               const matched = key ? phoneToRow.get(key) : undefined;
-              return <CallRow key={call.call_id} call={call} matchedRow={matched} onJumpToRow={onJumpToRow} />;
+              const matchedContact = key ? phoneToContact.get(key) : undefined;
+              return (
+                <CallRow
+                  key={call.call_id}
+                  call={call}
+                  matchedRow={matched}
+                  matchedContact={matchedContact}
+                  onJumpToRow={onJumpToRow}
+                  onJumpToContact={onJumpToContact}
+                />
+              );
             })}
           </tbody>
         </table>

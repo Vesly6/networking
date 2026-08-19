@@ -39,11 +39,16 @@ export function serializeContacts(entries: ContactEntry[]): string {
   return JSON.stringify(entries);
 }
 
-export function addContact(raw: string, text: string): string {
+/** `id` is normally left to generate itself — the one caller that passes
+ * one explicitly (ApolloContactSearchModal's "+ Pridėti") needs to know the
+ * new entry's id *before* this returns, so a slow background phone-number
+ * lookup can later call updateContact() on the exact same entry instead of
+ * appending a duplicate once the number arrives. */
+export function addContact(raw: string, text: string, id: string = crypto.randomUUID()): string {
   const trimmed = text.trim();
   if (!trimmed) return raw;
   const existing = parseContacts(raw);
-  return serializeContacts([...existing, { id: crypto.randomUUID(), text: trimmed }]);
+  return serializeContacts([...existing, { id, text: trimmed }]);
 }
 
 export function removeContact(raw: string, id: string): string {

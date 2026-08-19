@@ -78,3 +78,15 @@ export function requestCallback(to: string): Promise<{ from: string; to: string;
     body: JSON.stringify({ to }),
   });
 }
+
+/** Sends a real SMS to `number` — a real, unrecoverable side effect the
+ * instant it resolves (an actual message delivered, at Zadarma's per-SMS
+ * rate), same category as requestCallback above. Only ever call this from
+ * an explicit, already-confirmed user action. */
+export function sendSms(number: string, message: string): Promise<{ number?: string; cost?: string; currency?: string }> {
+  return localApiRequest('/api/sms/send', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ number, message }),
+  });
+}

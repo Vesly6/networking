@@ -57,7 +57,7 @@ function sign(method: string, paramsString: string, secret: string): string {
 async function callZadarma(
   method: string,
   params: Record<string, string | number>,
-  httpMethod: 'GET' | 'PUT',
+  httpMethod: 'GET' | 'PUT' | 'POST',
 ): Promise<any> {
   const { key, secret } = getCredentials();
   const paramsString = buildParamsString(params);
@@ -67,15 +67,18 @@ async function callZadarma(
     console.log('[zadarma debug]', { method, paramsString, authHeader, url });
   }
 
+  // PUT and POST both carry the signed params as a urlencoded body — GET is
+  // the only one that puts them on the query string instead.
+  const isBodyMethod = httpMethod === 'PUT' || httpMethod === 'POST';
   let res: Response;
   try {
     res = await fetch(url, {
       method: httpMethod,
       headers: {
         Authorization: authHeader,
-        ...(httpMethod === 'PUT' ? { 'Content-Type': 'application/x-www-form-urlencoded' } : {}),
+        ...(isBodyMethod ? { 'Content-Type': 'application/x-www-form-urlencoded' } : {}),
       },
-      body: httpMethod === 'PUT' ? paramsString : undefined,
+      body: isBodyMethod ? paramsString : undefined,
     });
   } catch {
     throw new ZadarmaApiError('Could not reach Zadarma API', null);
@@ -196,6 +199,31 @@ export async function requestCallback(opts: {
 }): Promise<{ from: string; to: string; time: number }> {
   const { from, to } = opts;
   return callZadarma('/v1/request/callback/', { from, to }, 'GET');
+}
+
+/** POST /v1/sms/send/ — confirmed against Zadarma's own official PHP
+ * reference client (github.com/zadarma/user-api-v1, Api.php's sendSms()):
+ * `number`, `message`, optional `caller_id`. Unlike every other wrapper in
+ * this file, this one has a real, unrecoverable side effect the instant it
+ * succeeds (an actual SMS delivered to an actual phone, at Zadarma's
+ * per-message SMS rate) — same "real-world side effect" category as
+ * requestCallback above, so it should only ever fire on an explicit,
+ * confirmed user action, never automatically or speculatively. `callerId`
+ * must be a number already verified in the account's Sender ID settings
+ * (Zadarma rejects an unverified one); omit it to send under the account's
+ * default sender name. */
+export async function sendSms(opts: {
+  number: string;
+  message: string;
+  callerId?: string;
+}): Promise<{ number?: string; cost?: string; currency?: string }> {
+  const { number, message, callerId } = opts;
+  const params: Record<string, string | number> = {
+    number,
+    message,
+    ...(callerId !== undefined ? { caller_id: callerId } : {}),
+  };
+  return callZadarma('/v1/sms/send/', params, 'POST');
 }
 
 /** Temporary (72h-lifetime, per Zadarma's docs) key for the browser-side

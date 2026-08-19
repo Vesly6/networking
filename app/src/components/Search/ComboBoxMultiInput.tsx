@@ -42,7 +42,18 @@ function toOptions(suggestions: string[] | ComboBoxOption[]): ComboBoxOption[] {
 export function ComboBoxMultiInput({ value, onChange, suggestions, placeholder }: ComboBoxMultiInputProps) {
   const [text, setText] = useState('');
   const [open, setOpen] = useState(false);
-  const [highlighted, setHighlighted] = useState(0);
+  // null = nothing explicitly picked yet. This used to default to 0 (the
+  // first suggestion always implicitly "highlighted"), which was a real,
+  // reported bug: typing e.g. "HR" — meant as its own literal search term
+  // — while *any* suggestion happened to contain "hr" as a substring (a
+  // near-certainty against a large title list) made Enter silently add
+  // that matched suggestion instead of the literal text actually typed,
+  // with no visual cue beyond a subtle active-option style most users
+  // wouldn't notice was even doing anything. Now Enter only ever picks a
+  // suggestion after the user explicitly arrows to one — otherwise it
+  // always adds exactly what was typed, matching a plain tag input's
+  // normal behavior.
+  const [highlighted, setHighlighted] = useState<number | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const options = useMemo(() => toOptions(suggestions), [suggestions]);
@@ -65,7 +76,7 @@ export function ComboBoxMultiInput({ value, onChange, suggestions, placeholder }
     if (!trimmed || value.includes(trimmed)) return;
     onChange([...value, trimmed]);
     setText('');
-    setHighlighted(0);
+    setHighlighted(null);
   };
   const removeValue = (v: string) => onChange(value.filter((x) => x !== v));
 
@@ -73,13 +84,13 @@ export function ComboBoxMultiInput({ value, onChange, suggestions, placeholder }
     if (e.key === 'ArrowDown') {
       e.preventDefault();
       setOpen(true);
-      setHighlighted((h) => Math.min(h + 1, filtered.length - 1));
+      setHighlighted((h) => Math.min((h ?? -1) + 1, filtered.length - 1));
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
-      setHighlighted((h) => Math.max(h - 1, 0));
+      setHighlighted((h) => Math.max((h ?? 0) - 1, 0));
     } else if (e.key === 'Enter') {
       e.preventDefault();
-      if (open && filtered[highlighted]) addValue(filtered[highlighted].value);
+      if (open && highlighted !== null && filtered[highlighted]) addValue(filtered[highlighted].value);
       else addValue(text);
     } else if (e.key === 'Backspace' && text === '' && value.length > 0) {
       removeValue(value[value.length - 1]);
@@ -109,7 +120,7 @@ export function ComboBoxMultiInput({ value, onChange, suggestions, placeholder }
           value={text}
           onChange={(e) => {
             setText(e.target.value);
-            setHighlighted(0);
+            setHighlighted(null);
             setOpen(true);
           }}
           onFocus={() => setOpen(true)}

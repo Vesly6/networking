@@ -31,6 +31,7 @@ import { addNoteEntry, updateNoteEntry, removeNoteEntry } from '../../utils/note
 import { addContact, updateContact, removeContact } from '../../utils/contacts';
 import { columnLetter, formatCellRef, parseRangeRef } from '../../utils/spreadsheet';
 import { getColumnByType } from '../../utils/row';
+import { normalizePhoneDigits } from '../../utils/phoneMatch';
 import {
   ADD_COLUMN_WIDTH,
   DEFAULT_COLUMN_WIDTH,
@@ -48,6 +49,12 @@ import {
 interface TableViewProps {
   focusRowId: string | null;
   onFocusHandled: () => void;
+  /** Like focusRowId, but also opens that row's Kontaktai editor with one
+   * specific entry highlighted — the Calls tab's "🔍 Ieškoti" button (a
+   * missed call matched to a person inside a Contacts entry, not the row's
+   * own Phone column) drives this. */
+  focusContact: { rowId: string; columnId: string; contactId: string } | null;
+  onContactFocusHandled: () => void;
 }
 
 type SortDirection = 'asc' | 'desc';
@@ -56,6 +63,12 @@ interface CellPos {
   c: number;
 }
 type ViewSort = { columnId: string; direction: SortDirection } | null;
+
+// Below this many digits, a numeric search query is treated as plain text
+// only (not also matched against phone-digit substrings) — otherwise a
+// short numeric search (a year, a single digit) would start matching every
+// phone-containing cell in the table.
+const MIN_PHONE_SEARCH_DIGITS = 4;
 
 /** The fill handle only ever extends along a single axis — same as
  * Excel's own: whichever of row/column has the larger displacement from
@@ -136,7 +149,7 @@ function saveRecentColor(color: string) {
   return next;
 }
 
-export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
+export function TableView({ focusRowId, onFocusHandled, focusContact, onContactFocusHandled }: TableViewProps) {
   const tableId = useTableStore((s) => s.tableId);
   const columns = useTableStore((s) => s.columns);
   const rows = useTableStore((s) => s.rows);
@@ -146,7 +159,6 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
   // `columns` (same reasoning as any other columns.find()-derived value).
   const contactColumn = useMemo(() => getColumnByType(columns, 'contact'), [columns]);
   const addRow = useTableStore((s) => s.addRow);
-  const removeRow = useTableStore((s) => s.removeRow);
   const removeRows = useTableStore((s) => s.removeRows);
   const importCsvRows = useTableStore((s) => s.importCsvRows);
   const updateCell = useTableStore((s) => s.updateCell);
@@ -173,6 +185,12 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
   // file is: `.table-view`'s onClick={closePopovers} below, or a click on
   // any other cell via handleCellMouseDown.
   const [expandedCell, setExpandedCell] = useState<{ rowId: string; columnId: string; anchor: HTMLElement } | null>(null);
+  // Set alongside expandedCell only by the Calls tab's "🔍 Ieškoti" jump
+  // (see the focusContact effect below) — CellHoverEditor uses this to
+  // scroll to and briefly flash the one contact entry that actually
+  // matched the missed call, since a Contacts column can hold several
+  // people and the row/cell-level jump alone doesn't say which one.
+  const [highlightContactId, setHighlightContactId] = useState<string | null>(null);
   const [addColumnAnchor, setAddColumnAnchor] = useState<HTMLElement | null>(null);
   // Set once a CSV file is parsed, holding the raw parse result until the
   // user resolves the CsvImportMapping modal (confirm or cancel) — see
@@ -267,6 +285,17 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const tableScrollRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  // A real, reported bug: `editable` (below) is computed purely from
+  // *position* (activeCell.r/c), with no awareness of whether the search
+  // box itself is focused. Typing into search changes `filteredSortedRows`
+  // (fewer/reordered rows), so a *different* row can land at the stale
+  // activeCell position on the very next keystroke — and since rows are
+  // keyed by id, that's a fresh DataCell mount, which (for text/phone/
+  // company columns) renders an `<input autoFocus>`, stealing focus out of
+  // the search box mid-word. Tracking search focus explicitly and gating
+  // `editable` on it means no cell can ever steal focus while the user is
+  // actively typing a query, regardless of position coincidences.
+  const [searchFocused, setSearchFocused] = useState(false);
 
   // Mirrors of isRowRangeDragging/isColRangeDragging, kept in sync so the
   // mouseup effect below (registered once, empty deps) can read a
@@ -302,6 +331,52 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusRowId, onFocusHandled]);
 
+  // Same "scroll to it" step as the focusRowId effect above, but this one
+  // also has to *open* that row's Kontaktai popup afterward — and the row
+  // is virtualized, so its <td> (CellHoverEditor's positioning anchor)
+  // doesn't exist in the DOM until the scroll has actually landed and React
+  // has committed that row. `behavior: 'smooth'` (scrollToRowIndex's
+  // default) makes that take real, variable wall-clock time, so this polls
+  // for the cell via requestAnimationFrame instead of guessing a fixed
+  // delay — see DataCell.tsx's data-row-id/data-column-id attributes,
+  // added specifically so this cell is findable without threading a ref
+  // for every cell in the table.
+  useEffect(() => {
+    if (!focusContact) return;
+    const { rowId, columnId, contactId } = focusContact;
+    const found = filteredSortedRowsRef.current.some((r) => r.id === rowId);
+    if (!found) {
+      onContactFocusHandled();
+      return;
+    }
+    scrollToRowId(rowId);
+    let cancelled = false;
+    let attempts = 0;
+    const tryOpen = () => {
+      if (cancelled) return;
+      const td = tableScrollRef.current?.querySelector<HTMLElement>(
+        `td[data-row-id="${rowId}"][data-column-id="${columnId}"]`,
+      );
+      if (td) {
+        openCellEditor(rowId, columnId, td);
+        setHighlightContactId(contactId);
+        onContactFocusHandled();
+        return;
+      }
+      attempts += 1;
+      if (attempts < 60) requestAnimationFrame(tryOpen);
+      else onContactFocusHandled();
+    };
+    requestAnimationFrame(tryOpen);
+    return () => {
+      cancelled = true;
+    };
+    // scrollToRowId/openCellEditor are plain functions redefined every
+    // render (not refs) — same reasoning as the focusRowId effect above,
+    // this should only re-run when focusContact itself changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusContact, onContactFocusHandled]);
+
   // Sort is applied as a one-time snapshot (an ordered list of row ids),
   // recomputed only when `sort` itself changes (a fresh column/direction
   // pick) — NOT every time `rows` changes. This was a real, reported bug:
@@ -323,7 +398,25 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
 
     if (search.trim()) {
       const q = search.trim().toLowerCase();
-      result = result.filter((row) => Object.values(row.cells).some((v) => v?.toLowerCase().includes(q)));
+      // Phone numbers get typed/stored in wildly different formats
+      // ("+370 640 11013" vs "37064011013" vs a bare "64011013") — a plain
+      // substring match on the raw text misses all but an exact match.
+      // Comparing digits-only (in addition to, not instead of, the normal
+      // text match) lets any of those find the same cell. Gated to queries
+      // with at least a handful of digits so short numeric searches (a
+      // year, a single digit) don't start matching every phone-containing
+      // cell in the table.
+      const qDigits = normalizePhoneDigits(search);
+      const phoneSearchActive = qDigits.length >= MIN_PHONE_SEARCH_DIGITS;
+      result = result.filter((row) =>
+        Object.values(row.cells).some((v) => {
+          if (!v) return false;
+          if (v.toLowerCase().includes(q)) return true;
+          if (!phoneSearchActive) return false;
+          const vDigits = normalizePhoneDigits(v);
+          return vDigits.length > 0 && vDigits.includes(qDigits);
+        }),
+      );
     }
 
     if (sort) {
@@ -689,6 +782,7 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
     // editor; DataCell's note/contact branch re-opens it on the same click
     // if that's the cell that was actually clicked (see onOpenEditor below).
     setExpandedCell(null);
+    setHighlightContactId(null);
     if (extend && rangeAnchor) setRangeFocus({ r, c });
     else {
       setRangeAnchor({ r, c });
@@ -766,10 +860,29 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
   // text selection defers to the browser's native copy/paste; a bare
   // cursor position (no highlight) keeps the existing whole-cell/range
   // behavior, since that's how "click a cell, Ctrl+C" already worked.
+  //
+  // This also has to cover plain (non-input) text selected ANYWHERE on the
+  // page, not just inside an <input>/<textarea> — a real, reported bug:
+  // Table/Calendar/Calls/Search all stay permanently mounted (switched via
+  // CSS visibility, never unmounted), so this component's document-level
+  // copy listener is always live regardless of which tab is showing.
+  // Selecting plain text (a call transcript, a contact's displayed phone/
+  // email, a calendar task's company name — none of them inputs) leaves
+  // document.activeElement on document.body, which withinTableFocus()
+  // treats as "inside the table," and the old input-only check here
+  // returned false for it — so Ctrl+C silently discarded the user's actual
+  // selection and copied the table's own selected range instead, with a
+  // "Nukopijuota langelių: N" toast to match. window.getSelection() is
+  // what actually tracks a real browser text selection anywhere on the
+  // page; checking it here closes the gap for every screen at once, not
+  // just the table's own inputs.
   const hasActiveTextSelection = () => {
     const active = document.activeElement;
-    if (!(active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement)) return false;
-    return active.selectionStart !== null && active.selectionStart !== active.selectionEnd;
+    if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) {
+      return active.selectionStart !== null && active.selectionStart !== active.selectionEnd;
+    }
+    const sel = window.getSelection();
+    return !!sel && !sel.isCollapsed && sel.toString().length > 0;
   };
 
   // --- Copy / paste (Excel & Google Sheets interop via the system clipboard) ---
@@ -1068,6 +1181,61 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
     setRowContextMenu({ x: e.clientX, y: e.clientY, targetIds });
   };
 
+  // moveRows/moveColumns reorder the underlying data, but rowRangeAnchor/
+  // rowRangeFocus (colRangeAnchor/colRangeFocus) are plain *positional*
+  // indices — left untouched by a move, they keep highlighting whatever
+  // index range they already pointed at, which after a reorder is simply
+  // wherever the moved rows/columns *used* to be, now occupied by different
+  // content. This was a real, reported bug: dragging a 3-row selection
+  // elsewhere left the highlight sitting on the old slot, making it look
+  // like nothing had moved. These refs carry the just-moved ids across the
+  // render where moveRows/moveColumns's new order actually lands in
+  // filteredSortedRows/columns, so the effects below can re-point the
+  // selection at wherever that data ended up.
+  const pendingRowSelectionSyncRef = useRef<string[] | null>(null);
+  const pendingColumnSelectionSyncRef = useRef<string[] | null>(null);
+
+  useEffect(() => {
+    const ids = pendingRowSelectionSyncRef.current;
+    if (!ids) return;
+    pendingRowSelectionSyncRef.current = null;
+    const indices = ids
+      .map((id) => filteredSortedRows.findIndex((r) => r.id === id))
+      .filter((i) => i !== -1);
+    if (indices.length === 0) return;
+    const lo = Math.min(...indices);
+    const hi = Math.max(...indices);
+    setRowRangeAnchor(lo);
+    setRowRangeFocus(hi);
+    // rowRangeAnchor/rowRangeFocus alone only drive selectedRowIds (the
+    // "Ištrinti pasirinktas"/insert-above-below machinery) — the actual
+    // *visible* box-shadow highlight and the Name Box both read the
+    // separate cell-range (rangeAnchor/rangeFocus), which a row-gutter
+    // click also sets, matching Excel's "clicking a row number selects it
+    // as a normal range" (see handleRowNumberMouseDown above). Without
+    // updating this too, the highlight the user actually looks at stayed
+    // pinned to the pre-move index range.
+    setRangeAnchor({ r: lo, c: 0 });
+    setRangeFocus({ r: hi, c: Math.max(0, columns.length - 1) });
+  }, [filteredSortedRows, columns.length]);
+
+  useEffect(() => {
+    const ids = pendingColumnSelectionSyncRef.current;
+    if (!ids) return;
+    pendingColumnSelectionSyncRef.current = null;
+    const indices = ids
+      .map((id) => columns.findIndex((c) => c.id === id))
+      .filter((i) => i !== -1);
+    if (indices.length === 0) return;
+    const lo = Math.min(...indices);
+    const hi = Math.max(...indices);
+    setColRangeAnchor(lo);
+    setColRangeFocus(hi);
+    // Same reasoning as the row effect above, mirrored for columns.
+    setRangeAnchor({ r: 0, c: lo });
+    setRangeFocus({ r: Math.max(0, filteredSortedRows.length - 1), c: hi });
+  }, [columns, filteredSortedRows.length]);
+
   // --- Column drag-reorder (grip handle) ---
   const handleColGripDragStart = (e: DragEvent, col: (typeof columns)[number], index: number) => {
     if (!selectedColumnIds.has(col.id)) {
@@ -1096,6 +1264,7 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
       const { targetIndex } = dropColumnIndexFromEvent(e, index);
       const target = targetIndex < columns.length ? columns[targetIndex] : null;
       moveColumns(dragColumnIds, target ? target.id : null);
+      pendingColumnSelectionSyncRef.current = dragColumnIds;
     }
     setDragColumnIds(null);
     setDragOverColumnId(null);
@@ -1139,6 +1308,7 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
       const { targetIndex } = dropRowIndexFromEvent(e, rowIndex);
       const target = targetIndex < filteredSortedRows.length ? filteredSortedRows[targetIndex] : null;
       moveRows(dragRowIds, target ? target.id : null);
+      pendingRowSelectionSyncRef.current = dragRowIds;
     }
     setDragRowIds(null);
     setDragOverRowId(null);
@@ -1146,7 +1316,10 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
   };
   const handleRowDropAtEnd = (e: DragEvent) => {
     e.preventDefault();
-    if (dragRowIds) moveRows(dragRowIds, null);
+    if (dragRowIds) {
+      moveRows(dragRowIds, null);
+      pendingRowSelectionSyncRef.current = dragRowIds;
+    }
     setDragRowIds(null);
     setDragOverRowId(null);
     setDragOverAfter(false);
@@ -1303,6 +1476,7 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
     setOpenMenu(null);
     setColorPickerAnchor(null);
     setExpandedCell(null);
+    setHighlightContactId(null);
     setColumnContextMenu(null);
     setRowContextMenu(null);
     setHiddenColumnsAnchor(null);
@@ -1366,6 +1540,8 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
           placeholder="Ieškoti visoje lentelėje… (Ctrl/Cmd+F)"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
+          onFocus={() => setSearchFocused(true)}
+          onBlur={() => setSearchFocused(false)}
           onKeyDown={(e) => {
             if (e.key === 'Escape') e.currentTarget.blur();
           }}
@@ -1661,17 +1837,6 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
                         >
                           {index + 1}
                         </span>
-                        <button
-                          type="button"
-                          className="row-delete"
-                          title="Ištrinti eilutę"
-                          onClick={async (e) => {
-                            e.stopPropagation();
-                            if (await confirmDialog({ message: 'Ištrinti šią eilutę?', danger: true })) removeRow(row.id);
-                          }}
-                        >
-                          ×
-                        </button>
                       </div>
                       <div className="row-resize-handle" onMouseDown={(e) => startRowResize(e, row)} />
                     </td>
@@ -1685,7 +1850,8 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
                           activeCell?.r === index &&
                           activeCell?.c === colIndex &&
                           !isRangeDragging &&
-                          isSingleCellSelection
+                          isSingleCellSelection &&
+                          !searchFocused
                         }
                         inRange={
                           !!rangeBounds &&
@@ -1758,18 +1924,25 @@ export function TableView({ focusRowId, onFocusHandled }: TableViewProps) {
           const column = columns.find((c) => c.id === expandedCell.columnId);
           if (!row || !column || (column.type !== 'note' && column.type !== 'contact')) return null;
           const rawValue = row.cells[column.id] ?? '';
+          const rowCompanyColumn = getColumnByType(columns, 'company');
+          const rowCompanyName = rowCompanyColumn ? row.cells[rowCompanyColumn.id] : undefined;
           return (
             <CellHoverEditor
               anchor={expandedCell.anchor}
               mode={column.type}
               value={rawValue}
+              companyName={rowCompanyName}
+              highlightEntryId={highlightContactId}
               onAddNoteEntry={(text) => updateCell(row.id, column.id, addNoteEntry(rawValue, text))}
               onUpdateNoteEntry={(id, text) => updateCell(row.id, column.id, updateNoteEntry(rawValue, id, text))}
               onRemoveNoteEntry={(id) => updateCell(row.id, column.id, removeNoteEntry(rawValue, id))}
-              onAddContact={(text) => updateCell(row.id, column.id, addContact(rawValue, text))}
+              onAddContact={(text, id) => updateCell(row.id, column.id, addContact(rawValue, text, id))}
               onUpdateContact={(id, text) => updateCell(row.id, column.id, updateContact(rawValue, id, text))}
               onRemoveContact={(id) => updateCell(row.id, column.id, removeContact(rawValue, id))}
-              onClose={() => setExpandedCell(null)}
+              onClose={() => {
+                setExpandedCell(null);
+                setHighlightContactId(null);
+              }}
             />
           );
         })()}

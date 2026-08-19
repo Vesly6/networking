@@ -488,14 +488,24 @@ table.sheet tbody tr:hover td.cell-row-bg {
 @keyframes row-flash {
   0%,
   100% {
-    background: var(--today-bg);
+    background: rgba(47, 111, 237, 0.35);
   }
   50% {
     background: transparent;
   }
 }
 
-tr.row-flash {
+/* Scoped to td.cell-row-bg, not the <tr> itself — same reason zebra
+   striping/hover are (see the .cell-row-bg comment above): every <td> paints
+   its own background on top of the row's, so a background set on the <tr>
+   only shows through in the gaps between cells and is effectively invisible
+   on any populated row. This was a real, reported bug ("подсвечивает белым
+   светом" — reads as barely-there white flicker) — the flash was firing
+   correctly the whole time, it just had nowhere visible to paint. A colored
+   cell (row.colors) is structurally outside this selector, so it keeps its
+   own color during a flash instead of the two fighting over the same
+   property. */
+tr.row-flash td.cell-row-bg {
   animation: row-flash 0.5s ease-in-out 3;
 }
 
@@ -831,22 +841,6 @@ tr.row-flash {
   opacity: 0.5;
 }
 
-.row-delete {
-  border: none;
-  background: transparent;
-  color: var(--text-muted);
-  padding: 0.1em 0.3em;
-  font-size: 0.9rem;
-  line-height: 1;
-  opacity: 0;
-}
-tr:hover .row-delete {
-  opacity: 1;
-}
-.row-delete:hover {
-  color: var(--danger);
-  background: var(--danger-bg);
-}
 
 /* Body-cell highlighting for a row/column gutter selection is no longer
    done here — TableView now syncs the gutter selection into the normal
@@ -1273,10 +1267,18 @@ tr.row-drop-end td {
      remaining room below the popup's top, not a fixed vh guess — a
      position:fixed element can't be reached by scrolling the page if it
      grows past the viewport edge, so the popup itself must never exceed
-     that budget. overflow: hidden + the scrolling child below
-     (.cell-hover-history) is what turns "the popup grows forever" into
-     "the list scrolls within a fixed-size popup." */
-  overflow: hidden;
+     that budget. .cell-hover-history (below) is the *usual* scrolling
+     region so the add-entry form above it stays in view while a long
+     history scrolls — but overflow-y here is auto, not hidden, as a
+     fallback: if the non-scrolling form section itself (e.g. the contact
+     form's structured fields + Apollo search results) ever grows taller
+     than the available budget on a cell anchored near the viewport edge,
+     the whole popup becomes scrollable rather than silently clipping
+     content with no way to reach it — this was a real, reported bug (the
+     "Paieška" panel pushed the contact form past a fixed hidden overflow
+     on the table's last few rows). */
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 /* CellClickPopover (double-click, plain text/phone) — sits inside the
@@ -1344,6 +1346,25 @@ tr.row-drop-end td {
 .cell-hover-tag:hover {
   background: var(--bg-hover);
   border-color: var(--border-strong);
+}
+
+/* Deliberately brighter/more saturated than the other (muted) quick-tags —
+   it's a different kind of action (pulls in real content from elsewhere,
+   not just a one-word label), so it should read as visually distinct. */
+.cell-hover-tag-summary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+  font-weight: 600;
+}
+.cell-hover-tag-summary:hover {
+  filter: brightness(1.05);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.cell-hover-tag-summary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .cell-hover-history {
@@ -1465,12 +1486,30 @@ tr.row-drop-end td {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 0.4rem;
   padding: 0.4em 0.6em;
   border-top: 1px solid var(--border);
 }
 .cell-hover-contact-entry:first-child {
   border-top: none;
+}
+
+/* Matches the table row-flash animation's color language (same accent
+   blue) — briefly marks the one contact entry a Calls-tab "🔍 Ieškoti"
+   jump actually matched, since a Contacts column can hold several people
+   and the popup opening alone doesn't say which one is the caller. */
+@keyframes cell-hover-contact-entry-flash {
+  0%,
+  100% {
+    background: rgba(47, 111, 237, 0.22);
+  }
+  50% {
+    background: transparent;
+  }
+}
+.cell-hover-contact-entry-flash {
+  animation: cell-hover-contact-entry-flash 0.5s ease-in-out 3;
 }
 
 .cell-hover-contact-info {
@@ -1548,6 +1587,30 @@ tr.row-drop-end td {
   background: var(--danger-bg);
 }
 
+.cell-hover-sms-compose {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.4em 0.6em 0.6em;
+  width: 100%;
+}
+.cell-hover-sms-compose textarea {
+  width: 100%;
+  min-height: 3.2em;
+  resize: vertical;
+  font-size: 0.82rem;
+  font-family: inherit;
+  padding: 0.4em 0.5em;
+}
+.cell-hover-sms-compose-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+.cell-hover-sms-compose-actions button {
+  font-size: 0.78rem;
+  padding: 0.25em 0.6em;
+}
+
 .cell-hover-contact-call {
   flex: 0 0 auto;
   border: none;
@@ -1605,11 +1668,189 @@ tr.row-drop-end td {
   flex-shrink: 0;
 }
 
+.cell-hover-contact-structured-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+  padding: 0.5rem 0.6rem 0;
+}
+
 .cell-hover-contact-structured-label {
   font-size: 0.72rem;
   font-weight: 600;
   color: var(--text-muted);
-  padding: 0.5rem 0.6rem 0;
+}
+
+.cell-hover-apollo-search-btn {
+  flex-shrink: 0;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.25em 0.55em;
+  border-radius: 999px;
+  border: 1px solid var(--accent);
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+}
+.cell-hover-apollo-search-btn:hover:not(:disabled) {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+.cell-hover-apollo-search-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.cell-hover-apollo-result {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.25rem 0.3rem;
+  border-radius: 4px;
+}
+.cell-hover-apollo-result:hover {
+  background: var(--bg-hover);
+}
+
+.cell-hover-apollo-result-name {
+  font-size: 0.8rem;
+  color: var(--text);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cell-hover-apollo-result-add {
+  flex-shrink: 0;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.2em 0.5em;
+  border-radius: 4px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--accent-contrast);
+  cursor: pointer;
+}
+.cell-hover-apollo-result-add:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* The "🔍 Paieška" button's full company→people search flow — a real
+   modal (reuses .modal/.modal-backdrop chrome), wider than the default
+   .modal since it hosts CompanyFilterForm/PeopleFilterForm (the same
+   components the top-nav "Paieška" tab uses) side by side with results,
+   on explicit request: the user wants to *see and confirm* which company
+   matched, and to be able to replace the search keywords themselves, not
+   have a single name auto-resolved and immediately searched with no
+   visibility into what was matched. */
+.apollo-search-modal {
+  max-width: 960px;
+  max-height: calc(100vh - 3rem);
+}
+
+.apollo-search-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.apollo-search-modal-close {
+  border: none;
+  background: transparent;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0.3em 0.5em;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text-muted);
+}
+.apollo-search-modal-close:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.apollo-search-modal-body {
+  display: flex;
+  gap: 1rem;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+}
+
+.apollo-search-modal-filters {
+  flex: 0 0 320px;
+  overflow-y: auto;
+  padding-right: 0.4rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.apollo-search-modal-results {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.apollo-search-modal-hint {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+.apollo-search-modal-back {
+  align-self: flex-start;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  border-radius: 6px;
+  padding: 0.3em 0.7em;
+  font-size: 0.78rem;
+  cursor: pointer;
+  color: var(--text);
+}
+.apollo-search-modal-back:hover {
+  background: var(--bg-hover);
+}
+
+.apollo-search-modal-company-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.apollo-search-modal-company-row:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-alt);
+}
+
+.apollo-search-modal-company-info {
+  min-width: 0;
+}
+
+.apollo-search-modal-company-name {
+  font-weight: 600;
+  font-size: 0.88rem;
+  color: var(--text);
+}
+
+.apollo-search-modal-bulk-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  padding: 0.3rem;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 0.2rem;
 }
 
 .cell-hover-contact-structured-grid {
@@ -2158,14 +2399,30 @@ tr.row-drop-end td {
   border: 1px solid var(--accent);
   border-radius: 6px;
   padding: 0.6em 0.8em;
-  white-space: normal;
+  /* pre-line, not normal — the summary is now a bulleted list (one "- …"
+     line per topic, see server/src/openai.ts's SUMMARIZE_SYSTEM_PROMPT),
+     and `normal` collapses the newlines between bullets into one run-on
+     line. pre-line keeps each bullet on its own line while still wrapping
+     a long one normally, rather than needing pre-wrap's exact-whitespace
+     preservation. */
+  white-space: pre-line;
+}
+
+.calls-summary-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.3em;
 }
 
 .calls-summary-label {
   font-weight: 600;
   font-size: 0.78rem;
   color: var(--accent);
-  margin-bottom: 0.3em;
+}
+.calls-summary-label-row .calls-copy-btn {
+  flex-shrink: 0;
 }
 
 .calls-destination {
@@ -2377,21 +2634,6 @@ tr.row-drop-end td {
   gap: 1.25rem;
 }
 
-.search-filter-group {
-  display: flex;
-  flex-direction: column;
-  gap: 0.7rem;
-}
-
-.search-filter-group-title {
-  font-weight: 700;
-  font-size: 0.78rem;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  border-bottom: 1px solid var(--border);
-  padding-bottom: 0.3rem;
-}
 
 .search-filter-field {
   display: flex;
@@ -2543,21 +2785,76 @@ tr.row-drop-end td {
   flex: 1;
 }
 
-/* Matches apollo.io's own "Show more filters" toggle — the advanced
-   filter groups (Organization/Technology/Funding/Job postings) are
-   collapsed by default so the sidebar isn't a wall of every field at
-   once, same as the real product. */
-.search-show-more-toggle {
-  align-self: flex-start;
+/* Filter accordion (FilterAccordionSection.tsx) — replaced the old flat
+   "basic fields visible + one show-more toggle for everything else" layout
+   on explicit request, to match apollo.io's own Company/People Search
+   sidebar: every filter group is its own collapsed row (title + active-
+   count badge + chevron), independently expandable, not one all-or-
+   nothing toggle. */
+.filter-accordion-section {
+  border-bottom: 1px solid var(--border);
+}
+.filter-accordion-section:last-of-type {
+  border-bottom: none;
+}
+
+.filter-accordion-header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
   border: none;
   background: transparent;
-  color: var(--accent);
-  font-size: 0.82rem;
-  font-weight: 600;
-  padding: 0.2em 0;
+  padding: 0.55rem 0.1rem;
+  cursor: pointer;
+  text-align: left;
 }
-.search-show-more-toggle:hover {
-  text-decoration: underline;
+.filter-accordion-header:hover .filter-accordion-title {
+  color: var(--text);
+}
+
+.filter-accordion-title {
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.filter-accordion-right {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
+.filter-accordion-badge {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-size: 0.68rem;
+  font-weight: 700;
+  border-radius: 999px;
+  min-width: 1.3em;
+  height: 1.3em;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 0.35em;
+}
+
+.filter-accordion-chevron {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  transition: transform 0.15s ease;
+}
+.filter-accordion-chevron-open {
+  transform: rotate(180deg);
+}
+
+.filter-accordion-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  padding: 0 0.1rem 0.9rem;
 }
 
 .search-filter-actions {

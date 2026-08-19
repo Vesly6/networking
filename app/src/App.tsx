@@ -40,6 +40,7 @@ function App() {
 
   const [tab, setTab] = useState<Tab>('table');
   const [focusRowId, setFocusRowId] = useState<string | null>(null);
+  const [focusContact, setFocusContact] = useState<{ rowId: string; columnId: string; contactId: string } | null>(null);
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
 
@@ -94,6 +95,11 @@ function App() {
   const handleJumpToRow = useCallback((rowId: string) => {
     setTab('table');
     setFocusRowId(rowId);
+  }, []);
+
+  const handleJumpToContact = useCallback((rowId: string, columnId: string, contactId: string) => {
+    setTab('table');
+    setFocusContact({ rowId, columnId, contactId });
   }, []);
 
   // Gated before workspace loading even starts — nothing in this app is
@@ -234,7 +240,7 @@ function App() {
                 in the new one, which is worse than not persisting at
                 all). Calls has no such key: it isn't scoped to a table. */}
             <div className={`tab-panel ${tab === 'calls' ? 'tab-panel-active' : ''}`}>
-              <CallsView onJumpToRow={handleJumpToRow} />
+              <CallsView onJumpToRow={handleJumpToRow} onJumpToContact={handleJumpToContact} />
             </div>
             {/* Not gated on tableReady/keyed by activeTableId like Table/
                 Calendar — SearchView's own state (useSearchStore) has
@@ -253,6 +259,8 @@ function App() {
                   key={activeTableId}
                   focusRowId={focusRowId}
                   onFocusHandled={() => setFocusRowId(null)}
+                  focusContact={focusContact}
+                  onContactFocusHandled={() => setFocusContact(null)}
                 />
               ) : (
                 <div className="app-loading">
