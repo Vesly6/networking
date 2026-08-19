@@ -20,11 +20,12 @@ import {
 } from '../../utils/contacts';
 import { formatHistoryTimestamp } from '../../utils/date';
 import { parseContactText } from '../../utils/contactsApi';
-import { requestCallback, sendSms } from '../../utils/callsApi';
+import { requestCallback, sendSms, type SmsLogRecord } from '../../utils/callsApi';
 import { insertIntoSoftphone } from '../../utils/softphoneBridge';
+import { phoneMatchKey } from '../../utils/phoneMatch';
 import { useToastStore } from '../../store/useToastStore';
 import { confirmDialog } from '../../store/useConfirmStore';
-import { getAllTranscriptions } from '../../db/db';
+import { getAllTranscriptions, saveSmsLogEntry, getAllSmsLog } from '../../db/db';
 import { ApolloContactSearchModal } from './ApolloContactSearchModal';
 
 interface CellHoverEditorProps {
@@ -119,6 +120,12 @@ export function CellHoverEditor({
   const [smsComposeFor, setSmsComposeFor] = useState<string | null>(null);
   const [smsDraft, setSmsDraft] = useState('');
   const [sendingSms, setSendingSms] = useState(false);
+  // Every past send attempt (success or failure) to *this* phone number,
+  // shown right in the compose box — added because there was previously no
+  // way at all to check whether a given SMS actually went out (Zadarma's
+  // API has no status/history method, and this app didn't persist
+  // anything about a send either). Loaded fresh each time compose opens.
+  const [smsHistory, setSmsHistory] = useState<SmsLogRecord[]>([]);
   const skipNoteEditCommitRef = useRef(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
@@ -389,9 +396,16 @@ export function CellHoverEditor({
     }
   };
 
-  const openSmsCompose = (contactId: string) => {
+  const openSmsCompose = async (contactId: string, phone: string) => {
+    const willOpen = smsComposeFor !== contactId;
     setSmsComposeFor((prev) => (prev === contactId ? null : contactId));
     setSmsDraft('');
+    if (!willOpen) return;
+    const key = phoneMatchKey(phone);
+    const all = await getAllSmsLog();
+    const matching = key ? all.filter((r) => phoneMatchKey(r.phone) === key) : [];
+    matching.sort((a, b) => b.sentAt - a.sentAt);
+    setSmsHistory(matching);
   };
 
   // Confirmed before actually sending — same "irreversible, real-world
@@ -404,15 +418,26 @@ export function CellHoverEditor({
     if (!text) return;
     if (!(await confirmDialog(`Siųsti SMS ${phone}?\n\n${text}`))) return;
     setSendingSms(true);
+    const entry: SmsLogRecord = { id: crypto.randomUUID(), phone, message: text, sentAt: Date.now(), success: false };
     try {
-      await sendSms(phone, text);
+      const result = await sendSms(phone, text);
+      entry.success = true;
+      entry.cost = result.cost;
+      entry.currency = result.currency;
       showToast(`SMS išsiųsta ${phone}`);
       setSmsComposeFor(null);
       setSmsDraft('');
     } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Nepavyko išsiųsti SMS');
+      entry.error = err instanceof Error ? err.message : 'Nepavyko išsiųsti SMS';
+      showToast(entry.error);
     } finally {
       setSendingSms(false);
+      // Logged regardless of outcome — a failed attempt is just as
+      // important to have a record of as a successful one (see this
+      // handler's own doc comment above and db.ts's smsLog store comment
+      // for why this exists at all).
+      void saveSmsLogEntry(entry);
+      setSmsHistory((prev) => [entry, ...prev]);
     }
   };
 
@@ -711,7 +736,7 @@ export function CellHoverEditor({
                                         type="button"
                                         className="cell-hover-contact-copy"
                                         title="Siųsti SMS"
-                                        onClick={() => openSmsCompose(c.id)}
+                                        onClick={() => void openSmsCompose(c.id, field.value)}
                                       >
                                         ✉️
                                       </button>
@@ -755,6 +780,26 @@ export function CellHoverEditor({
                                     ✕ Atšaukti
                                   </button>
                                 </div>
+                                {smsHistory.length > 0 && (
+                                  <div className="cell-hover-sms-history">
+                                    <div className="cell-hover-sms-history-title">Ankstesnės SMS šiam numeriui</div>
+                                    {smsHistory.map((r) => (
+                                      <div key={r.id} className="cell-hover-sms-history-entry">
+                                        <div className="cell-hover-history-time">
+                                          {formatHistoryTimestamp(r.sentAt)} —{' '}
+                                          {r.success ? (
+                                            <span className="cell-hover-sms-history-ok">
+                                              išsiųsta{r.cost ? ` (${r.cost} ${r.currency ?? ''})` : ''}
+                                            </span>
+                                          ) : (
+                                            <span className="cell-hover-sms-history-fail">nepavyko: {r.error}</span>
+                                          )}
+                                        </div>
+                                        <div className="cell-hover-sms-history-text">{r.message}</div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
                               </form>
                             )}
                             {CONTACT_CALL_BUTTON_ENABLED && phone && (

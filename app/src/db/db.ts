@@ -1,6 +1,6 @@
 import { openDB, type IDBPDatabase, type DBSchema } from 'idb';
 import type { Row, TableMeta } from '../types';
-import type { TranscriptionRecord } from '../utils/callsApi';
+import type { TranscriptionRecord, SmsLogRecord } from '../utils/callsApi';
 import type { CallStatRecord } from '../utils/callStats';
 
 interface AppDB extends DBSchema {
@@ -21,10 +21,22 @@ interface AppDB extends DBSchema {
     key: string;
     value: CallStatRecord;
   };
+  smsLog: {
+    key: string;
+    value: SmsLogRecord;
+  };
 }
 
 const DB_NAME = 'cold-calls-crm';
-const DB_VERSION = 4;
+// v5: added smsLog — Zadarma's API has no way to check a sent SMS's status
+// or history after the fact (confirmed against their own official PHP
+// reference client: sendSms() is the only SMS method that exists), and
+// this app didn't persist anything about a send either — so "did that SMS
+// actually go out?" was genuinely unanswerable after the fact, a real gap
+// reported directly. Every send attempt (success or failure) now gets a
+// local record, same "local, permanent copy" reasoning callStats already
+// documents for call history.
+const DB_VERSION = 5;
 
 let dbPromise: Promise<IDBPDatabase<AppDB>> | null = null;
 
@@ -53,6 +65,9 @@ function getDB(): Promise<IDBPDatabase<AppDB>> {
         }
         if (!db.objectStoreNames.contains('callStats')) {
           db.createObjectStore('callStats', { keyPath: 'call_id' });
+        }
+        if (!db.objectStoreNames.contains('smsLog')) {
+          db.createObjectStore('smsLog', { keyPath: 'id' });
         }
       },
     });
@@ -175,4 +190,18 @@ export async function getLatestCallStatDate(): Promise<string | null> {
   const all = await getAllCallStats();
   if (all.length === 0) return null;
   return all.reduce((max, r) => (r.callstart > max ? r.callstart : max), all[0].callstart);
+}
+
+/** One record per SMS send attempt, success or failure — see this file's
+ * DB_VERSION 5 comment for why this exists at all (Zadarma's API has no
+ * way to check afterward). Written right after the send call resolves,
+ * from CellHoverEditor.tsx's handleSendSms. */
+export async function saveSmsLogEntry(record: SmsLogRecord): Promise<void> {
+  const db = await getDB();
+  await db.put('smsLog', record);
+}
+
+export async function getAllSmsLog(): Promise<SmsLogRecord[]> {
+  const db = await getDB();
+  return db.getAll('smsLog');
 }

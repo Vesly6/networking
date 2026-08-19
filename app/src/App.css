@@ -1611,6 +1611,38 @@ tr.row-drop-end td {
   padding: 0.25em 0.6em;
 }
 
+.cell-hover-sms-history {
+  border-top: 1px solid var(--border);
+  padding-top: 0.4rem;
+  margin-top: 0.2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  max-height: 140px;
+  overflow-y: auto;
+}
+.cell-hover-sms-history-title {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+.cell-hover-sms-history-entry {
+  font-size: 0.78rem;
+}
+.cell-hover-sms-history-text {
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.cell-hover-sms-history-ok {
+  color: var(--accent);
+}
+.cell-hover-sms-history-fail {
+  color: var(--danger);
+}
+
 .cell-hover-contact-call {
   flex: 0 0 auto;
   border: none;

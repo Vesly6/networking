@@ -90,3 +90,22 @@ export function sendSms(number: string, message: string): Promise<{ number?: str
     body: JSON.stringify({ number, message }),
   });
 }
+
+/** One local record per SMS send attempt (success or failure) — Zadarma's
+ * API has no method to check a sent SMS's status or history afterward
+ * (confirmed against their own official PHP reference client: sendSms()
+ * is the only SMS-related method that exists at all), and this app didn't
+ * persist anything about a send either, so "did that actually go out?"
+ * was genuinely unanswerable after the fact — a real, reported gap.
+ * Stored in db.ts's smsLog store, same "local permanent copy" reasoning
+ * CallStatRecord already documents for call history. */
+export interface SmsLogRecord {
+  id: string;
+  phone: string;
+  message: string;
+  sentAt: number;
+  success: boolean;
+  cost?: string;
+  currency?: string;
+  error?: string;
+}
