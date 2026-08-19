@@ -3,7 +3,7 @@ import express, { type NextFunction, type Request, type Response } from 'express
 import cors from 'cors';
 import { ZadarmaApiError, getStatistics, requestRecording, requestCallback, getWebrtcKey, sendSms } from './zadarma.js';
 import { TranscriptionError, transcribeFromUrl } from './elevenlabs.js';
-import { ContactParseError, parseContactText, SummarizeError, summarizeCall } from './openai.js';
+import { ContactParseError, parseContactText, SummarizeError, summarizeCall, SocialLookupError, findSocialProfiles } from './openai.js';
 import { AuthError, checkCredentials, issueToken, requireAuth } from './auth.js';
 import { ApolloApiError, searchPeople, searchCompanies, enrichPerson, pollWebhookResult } from './apollo.js';
 
@@ -232,6 +232,25 @@ app.post(
   }),
 );
 
+// Never called automatically — only from an explicit per-contact 🔍 click
+// (CellHoverEditor.tsx's SocialLookupModal), same "costs real money, needs
+// an explicit click" philosophy as the Apollo enrich route and Calls'
+// per-call Transcribe button above/elsewhere in this file.
+app.post(
+  '/api/contacts/social-lookup',
+  asyncHandler(async (req, res) => {
+    const firstName = typeof req.body?.firstName === 'string' ? req.body.firstName : '';
+    const lastName = typeof req.body?.lastName === 'string' ? req.body.lastName : '';
+    const company = typeof req.body?.company === 'string' ? req.body.company : undefined;
+    if (!firstName.trim() && !lastName.trim()) {
+      res.status(400).json({ error: 'Reikia bent vardo, kad būtų galima ieškoti' });
+      return;
+    }
+    const result = await findSocialProfiles({ firstName, lastName, company });
+    res.json(result);
+  }),
+);
+
 // The three Apollo routes below just forward the request body through to
 // apollo.ts's typed wrappers — validation stays minimal (this is a single-
 // operator tool, not a public API), the frontend's filter panel is
@@ -311,7 +330,7 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
     res.status(502).json({ error: err.message });
     return;
   }
-  if (err instanceof ContactParseError || err instanceof SummarizeError) {
+  if (err instanceof ContactParseError || err instanceof SummarizeError || err instanceof SocialLookupError) {
     console.error('OpenAI error:', err.message);
     res.status(502).json({ error: err.message });
     return;

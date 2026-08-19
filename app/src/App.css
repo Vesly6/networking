@@ -1482,17 +1482,49 @@ tr.row-drop-end td {
   padding: 0.35em 0.6em;
 }
 
+/* A plain flex ROW here (the original layout) put .cell-hover-contact-info
+   and every action button (🔍/✏️/×) as siblings of one `justify-content:
+   space-between` container — space-between spreads gaps *between every
+   pair* of top-level children, not just "info block vs. the rest," so the
+   action buttons themselves ended up spaced apart too (reported as
+   wanting them closer together). It also had no min-width:0/flex:1 on
+   the info block, so a single long, unbreakable word (a long last name)
+   could force the whole row wider than the editor and wrap the action
+   buttons onto their own line unpredictably (reported as the buttons
+   "bugging out"). Now a column: one .cell-hover-contact-main-row (info +
+   actions side by side, each its own tightly-grouped flex item) on top,
+   with the SMS compose form free to occupy a full-width row below it
+   without fighting the same space-between rule. */
 .cell-hover-contact-entry {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 0.4rem;
+  flex-direction: column;
+  gap: 0.3rem;
   padding: 0.4em 0.6em;
   border-top: 1px solid var(--border);
 }
 .cell-hover-contact-entry:first-child {
   border-top: none;
+}
+
+.cell-hover-contact-main-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+/* flex: 1 1 auto is what actually fixes the long-last-name bug — without
+   it the info block sized to its own content instead of claiming the
+   row's leftover space, so a long unbreakable word had nowhere to wrap
+   *within* the block and pushed .cell-hover-contact-actions wider than
+   the row instead. min-width: 0 is required alongside it, same as every
+   other "let a flex child actually shrink/wrap" spot in this app (see
+   CLAUDE.md's notes on .calendar-day for the identical class of bug). */
+.cell-hover-contact-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.1rem;
+  flex: 0 0 auto;
 }
 
 /* Matches the table row-flash animation's color language (same accent
@@ -1514,6 +1546,7 @@ tr.row-drop-end td {
 
 .cell-hover-contact-info {
   min-width: 0;
+  flex: 1 1 auto;
 }
 
 /* One line per field (name/title/company/email/phone) rather than the raw
@@ -1571,6 +1604,39 @@ tr.row-drop-end td {
 }
 .cell-hover-contact-phone-value:hover {
   text-decoration: underline;
+}
+
+/* LinkedIn/Instagram/Facebook — one compact row of real platform-logo
+   icons (not text lines) instead of three separate full-width fields, on
+   explicit request ("соц сети тоже по дефолту будут ближе"). */
+.cell-hover-contact-social-links {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.2rem;
+}
+
+.cell-hover-social-icon-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.1rem;
+}
+
+.cell-hover-social-icon {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+  border-radius: 4px;
+  display: block;
+}
+
+/* A platform that was AI-searched and came up with nothing confirmed —
+   same logo, faded and non-interactive (no href to open), so "checked,
+   empty" reads at a glance without competing with a real found icon
+   sitting right next to it in the same row. */
+.cell-hover-social-icon-not-found {
+  opacity: 0.3;
+  cursor: default;
 }
 
 .cell-hover-contact-remove {
@@ -1667,6 +1733,18 @@ tr.row-drop-end td {
   background: var(--bg-hover);
 }
 
+.cell-hover-contact-social-search {
+  flex: 0 0 auto;
+  border: none;
+  background: transparent;
+  font-size: 0.85rem;
+  line-height: 1;
+  padding: 0.2em 0.3em;
+}
+.cell-hover-contact-social-search:hover {
+  background: var(--bg-hover);
+}
+
 /* Inline, right after the value it copies (phone/email field lines) —
    deliberately small/quiet rather than matched with .calls-copy-btn's
    bordered "Copy" label style elsewhere in the app: this sits inside an
@@ -1687,31 +1765,47 @@ tr.row-drop-end td {
   color: var(--text);
 }
 
-/* Structured add form — First/Last name share a row, everything after
-   (Position/Email/Phone/the submit button) spans the full width. Reused
-   as-is for the inline edit form (CellHoverEditor.tsx applies both this
-   class and .cell-hover-contact-edit-grid together), where the final
-   spanning slot is a Save/Cancel button pair instead of a single submit. */
-.cell-hover-contact-structured-form {
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-alt);
-  /* Keeps its natural height inside .cell-hover-editor's flex column —
-     .cell-hover-history is the only section that should shrink/scroll. */
-  flex-shrink: 0;
+/* Shows an existing SMS count right on the ✉️ button — added because
+   sent-SMS history was genuinely undiscoverable otherwise: it only ever
+   showed up *inside* the compose box, which nothing hinted was worth
+   opening for a number with no message in progress yet (a real, reported
+   "I can't find my SMS history anywhere" confusion). */
+.cell-hover-contact-sms-badge {
+  display: inline-block;
+  margin-left: 0.15em;
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: var(--accent);
 }
 
-.cell-hover-contact-structured-label-row {
+/* The manual-add accordion toggle and the "🔍 Paieška" button share one
+   row, level with each other — previously two separate stacked rows
+   (Paieška alone above, the accordion header below), reported as
+   "странный дизайн" (odd-looking design). They can't be nested (the
+   accordion toggle is itself a <button>, and a <button> inside a
+   <button> is invalid/unclickable HTML), so this is two sibling buttons
+   in one flex row instead of Paieška living inside the accordion's own
+   header the way a badge/chevron would. */
+.cell-hover-contact-header-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 0.4rem;
-  padding: 0.5rem 0.6rem 0;
+  gap: 0.5rem;
+  padding: 0.3rem 0.6rem 0;
 }
 
-.cell-hover-contact-structured-label {
-  font-size: 0.72rem;
-  font-weight: 600;
-  color: var(--text-muted);
+/* Overrides .filter-accordion-header's own width:100%/padding (tuned for
+   the Paieška tab's wider, standalone sidebar) so it sizes as a normal
+   flex item sharing the row with the Paieška button instead of claiming
+   the full row width for itself. */
+.cell-hover-contact-manual-toggle {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto;
+  padding: 0.3rem 0.1rem;
+}
+
+.cell-hover-contact-manual-body {
+  padding-top: 0.3rem;
 }
 
 .cell-hover-apollo-search-btn {
@@ -1883,6 +1977,84 @@ tr.row-drop-end td {
   padding: 0.3rem;
   border-bottom: 1px solid var(--border);
   margin-bottom: 0.2rem;
+}
+
+/* SocialLookupModal — a single-column, narrower cousin of
+   .apollo-search-modal above (no side-by-side filters/results panels
+   needed here, just two short candidate lists), reusing the same
+   .modal/.modal-backdrop chrome + .apollo-search-modal-header/-hint/
+   -close classes for visual consistency with the Apollo modal. */
+.social-lookup-modal {
+  max-width: 520px;
+  gap: 0.6rem;
+}
+
+.social-lookup-platforms {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  overflow-y: auto;
+}
+
+.social-lookup-platform-title {
+  font-weight: 600;
+  font-size: 0.85rem;
+  margin-bottom: 0.3rem;
+}
+
+.social-lookup-candidates {
+  list-style: none;
+  margin: 0 0 0.4rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.social-lookup-candidate {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.social-lookup-candidate a {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.8rem;
+}
+.social-lookup-candidate button {
+  flex: 0 0 auto;
+  font-size: 0.78rem;
+  padding: 0.3em 0.6em;
+}
+
+.social-lookup-empty {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  margin-bottom: 0.4rem;
+}
+
+.social-lookup-not-found {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  border-radius: 6px;
+  padding: 0.3em 0.7em;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.social-lookup-not-found:hover {
+  background: var(--bg-hover);
+}
+
+.social-lookup-decided {
+  font-size: 0.82rem;
+  color: var(--text-muted);
 }
 
 .cell-hover-contact-structured-grid {

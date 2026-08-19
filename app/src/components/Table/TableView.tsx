@@ -28,7 +28,7 @@ import { Popover } from '../Popover';
 import { parseCsvFile, exportRowsToCsv, downloadCsv } from '../../utils/csv';
 import { parseTsv, buildTsv } from '../../utils/tsv';
 import { addNoteEntry, updateNoteEntry, removeNoteEntry } from '../../utils/noteHistory';
-import { addContact, updateContact, removeContact } from '../../utils/contacts';
+import { addContact, updateContact, removeContact, markSocialLookupNotFound } from '../../utils/contacts';
 import { columnLetter, formatCellRef, parseRangeRef } from '../../utils/spreadsheet';
 import { getColumnByType } from '../../utils/row';
 import { normalizePhoneDigits } from '../../utils/phoneMatch';
@@ -1994,6 +1994,9 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
               onAddContact={(text, id) => updateCell(row.id, column.id, addContact(rawValue, text, id))}
               onUpdateContact={(id, text) => updateCell(row.id, column.id, updateContact(rawValue, id, text))}
               onRemoveContact={(id) => updateCell(row.id, column.id, removeContact(rawValue, id))}
+              onSetContactSocialNotFound={(id, platform) =>
+                updateCell(row.id, column.id, markSocialLookupNotFound(rawValue, id, platform))
+              }
               onClose={() => {
                 setExpandedCell(null);
                 setHighlightContactId(null);

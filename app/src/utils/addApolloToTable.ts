@@ -37,6 +37,7 @@ export function useAddApolloResultToTable() {
     // email"'s enrichPerson() call, so the caller passes whatever it has.
     const phone = revealedPhone ?? '';
     const companyName = enriched?.organization?.name ?? person.organization?.name ?? '';
+    const linkedinUrl = enriched?.linkedin_url ?? '';
 
     const rowId = addRow();
 
@@ -47,7 +48,17 @@ export function useAddApolloResultToTable() {
     }
 
     if (contactColumn) {
-      const text = joinContactFields({ firstName, lastName, position: title, email, phone });
+      const text = joinContactFields({
+        firstName,
+        lastName,
+        position: title,
+        company: companyName,
+        email,
+        phone,
+        linkedinUrl,
+        instagramUrl: '',
+        facebookUrl: '',
+      });
       if (text) {
         const current = useTableStore.getState().rows.find((r) => r.id === rowId)?.cells[contactColumn.id] ?? '';
         updateCell(rowId, contactColumn.id, addContact(current, text));

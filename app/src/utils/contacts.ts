@@ -1,6 +1,22 @@
 export interface ContactEntry {
   id: string;
   text: string;
+  /** Whether a 🔍 Instagram/Facebook AI lookup (SocialLookupModal) has
+   * already been run for this entry and come up with nothing the user
+   * confirmed — lets the UI show a dimmed "not found" icon instead of
+   * silently offering to search (and spend a real, if small, per-search
+   * cost) again every time the entry is opened. A *found and confirmed*
+   * link isn't tracked here at all — like linkedinUrl, it's just stored as
+   * a detectable URL segment inside `text` itself (see
+   * INSTAGRAM_PATTERN/FACEBOOK_PATTERN below). This is pure app-internal
+   * bookkeeping, not part of the human-editable text, so it lives as a
+   * separate field rather than being squeezed into the one string — the
+   * "collapse everything into one string" convention this file otherwise
+   * follows is about the person's own data (name/phone/email/...), which
+   * this isn't. Absent entirely (not `false`) for every contact created
+   * before this existed, and for one that simply hasn't been searched
+   * yet. */
+  socialLookup?: { instagramNotFound?: boolean; facebookNotFound?: boolean };
 }
 
 /** A `contact`-type cell's stored value is a JSON array of free-text
@@ -20,6 +36,7 @@ export function parseContacts(raw: string): ContactEntry[] {
       return parsed.map((e) => ({
         id: typeof e.id === 'string' ? e.id : crypto.randomUUID(),
         text: typeof e.text === 'string' ? e.text : formatLegacyEntryText(e),
+        socialLookup: e.socialLookup && typeof e.socialLookup === 'object' ? e.socialLookup : undefined,
       }));
     }
   } catch {
@@ -66,6 +83,19 @@ export function updateContact(raw: string, id: string, text: string): string {
   return serializeContacts(parseContacts(raw).map((c) => (c.id === id ? { ...c, text: trimmed } : c)));
 }
 
+/** Marks that a 🔍 Instagram/Facebook lookup was run for this entry and
+ * the user confirmed no real match exists on `platform` — see
+ * ContactEntry.socialLookup's doc comment for why this is separate
+ * bookkeeping rather than something folded into `text`. A *found* profile
+ * doesn't go through this at all — it's appended straight into `text` via
+ * the normal updateContact() above, same as any other field. */
+export function markSocialLookupNotFound(raw: string, id: string, platform: 'instagram' | 'facebook'): string {
+  const key = platform === 'instagram' ? 'instagramNotFound' : 'facebookNotFound';
+  return serializeContacts(
+    parseContacts(raw).map((c) => (c.id === id ? { ...c, socialLookup: { ...c.socialLookup, [key]: true } } : c)),
+  );
+}
+
 /** For the collapsed (non-hovering) cell preview. */
 export function getContactsSummary(raw: string): string {
   const contacts = parseContacts(raw);
@@ -88,7 +118,7 @@ export function extractPhoneNumber(text: string): string | null {
 }
 
 export interface ContactDisplayField {
-  kind: 'name' | 'email' | 'phone' | 'text';
+  kind: 'name' | 'email' | 'phone' | 'linkedin' | 'instagram' | 'facebook' | 'text';
   value: string;
 }
 
@@ -100,6 +130,18 @@ export interface ContactDisplayField {
 // JSON-ish syntax (e.g. someone pasting this module's own stored shape,
 // `[{"id":...,"text":"..."}]`, back in as literal text).
 const EMAIL_SEARCH_PATTERN = /[^\s,"{}[\]]+@[^\s,"{}[\]]+\.[^\s,"{}[\]]+/;
+
+// Matches a LinkedIn profile/company URL anywhere in the text. Extracted
+// *before* the phone pattern below, not just before/after email — a
+// LinkedIn profile URL commonly ends in a numeric-looking id segment
+// (e.g. "linkedin.com/in/jonas-petraitis-84719203"), which is 7+ digits
+// and would otherwise get misdetected as a phone number by PHONE_PATTERN.
+const LINKEDIN_PATTERN = /https?:\/\/(?:[a-z]{2,3}\.)?linkedin\.com\/[^\s,"{}[\]]*/i;
+// Same reasoning/shape as LINKEDIN_PATTERN, for the two other profile
+// links a confirmed 🔍 lookup (SocialLookupModal) can append — Instagram
+// and Facebook profile URLs commonly carry a long numeric id too.
+const INSTAGRAM_PATTERN = /https?:\/\/(?:www\.)?instagram\.com\/[^\s,"{}[\]]*/i;
+const FACEBOOK_PATTERN = /https?:\/\/(?:www\.)?facebook\.com\/[^\s,"{}[\]]*/i;
 
 /** Splits one contact entry's freeform text into typed fields for display,
  * one per line. Handles both the AI-cleaned "Name, Title, Company, email,
@@ -117,8 +159,29 @@ const EMAIL_SEARCH_PATTERN = /[^\s,"{}[\]]+@[^\s,"{}[\]]+\.[^\s,"{}[\]]+/;
  * string described above; nothing here is re-parsed back into `text`. */
 export function splitContactDisplayFields(text: string): ContactDisplayField[] {
   let remaining = text;
+  let linkedin: string | null = null;
+  let instagram: string | null = null;
+  let facebook: string | null = null;
   let email: string | null = null;
   let phone: string | null = null;
+
+  const linkedinMatch = LINKEDIN_PATTERN.exec(remaining);
+  if (linkedinMatch) {
+    linkedin = linkedinMatch[0];
+    remaining = remaining.slice(0, linkedinMatch.index) + remaining.slice(linkedinMatch.index + linkedin.length);
+  }
+
+  const instagramMatch = INSTAGRAM_PATTERN.exec(remaining);
+  if (instagramMatch) {
+    instagram = instagramMatch[0];
+    remaining = remaining.slice(0, instagramMatch.index) + remaining.slice(instagramMatch.index + instagram.length);
+  }
+
+  const facebookMatch = FACEBOOK_PATTERN.exec(remaining);
+  if (facebookMatch) {
+    facebook = facebookMatch[0];
+    remaining = remaining.slice(0, facebookMatch.index) + remaining.slice(facebookMatch.index + facebook.length);
+  }
 
   const emailMatch = EMAIL_SEARCH_PATTERN.exec(remaining);
   if (emailMatch) {
@@ -140,6 +203,9 @@ export function splitContactDisplayFields(text: string): ContactDisplayField[] {
 
   if (email) fields.push({ kind: 'email', value: email });
   if (phone) fields.push({ kind: 'phone', value: phone });
+  if (linkedin) fields.push({ kind: 'linkedin', value: linkedin });
+  if (instagram) fields.push({ kind: 'instagram', value: instagram });
+  if (facebook) fields.push({ kind: 'facebook', value: facebook });
 
   return fields;
 }
@@ -148,43 +214,75 @@ export interface ContactFormFields {
   firstName: string;
   lastName: string;
   position: string;
+  company: string;
   email: string;
   phone: string;
+  linkedinUrl: string;
+  // No form <input> exposes these two — they're only ever written by a
+  // confirmed 🔍 Instagram/Facebook lookup (SocialLookupModal), appended
+  // straight into an entry's text via updateContact(), same as
+  // linkedinUrl. They're still part of this type (rather than living
+  // outside it) purely so contactTextToFields() -> edit form -> save
+  // round-trips them unchanged: without this, editing *any* other field
+  // through the structured form and saving would silently drop an
+  // already-confirmed Instagram/Facebook link, since joinContactFields()
+  // only ever emits what's in this object.
+  instagramUrl: string;
+  facebookUrl: string;
 }
 
 /** Builds the same comma-separated shape the AI contact-paste cleanup
  * produces (`server`'s CONTACT_PARSE_SYSTEM_PROMPT: "Name, Title, Company,
- * email, phone") from the structured add/edit form's five separate
- * fields, so splitContactDisplayFields() reads it back exactly the same
- * way regardless of which path an entry came from. Empty fields are
- * omitted rather than left as blank commas. */
+ * email, phone") from the structured add/edit form's fields, so
+ * splitContactDisplayFields() reads it back exactly the same way
+ * regardless of which path an entry came from. linkedinUrl/instagramUrl/
+ * facebookUrl are appended last, after phone — the AI-cleanup prompt has
+ * no URL fields of its own, so these are purely additive and don't shift
+ * any of the other positions. Empty fields are omitted rather than left
+ * as blank commas. */
 export function joinContactFields(fields: ContactFormFields): string {
   const name = `${fields.firstName.trim()} ${fields.lastName.trim()}`.trim();
-  return [name, fields.position.trim(), fields.email.trim(), fields.phone.trim()].filter(Boolean).join(', ');
+  return [
+    name,
+    fields.position.trim(),
+    fields.company.trim(),
+    fields.email.trim(),
+    fields.phone.trim(),
+    fields.linkedinUrl.trim(),
+    fields.instagramUrl.trim(),
+    fields.facebookUrl.trim(),
+  ]
+    .filter(Boolean)
+    .join(', ');
 }
 
 /** The reverse of joinContactFields(), for pre-filling the edit form from
  * an existing entry's freeform text — necessarily a best-effort guess,
  * not a lossless round-trip, since the stored text is just one string
  * with no real field boundaries. Built on splitContactDisplayFields()'s
- * existing email/phone detection; the one further guess this adds is
- * splitting the "name" segment on its first space into first/last (right
- * for "Jonas Petraitis", not guaranteed for every name format) — good
- * enough to prefill an edit that's about to be reviewed by a human
- * anyway, same spirit as the AI contact-paste cleanup never auto-saving
- * without a look first. */
+ * existing email/phone/linkedin detection; the further guesses this adds
+ * are splitting the "name" segment on its first space into first/last
+ * (right for "Jonas Petraitis", not guaranteed for every name format),
+ * and treating the first two generic 'text' segments as position and
+ * company respectively (matches the order joinContactFields writes them
+ * in — there's no way to tell them apart from the string alone beyond
+ * position) — good enough to prefill an edit that's about to be reviewed
+ * by a human anyway, same spirit as the AI contact-paste cleanup never
+ * auto-saving without a look first. */
 export function contactTextToFields(text: string): ContactFormFields {
   const parsed = splitContactDisplayFields(text);
   const nameField = parsed.find((f) => f.kind === 'name');
   const [firstName = '', ...rest] = (nameField?.value ?? '').split(' ').filter(Boolean);
+  const textFields = parsed.filter((f) => f.kind === 'text').map((f) => f.value);
   return {
     firstName,
     lastName: rest.join(' '),
-    position: parsed
-      .filter((f) => f.kind === 'text')
-      .map((f) => f.value)
-      .join(', '),
+    position: textFields[0] ?? '',
+    company: textFields[1] ?? '',
     email: parsed.find((f) => f.kind === 'email')?.value ?? '',
     phone: parsed.find((f) => f.kind === 'phone')?.value ?? '',
+    linkedinUrl: parsed.find((f) => f.kind === 'linkedin')?.value ?? '',
+    instagramUrl: parsed.find((f) => f.kind === 'instagram')?.value ?? '',
+    facebookUrl: parsed.find((f) => f.kind === 'facebook')?.value ?? '',
   };
 }

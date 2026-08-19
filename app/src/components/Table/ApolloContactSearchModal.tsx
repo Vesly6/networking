@@ -207,9 +207,29 @@ export function ApolloContactSearchModal({
       const firstName = result.person?.first_name || person.first_name || '';
       const lastName = result.person?.last_name || person.last_name_obfuscated || '';
       const email = result.person?.email || result.person?.contact?.email || '';
+      // The selected company's own name (from Company Search, already
+      // confirmed by the user in step 1) — not person.organization?.name,
+      // which isn't guaranteed present on every People Search result and
+      // would otherwise make "Company" silently blank for some people even
+      // though the company is already known for certain at this point.
+      const company = selectedCompany?.name ?? '';
+      const linkedinUrl = result.person?.linkedin_url || '';
 
       const id = crypto.randomUUID();
-      onAddContactRef.current(joinContactFields({ firstName, lastName, position: person.title ?? '', email, phone: '' }), id);
+      onAddContactRef.current(
+        joinContactFields({
+          firstName,
+          lastName,
+          position: person.title ?? '',
+          company,
+          email,
+          phone: '',
+          linkedinUrl,
+          instagramUrl: '',
+          facebookUrl: '',
+        }),
+        id,
+      );
       setPeopleResults((prev) => prev.filter((p) => p.id !== person.id));
       showToast(`${firstName || 'Kontaktas'} pridėtas`);
 
@@ -230,7 +250,17 @@ export function ApolloContactSearchModal({
                 if (phone) {
                   onUpdateContactRef.current(
                     id,
-                    joinContactFields({ firstName, lastName, position: person.title ?? '', email, phone }),
+                    joinContactFields({
+                      firstName,
+                      lastName,
+                      position: person.title ?? '',
+                      company,
+                      email,
+                      phone,
+                      linkedinUrl,
+                      instagramUrl: '',
+                      facebookUrl: '',
+                    }),
                   );
                   showToast(`${firstName || 'Kontaktas'}: rastas telefono numeris`);
                 }

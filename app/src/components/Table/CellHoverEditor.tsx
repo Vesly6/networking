@@ -17,6 +17,7 @@ import {
   contactTextToFields,
   type ContactEntry,
   type ContactFormFields,
+  type ContactDisplayField,
 } from '../../utils/contacts';
 import { formatHistoryTimestamp } from '../../utils/date';
 import { parseContactText } from '../../utils/contactsApi';
@@ -27,6 +28,7 @@ import { useToastStore } from '../../store/useToastStore';
 import { confirmDialog } from '../../store/useConfirmStore';
 import { getAllTranscriptions, saveSmsLogEntry, getAllSmsLog } from '../../db/db';
 import { ApolloContactSearchModal } from './ApolloContactSearchModal';
+import { SocialLookupModal } from './SocialLookupModal';
 
 interface CellHoverEditorProps {
   anchor: HTMLElement;
@@ -51,6 +53,13 @@ interface CellHoverEditorProps {
   onAddContact: (text: string, id?: string) => void;
   onUpdateContact: (id: string, text: string) => void;
   onRemoveContact: (id: string) => void;
+  /** Records that a 🔍 Instagram/Facebook lookup came up with nothing the
+   * user confirmed for that platform — see ContactEntry.socialLookup in
+   * utils/contacts.ts for why this isn't just another updateContact()
+   * call. A *found and confirmed* link doesn't need a dedicated prop — it
+   * goes through the existing onUpdateContact above, same as any other
+   * text change. */
+  onSetContactSocialNotFound: (id: string, platform: 'instagram' | 'facebook') => void;
   onClose: () => void;
 }
 
@@ -60,7 +69,17 @@ const MARGIN = 8;
 // not actually usable.
 const MIN_USABLE_HEIGHT = 220;
 
-const EMPTY_CONTACT_FIELDS: ContactFormFields = { firstName: '', lastName: '', position: '', email: '', phone: '' };
+const EMPTY_CONTACT_FIELDS: ContactFormFields = {
+  firstName: '',
+  lastName: '',
+  position: '',
+  company: '',
+  email: '',
+  phone: '',
+  linkedinUrl: '',
+  instagramUrl: '',
+  facebookUrl: '',
+};
 
 // Quick-log buttons for the common entries in a call/sales workflow (sent
 // an email, scheduled a meeting) — each just adds a new dated comment
@@ -68,6 +87,21 @@ const EMPTY_CONTACT_FIELDS: ContactFormFields = { firstName: '', lastName: '', p
 // and hitting Enter, just faster for the entries logged constantly. Each
 // carries its own muted (never bright) background so the tags are visually
 // distinct at a glance in the history list below.
+// Real platform logos (from /public/social-icons/, provided assets) rather
+// than emoji — used in the compact social-links row below, one shared
+// lookup for the icon src + accessible label per platform.
+type SocialPlatform = 'linkedin' | 'instagram' | 'facebook';
+const SOCIAL_ICON_SRC: Record<SocialPlatform, string> = {
+  linkedin: '/social-icons/linkedin.png',
+  instagram: '/social-icons/instagram.png',
+  facebook: '/social-icons/facebook.png',
+};
+const SOCIAL_ICON_LABEL: Record<SocialPlatform, string> = {
+  linkedin: 'LinkedIn',
+  instagram: 'Instagram',
+  facebook: 'Facebook',
+};
+
 const NOTE_TAGS: Array<{ label: string; color: string }> = [
   { label: 'Laiškas', color: '#e3ecf7' },
   { label: 'Laiško priminimas', color: '#e1f0ef' },
@@ -103,6 +137,7 @@ export function CellHoverEditor({
   onAddContact,
   onUpdateContact,
   onRemoveContact,
+  onSetContactSocialNotFound,
   onClose,
 }: CellHoverEditorProps) {
   const showToast = useToastStore((s) => s.show);
@@ -114,6 +149,19 @@ export function CellHoverEditor({
   const [editDraft, setEditDraft] = useState('');
   const [loadingLastSummary, setLoadingLastSummary] = useState(false);
   const [apolloModalOpen, setApolloModalOpen] = useState(false);
+  // Collapsed by default (rarely used — most contacts get added through
+  // the Apollo search instead). Local state rather than reusing
+  // FilterAccordionSection here: that component's whole header row is
+  // itself a <button>, which the "🔍 Paieška" button couldn't sit inside
+  // (invalid, un-clickable nested <button>-in-<button> markup) — this
+  // keeps the same collapsible look (same CSS classes) but as a sibling
+  // of Paieška in one flex row instead, so the two sit level with each
+  // other, on explicit request ("кнопка поиск была бы на уровне с текстом
+  // добавить контакт").
+  const [manualContactFormOpen, setManualContactFormOpen] = useState(false);
+  // Which contact entry (by id) currently has SocialLookupModal open —
+  // one at a time, same convention as smsComposeFor/editingContactId below.
+  const [socialLookupFor, setSocialLookupFor] = useState<string | null>(null);
   // Which contact entry (by id) currently has the SMS compose box open —
   // one at a time, same "only one thing expanded" convention as
   // editingContactId/editingNoteId elsewhere in this file.
@@ -126,6 +174,23 @@ export function CellHoverEditor({
   // API has no status/history method, and this app didn't persist
   // anything about a send either). Loaded fresh each time compose opens.
   const [smsHistory, setSmsHistory] = useState<SmsLogRecord[]>([]);
+  // Every SMS ever logged, prefetched once so a per-contact "✉️³" badge can
+  // show *whether* history exists for a number before the user opens
+  // compose — the compose box itself already loaded a phone-filtered copy
+  // on open (openSmsCompose below), but with no badge there was no way to
+  // know history existed at all short of clicking ✉️ speculatively, which
+  // is exactly what got reported as "I don't see any SMS history anywhere."
+  const [allSmsHistory, setAllSmsHistory] = useState<SmsLogRecord[]>([]);
+  useEffect(() => {
+    if (mode !== 'contact') return;
+    let cancelled = false;
+    void getAllSmsLog().then((all) => {
+      if (!cancelled) setAllSmsHistory(all);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [mode]);
   const skipNoteEditCommitRef = useRef(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
@@ -178,8 +243,41 @@ export function CellHoverEditor({
 
   useLayoutEffect(() => {
     const place = () => {
+      // The table is virtualized (TableView.tsx) — scrolling far enough
+      // that this editor's own row leaves the rendered window unmounts
+      // its <tr>/<td>s entirely, turning `anchor` into a detached DOM
+      // node. getBoundingClientRect() on a detached node returns an
+      // all-zero rect, which without this check made the editor visibly
+      // snap to the viewport's top-left corner mid-scroll — a real,
+      // reported bug ("the note window jumps to the left side"). Once the
+      // anchor is gone there's no sensible cell left to stay anchored to,
+      // so this closes the editor instead of rendering it somewhere
+      // meaningless.
+      if (!anchor.isConnected) {
+        onClose();
+        return;
+      }
       const rect = anchor.getBoundingClientRect();
-      const minWidth = mode === 'contact' ? 340 : 240;
+      // A second, related case confirmed live while testing the fix
+      // above: on a table with few enough rows that the virtualizer's
+      // overscan keeps *every* row mounted regardless of scroll position,
+      // the anchor never actually disconnects — but scrolling far enough
+      // still moves its rect deeply outside the viewport (e.g. top:
+      // -730px, still "connected"). Without this check that negative top
+      // was used as-is, rendering the editor as a huge, disconnected-
+      // looking overlay pinned near the viewport edge instead of tracking
+      // any real cell. Once the anchor isn't visible at all anymore
+      // (scrolled fully above/below/left/right of the viewport), there's
+      // equally nothing sensible left to anchor to, so this closes too.
+      if (rect.bottom <= 0 || rect.top >= window.innerHeight || rect.right <= 0 || rect.left >= window.innerWidth) {
+        onClose();
+        return;
+      }
+      // Doubled from 240 on explicit request ("увеличим в размере на два
+      // раза") — the note editor's single-line comment input + tag row
+      // read as cramped at the old width. Contact mode's 340 is unrelated
+      // and untouched; the request was specifically about notes.
+      const minWidth = mode === 'contact' ? 340 : 480;
       const width = Math.max(rect.width, minWidth);
       const left = Math.max(MARGIN, Math.min(rect.left, window.innerWidth - width - MARGIN));
       // How tall the editor actually wants to be, measured from its own
@@ -240,6 +338,16 @@ export function CellHoverEditor({
       window.removeEventListener('scroll', place, true);
       ro.disconnect();
     };
+    // onClose intentionally excluded — it's a fresh inline closure every
+    // render (TableView's `() => { setExpandedCell(null); ... }`), so
+    // including it would re-run this positioning effect (and briefly flash
+    // the editor to its -9999 hidden position) on every unrelated parent
+    // re-render. It's parameter-free and doesn't close over anything
+    // row/column-specific, so calling whichever version happened to be
+    // captured is always equivalent — this effect is meant to re-run only
+    // when the anchored cell itself changes (anchor/mode), same as before
+    // the anchor.isConnected check above was added.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [anchor, mode]);
 
   const commitNewEntry = () => {
@@ -377,6 +485,54 @@ export function CellHoverEditor({
     }
   };
 
+  // One compact row per contact for LinkedIn/Instagram/Facebook (real
+  // logo icons, not text lines) — consolidated out of the per-field list
+  // below on explicit request ("соц сети тоже по дефолту будут ближе"):
+  // three separate full-width text lines read as far apart, especially
+  // once each carried its own copy button. `field` present means a
+  // confirmed/typed link exists (rendered as a clickable icon + copy
+  // button); `notFound` (Instagram/Facebook only — LinkedIn has no AI
+  // search, so no not-found state) renders the same logo faded and
+  // non-interactive, so a person who was checked and came up empty still
+  // shows *something* rather than nothing at all.
+  const renderSocialIcon = (platform: SocialPlatform, field: ContactDisplayField | undefined, notFound?: boolean) => {
+    if (field) {
+      return (
+        <span key={platform} className="cell-hover-social-icon-wrap">
+          <a
+            href={field.value}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={`Atidaryti ${SOCIAL_ICON_LABEL[platform]} profilį`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <img src={SOCIAL_ICON_SRC[platform]} alt={SOCIAL_ICON_LABEL[platform]} className="cell-hover-social-icon" />
+          </a>
+          <button
+            type="button"
+            className="cell-hover-contact-copy"
+            title={`Kopijuoti ${SOCIAL_ICON_LABEL[platform]} nuorodą`}
+            onClick={() => void copyText(field.value, `${SOCIAL_ICON_LABEL[platform]} nuoroda`)}
+          >
+            📋
+          </button>
+        </span>
+      );
+    }
+    if (notFound) {
+      return (
+        <img
+          key={platform}
+          src={SOCIAL_ICON_SRC[platform]}
+          alt={SOCIAL_ICON_LABEL[platform]}
+          title={`AI paieška atlikta — ${SOCIAL_ICON_LABEL[platform]} profilis nerastas. Spauskite 🔍, kad bandytumėte dar kartą.`}
+          className="cell-hover-social-icon cell-hover-social-icon-not-found"
+        />
+      );
+    }
+    return null;
+  };
+
   // Clicking a contact's phone number (the number itself, not the 📋
   // button — that still just copies, unchanged) sends it straight into
   // the Zadarma softphone's own input so the only thing left to do is
@@ -438,6 +594,10 @@ export function CellHoverEditor({
       // for why this exists at all).
       void saveSmsLogEntry(entry);
       setSmsHistory((prev) => [entry, ...prev]);
+      // Keeps the ✉️ badge count (allSmsHistory, prefetched once on mount)
+      // live for a send that happens during this same session, without
+      // needing to close and reopen the editor to see the count update.
+      setAllSmsHistory((prev) => [entry, ...prev]);
     }
   };
 
@@ -558,89 +718,129 @@ export function CellHoverEditor({
             </>
           ) : (
             <>
-              <div className="cell-hover-contact-structured-form">
-                <div className="cell-hover-contact-structured-label-row">
-                  <div className="cell-hover-contact-structured-label">Pridėti kontaktą</div>
-                  <button
-                    type="button"
-                    className="cell-hover-apollo-search-btn"
-                    disabled={!companyName?.trim()}
-                    onClick={() => setApolloModalOpen(true)}
-                    title={
-                      companyName
-                        ? `Ieškoti žmonių įmonėje „${companyName}“ (Apollo)`
-                        : 'Šiai eilutei nenustatytas įmonės pavadinimas'
-                    }
-                  >
-                    🔍 Paieška
-                  </button>
-                </div>
-                <form
-                  className="cell-hover-contact-structured-grid"
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    commitStructuredContact();
-                  }}
+              <div className="cell-hover-contact-header-row">
+                <button
+                  type="button"
+                  className="filter-accordion-header cell-hover-contact-manual-toggle"
+                  onClick={() => setManualContactFormOpen((v) => !v)}
                 >
-                  <input
-                    placeholder="Vardas"
-                    autoFocus
-                    value={addFields.firstName}
-                    onChange={(e) => updateAddField('firstName', e.target.value)}
-                  />
-                  <input
-                    placeholder="Pavardė"
-                    value={addFields.lastName}
-                    onChange={(e) => updateAddField('lastName', e.target.value)}
-                  />
-                  <input
-                    placeholder="Pareigos"
-                    value={addFields.position}
-                    onChange={(e) => updateAddField('position', e.target.value)}
-                  />
-                  <input
-                    placeholder="El. paštas"
-                    value={addFields.email}
-                    onChange={(e) => updateAddField('email', e.target.value)}
-                  />
-                  <input
-                    placeholder="Telefonas"
-                    value={addFields.phone}
-                    onChange={(e) => updateAddField('phone', e.target.value)}
-                  />
-                  <button type="submit" className="primary cell-hover-contact-add">
-                    + Pridėti kontaktą
-                  </button>
-                </form>
-              </div>
-
-              <div className="cell-hover-contact-divider">arba įklijuokite laisvą tekstą</div>
-
-              <div className="cell-hover-contact-form">
-                <input
-                  placeholder={parsingContact ? 'Tvarkoma…' : 'Vardas, telefonas, el. paštas…'}
-                  value={contactDraft}
-                  // readOnly, not disabled — disabling a *focused* input forces
-                  // an immediate browser blur, which (via TableView's
-                  // withinTableFocus() check treating document.body as "still
-                  // fine") was the actual root cause of the paste-leaking-into-
-                  // the-table bug above. readOnly blocks typing without ever
-                  // touching focus.
-                  readOnly={parsingContact}
-                  onChange={(e) => setContactDraft(e.target.value)}
-                  onPaste={(e) => void handleContactPaste(e)}
-                  onBlur={commitContact}
-                  onKeyDown={(e) => e.key === 'Enter' && commitContact()}
-                />
-                <button type="button" className="primary cell-hover-contact-add" onClick={commitContact}>
-                  + Pridėti kontaktą
+                  <span className="filter-accordion-title">+ Pridėti kontaktą rankiniu būdu</span>
+                  <span className={`filter-accordion-chevron ${manualContactFormOpen ? 'filter-accordion-chevron-open' : ''}`}>
+                    ▾
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="cell-hover-apollo-search-btn"
+                  disabled={!companyName?.trim()}
+                  onClick={() => setApolloModalOpen(true)}
+                  title={
+                    companyName
+                      ? `Ieškoti žmonių įmonėje „${companyName}“ (Apollo)`
+                      : 'Šiai eilutei nenustatytas įmonės pavadinimas'
+                  }
+                >
+                  🔍 Paieška
                 </button>
               </div>
+              {manualContactFormOpen && (
+                <div className="filter-accordion-body cell-hover-contact-manual-body">
+                  <form
+                    className="cell-hover-contact-structured-grid"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      commitStructuredContact();
+                    }}
+                  >
+                    <input
+                      placeholder="Vardas"
+                      autoFocus
+                      value={addFields.firstName}
+                      onChange={(e) => updateAddField('firstName', e.target.value)}
+                    />
+                    <input
+                      placeholder="Pavardė"
+                      value={addFields.lastName}
+                      onChange={(e) => updateAddField('lastName', e.target.value)}
+                    />
+                    <input
+                      placeholder="Pareigos"
+                      value={addFields.position}
+                      onChange={(e) => updateAddField('position', e.target.value)}
+                    />
+                    <input
+                      placeholder="Įmonė"
+                      value={addFields.company}
+                      onChange={(e) => updateAddField('company', e.target.value)}
+                    />
+                    <input
+                      placeholder="El. paštas"
+                      value={addFields.email}
+                      onChange={(e) => updateAddField('email', e.target.value)}
+                    />
+                    <input
+                      placeholder="Telefonas"
+                      value={addFields.phone}
+                      onChange={(e) => updateAddField('phone', e.target.value)}
+                    />
+                    <input
+                      placeholder="LinkedIn nuoroda"
+                      value={addFields.linkedinUrl}
+                      onChange={(e) => updateAddField('linkedinUrl', e.target.value)}
+                    />
+                    <button type="submit" className="primary cell-hover-contact-add">
+                      + Pridėti kontaktą
+                    </button>
+                  </form>
+
+                  <div className="cell-hover-contact-divider">arba įklijuokite laisvą tekstą</div>
+
+                  <div className="cell-hover-contact-form">
+                    <input
+                      placeholder={parsingContact ? 'Tvarkoma…' : 'Vardas, telefonas, el. paštas…'}
+                      value={contactDraft}
+                      // readOnly, not disabled — disabling a *focused* input forces
+                      // an immediate browser blur, which (via TableView's
+                      // withinTableFocus() check treating document.body as "still
+                      // fine") was the actual root cause of the paste-leaking-into-
+                      // the-table bug above. readOnly blocks typing without ever
+                      // touching focus.
+                      readOnly={parsingContact}
+                      onChange={(e) => setContactDraft(e.target.value)}
+                      onPaste={(e) => void handleContactPaste(e)}
+                      onBlur={commitContact}
+                      onKeyDown={(e) => e.key === 'Enter' && commitContact()}
+                    />
+                    <button type="button" className="primary cell-hover-contact-add" onClick={commitContact}>
+                      + Pridėti kontaktą
+                    </button>
+                  </div>
+                </div>
+              )}
               {parseContacts(value).length > 0 && (
                 <div className="cell-hover-history">
                   {parseContacts(value).map((c) => {
                     const phone = extractPhoneNumber(c.text);
                     const isEditing = editingContactId === c.id;
+                    const fields = splitContactDisplayFields(c.text);
+                    const linkedinField = fields.find((f) => f.kind === 'linkedin');
+                    const instagramField = fields.find((f) => f.kind === 'instagram');
+                    const facebookField = fields.find((f) => f.kind === 'facebook');
+                    const showSocialRow =
+                      linkedinField ||
+                      instagramField ||
+                      facebookField ||
+                      c.socialLookup?.instagramNotFound ||
+                      c.socialLookup?.facebookNotFound;
+                    // Only actually needed while this entry's
+                    // SocialLookupModal is open, but computing it
+                    // unconditionally here (once) is simpler and cheaper
+                    // than three separate contactTextToFields() calls
+                    // inline in the modal's props below.
+                    const socialLookupFields = contactTextToFields(c.text);
+                    const phoneSmsCount = phone
+                      ? allSmsHistory.filter((r) => phoneMatchKey(r.phone) === phoneMatchKey(phone)).length
+                      : 0;
                     return (
                       <div
                         key={c.id}
@@ -675,6 +875,12 @@ export function CellHoverEditor({
                               onKeyDown={handleEditKeyDown}
                             />
                             <input
+                              placeholder="Įmonė"
+                              value={editFields.company}
+                              onChange={(e) => updateEditField('company', e.target.value)}
+                              onKeyDown={handleEditKeyDown}
+                            />
+                            <input
                               placeholder="El. paštas"
                               value={editFields.email}
                               onChange={(e) => updateEditField('email', e.target.value)}
@@ -684,6 +890,12 @@ export function CellHoverEditor({
                               placeholder="Telefonas"
                               value={editFields.phone}
                               onChange={(e) => updateEditField('phone', e.target.value)}
+                              onKeyDown={handleEditKeyDown}
+                            />
+                            <input
+                              placeholder="LinkedIn nuoroda"
+                              value={editFields.linkedinUrl}
+                              onChange={(e) => updateEditField('linkedinUrl', e.target.value)}
                               onKeyDown={handleEditKeyDown}
                             />
                             <div className="cell-hover-contact-edit-actions">
@@ -697,63 +909,116 @@ export function CellHoverEditor({
                           </form>
                         ) : (
                           <>
-                            <div className="cell-hover-contact-info">
-                              {splitContactDisplayFields(c.text).map((field, i) => (
-                                <div key={i} className={`cell-hover-contact-field cell-hover-contact-field-${field.kind}`}>
-                                  {field.kind === 'phone' ? (
-                                    <button
-                                      type="button"
-                                      className="cell-hover-contact-phone-value"
-                                      title="Siųsti į telefono programėlę"
-                                      onClick={() => void callViaSoftphone(field.value)}
-                                    >
-                                      {field.value}
-                                    </button>
-                                  ) : (
-                                    field.value
-                                  )}
-                                  {field.kind === 'name' && (
-                                    <button
-                                      type="button"
-                                      className="cell-hover-contact-copy"
-                                      title="Kopijuoti vardą"
-                                      onClick={() => void copyText(field.value, 'Vardas')}
-                                    >
-                                      📋
-                                    </button>
-                                  )}
-                                  {field.kind === 'phone' && (
-                                    <>
-                                      <button
-                                        type="button"
-                                        className="cell-hover-contact-copy"
-                                        title="Kopijuoti telefono numerį"
-                                        onClick={() => void copyText(field.value, 'Telefono numeris')}
-                                      >
-                                        📋
-                                      </button>
-                                      <button
-                                        type="button"
-                                        className="cell-hover-contact-copy"
-                                        title="Siųsti SMS"
-                                        onClick={() => void openSmsCompose(c.id, field.value)}
-                                      >
-                                        ✉️
-                                      </button>
-                                    </>
-                                  )}
-                                  {field.kind === 'email' && (
-                                    <button
-                                      type="button"
-                                      className="cell-hover-contact-copy"
-                                      title="Kopijuoti el. paštą"
-                                      onClick={() => void copyText(field.value, 'El. paštas')}
-                                    >
-                                      📋
-                                    </button>
-                                  )}
-                                </div>
-                              ))}
+                            <div className="cell-hover-contact-main-row">
+                              <div className="cell-hover-contact-info">
+                                {fields
+                                  .filter((f) => f.kind !== 'linkedin' && f.kind !== 'instagram' && f.kind !== 'facebook')
+                                  .map((field, i) => (
+                                    <div key={i} className={`cell-hover-contact-field cell-hover-contact-field-${field.kind}`}>
+                                      {field.kind === 'phone' ? (
+                                        <button
+                                          type="button"
+                                          className="cell-hover-contact-phone-value"
+                                          title="Siųsti į telefono programėlę"
+                                          onClick={() => void callViaSoftphone(field.value)}
+                                        >
+                                          {field.value}
+                                        </button>
+                                      ) : (
+                                        field.value
+                                      )}
+                                      {field.kind === 'name' && (
+                                        <button
+                                          type="button"
+                                          className="cell-hover-contact-copy"
+                                          title="Kopijuoti vardą"
+                                          onClick={() => void copyText(field.value, 'Vardas')}
+                                        >
+                                          📋
+                                        </button>
+                                      )}
+                                      {field.kind === 'phone' && (
+                                        <>
+                                          <button
+                                            type="button"
+                                            className="cell-hover-contact-copy"
+                                            title="Kopijuoti telefono numerį"
+                                            onClick={() => void copyText(field.value, 'Telefono numeris')}
+                                          >
+                                            📋
+                                          </button>
+                                          <button
+                                            type="button"
+                                            className="cell-hover-contact-copy"
+                                            title={
+                                              phoneSmsCount > 0
+                                                ? `Siųsti SMS (yra ${phoneSmsCount} ankstesnė(-ų) šiam numeriui — spauskite, kad matytumėte)`
+                                                : 'Siųsti SMS'
+                                            }
+                                            onClick={() => void openSmsCompose(c.id, field.value)}
+                                          >
+                                            ✉️{phoneSmsCount > 0 && <span className="cell-hover-contact-sms-badge">{phoneSmsCount}</span>}
+                                          </button>
+                                        </>
+                                      )}
+                                      {field.kind === 'email' && (
+                                        <button
+                                          type="button"
+                                          className="cell-hover-contact-copy"
+                                          title="Kopijuoti el. paštą"
+                                          onClick={() => void copyText(field.value, 'El. paštas')}
+                                        >
+                                          📋
+                                        </button>
+                                      )}
+                                    </div>
+                                  ))}
+                                {showSocialRow && (
+                                  <div className="cell-hover-contact-social-links">
+                                    {renderSocialIcon('linkedin', linkedinField)}
+                                    {renderSocialIcon('instagram', instagramField, c.socialLookup?.instagramNotFound)}
+                                    {renderSocialIcon('facebook', facebookField, c.socialLookup?.facebookNotFound)}
+                                  </div>
+                                )}
+                              </div>
+                              <div className="cell-hover-contact-actions">
+                                {CONTACT_CALL_BUTTON_ENABLED && phone && (
+                                  <button
+                                    type="button"
+                                    className="cell-hover-contact-call"
+                                    title={`Skambinti ${phone}`}
+                                    onClick={() => void callContact(c.text)}
+                                  >
+                                    📞
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  className="cell-hover-contact-social-search"
+                                  title="Ieškoti Instagram / Facebook (AI)"
+                                  onClick={() => setSocialLookupFor(c.id)}
+                                >
+                                  🔍
+                                </button>
+                                <button
+                                  type="button"
+                                  className="cell-hover-contact-edit"
+                                  title="Redaguoti kontaktą"
+                                  onClick={() => startEditingContact(c)}
+                                >
+                                  ✏️
+                                </button>
+                                <button
+                                  type="button"
+                                  className="cell-hover-contact-remove"
+                                  title="Pašalinti kontaktą"
+                                  onClick={() => {
+                                    void removeContact(c.id);
+                                  }}
+                                >
+                                  ×
+                                </button>
+                              </div>
                             </div>
                             {smsComposeFor === c.id && phone && (
                               <form
@@ -802,35 +1067,22 @@ export function CellHoverEditor({
                                 )}
                               </form>
                             )}
-                            {CONTACT_CALL_BUTTON_ENABLED && phone && (
-                              <button
-                                type="button"
-                                className="cell-hover-contact-call"
-                                title={`Skambinti ${phone}`}
-                                onClick={() => void callContact(c.text)}
-                              >
-                                📞
-                              </button>
-                            )}
-                            <button
-                              type="button"
-                              className="cell-hover-contact-edit"
-                              title="Redaguoti kontaktą"
-                              onClick={() => startEditingContact(c)}
-                            >
-                              ✏️
-                            </button>
-                            <button
-                              type="button"
-                              className="cell-hover-contact-remove"
-                              title="Pašalinti kontaktą"
-                              onClick={() => {
-                                void removeContact(c.id);
-                              }}
-                            >
-                              ×
-                            </button>
                           </>
+                        )}
+                        {socialLookupFor === c.id && (
+                          <SocialLookupModal
+                            firstName={socialLookupFields.firstName}
+                            lastName={socialLookupFields.lastName}
+                            company={socialLookupFields.company}
+                            onConfirm={(platform, url) => {
+                              if (url) {
+                                onUpdateContact(c.id, [c.text, url].filter(Boolean).join(', '));
+                              } else {
+                                onSetContactSocialNotFound(c.id, platform);
+                              }
+                            }}
+                            onClose={() => setSocialLookupFor(null)}
+                          />
                         )}
                       </div>
                     );
