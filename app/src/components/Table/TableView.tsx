@@ -1820,6 +1820,20 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
                           draggable={rowDragEnabled}
                           onDragStart={(e) => handleRowGripDragStart(e, row.id, index)}
                           onDragEnd={handleRowDragEnd}
+                          // draggable={false} means the browser never even
+                          // fires dragstart when this is disabled — trying
+                          // to drag just silently does nothing, which reads
+                          // as "the drag feature doesn't work" rather than
+                          // "it's off right now because of the active
+                          // sort/search." The row-gutter <td>'s own title
+                          // already explains this, but only as a native
+                          // hover tooltip — easy to miss when you're
+                          // actively trying to drag, not hovering and
+                          // waiting. This fires the same explanation as an
+                          // immediate toast on the actual attempt.
+                          onMouseDown={() => {
+                            if (!rowDragEnabled) showToast('Išjunkite rikiavimą arba paiešką, kad galėtumėte vilkti eilutes');
+                          }}
                           title="Vilkite, kad pakeistumėte eilučių tvarką"
                         >
                           ⠿
