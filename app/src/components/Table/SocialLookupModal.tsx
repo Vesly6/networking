@@ -21,14 +21,15 @@ interface SocialLookupModalProps {
 
 const PLATFORM_LABEL: Record<Platform, string> = { instagram: 'Instagram', facebook: 'Facebook' };
 
-/** A real, live web search (server's findSocialProfiles, OpenAI's
- * web_search tool) — never auto-saves anything it finds. Apollo's own
- * "confirm the company before searching people" two-step (see
- * ApolloContactSearchModal.tsx) exists for the same underlying reason:
- * automated matching by name alone is unreliable (many people share a
- * name), so the candidates are presented for the user to actually open
- * and visually check (e.g. against a LinkedIn photo) before anything is
- * kept. */
+/** A real, live Google search (server's searchSocialProfiles, serper.dev)
+ * — never auto-saves anything it finds, and doesn't try to pick "the"
+ * match itself either: it returns up to 5 real candidates per platform
+ * and leaves the actual judgment call to the user, same reasoning as
+ * Apollo's own "confirm the company before searching people" two-step
+ * (see ApolloContactSearchModal.tsx) — automated matching by name alone is
+ * unreliable (many people share a name), so the candidates are presented
+ * for the user to actually open and visually check (e.g. against a
+ * LinkedIn photo) before anything is kept. */
 export function SocialLookupModal({ firstName, lastName, company, onConfirm, onClose }: SocialLookupModalProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -100,7 +101,7 @@ export function SocialLookupModal({ firstName, lastName, company, onConfirm, onC
             ))}
           </ul>
         ) : (
-          <div className="social-lookup-empty">AI nerado kandidatų.</div>
+          <div className="social-lookup-empty">Kandidatų nerasta.</div>
         )}
         <button type="button" className="social-lookup-not-found" onClick={() => confirm(platform, null)}>
           ✕ Nerasta / nė vienas šitas nėra tas žmogus
@@ -113,7 +114,7 @@ export function SocialLookupModal({ firstName, lastName, company, onConfirm, onC
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal social-lookup-modal" onClick={(e) => e.stopPropagation()}>
         <div className="apollo-search-modal-header">
-          <h2>🔍 Instagram / Facebook (AI)</h2>
+          <h2>🔍 Instagram / Facebook (paieška)</h2>
           <button type="button" className="apollo-search-modal-close" onClick={onClose}>
             ✕
           </button>

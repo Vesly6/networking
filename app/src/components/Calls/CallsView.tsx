@@ -7,9 +7,10 @@ import { getPrimaryLabel, getColumnByType } from '../../utils/row';
 import { parseContacts, extractPhoneNumber, contactTextToFields } from '../../utils/contacts';
 import { CallRow } from './CallRow';
 import { CallsStatsView } from './CallsStatsView';
+import { SmsInboxView } from './SmsInboxView';
 
 const MAX_RANGE_DAYS = 31;
-type ViewMode = 'list' | 'stats';
+type ViewMode = 'list' | 'stats' | 'sms';
 
 function toZadarmaDatetime(dateInputValue: string, time: string): string {
   return `${dateInputValue} ${time}`;
@@ -183,10 +184,20 @@ export function CallsView({ onJumpToRow, onJumpToContact }: CallsViewProps) {
         <button type="button" className={view === 'stats' ? 'active' : ''} onClick={() => setView('stats')}>
           Statistika
         </button>
+        <button type="button" className={view === 'sms' ? 'active' : ''} onClick={() => setView('sms')}>
+          Gaunamos SMS
+        </button>
       </div>
 
       {view === 'stats' ? (
         <CallsStatsView />
+      ) : view === 'sms' ? (
+        <SmsInboxView
+          phoneToRow={phoneToRow}
+          phoneToContact={phoneToContact}
+          onJumpToRow={onJumpToRow}
+          onJumpToContact={onJumpToContact}
+        />
       ) : (
         <>
       <div className="calls-toolbar">

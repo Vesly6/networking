@@ -109,3 +109,35 @@ export interface SmsLogRecord {
   currency?: string;
   error?: string;
 }
+
+/** One row per received Zadarma SMS webhook — server-side (see
+ * server/src/smsInbox/db.ts), not IndexedDB, since a webhook can arrive
+ * whether or not this app is even open. `event`/`fromNumber`/`toNumber`/
+ * `message` are best-effort extractions from Zadarma's genuinely
+ * undocumented SMS webhook payload (see the receiver route in
+ * server/src/index.ts) — any of them can be null if the real field names
+ * turn out to differ from the guesses. `rawPayload` is always the complete
+ * body, so nothing is ever lost even if the guesses are wrong. */
+export interface IncomingSmsRecord {
+  id: string;
+  event: string | null;
+  fromNumber: string | null;
+  toNumber: string | null;
+  message: string | null;
+  rawPayload: string;
+  signature: string | null;
+  receivedAt: number;
+}
+
+export function fetchSmsInbox(): Promise<{ messages: IncomingSmsRecord[] }> {
+  return localApiRequest('/api/sms-inbox');
+}
+
+/** One-time (or "re-run after moving hosts") admin action — tells Zadarma
+ * to start POSTing incoming SMS to this deployment's own public webhook
+ * route. Needs server/.env's PUBLIC_BASE_URL to be set to a real,
+ * Zadarma-reachable HTTPS URL — fails clearly (502, via ZadarmaApiError)
+ * if that's missing or Zadarma rejects the registration. */
+export function setupSmsWebhook(): Promise<{ ok: true; url: string }> {
+  return localApiRequest('/api/zadarma/setup-sms-webhook', { method: 'POST' });
+}

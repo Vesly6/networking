@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useTableStore } from '../../store/useTableStore';
-import { getLinkedContactName, getNextActionColumn, getPrimaryLabel } from '../../utils/row';
+import { getLinkedContactName, getNextActionColumn, getNextActionPhone, getPrimaryLabel } from '../../utils/row';
 import { getDatePart, getMonthGrid, getTimePart, monthLabel, nextMonth, prevMonth, todayISO } from '../../utils/date';
 
 interface CalendarGridViewProps {
@@ -93,13 +93,16 @@ export function CalendarGridView({ onJumpToRow }: CalendarGridViewProps) {
                   const time = getTimePart(value);
                   const label = getPrimaryLabel(row, columns);
                   const contactName = getLinkedContactName(row, columns);
+                  const phone = getNextActionPhone(row, columns);
+                  const whoLabel = contactName && phone ? `${contactName} · ${phone}` : contactName || phone;
+                  const title = [label, whoLabel, row.nextActionNote].filter(Boolean).join(' | ');
                   return (
                     <button
                       key={row.id}
                       type="button"
                       className="calendar-chip"
                       onClick={() => onJumpToRow(row.id)}
-                      title={contactName ? `${label} | ${contactName}` : label}
+                      title={title}
                     >
                       {time && <span className="calendar-chip-time">{time}</span>}
                       {truncateLabel(label)}

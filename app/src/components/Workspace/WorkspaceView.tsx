@@ -3,6 +3,9 @@ import { useWorkspaceStore } from '../../store/useWorkspaceStore';
 import { useAuthStore } from '../../store/useAuthStore';
 import { confirmDeleteTable } from '../../utils/confirmDeleteTable';
 import { countRowsForTable } from '../../db/db';
+import { migrateLocalDataToServer } from '../../utils/migrateTableData';
+import { confirmDialog } from '../../store/useConfirmStore';
+import { useToastStore } from '../../store/useToastStore';
 import { BrandLogo } from '../BrandLogo';
 
 interface WorkspaceViewProps {
@@ -15,10 +18,13 @@ export function WorkspaceView({ onOpenTable }: WorkspaceViewProps) {
   const renameTable = useWorkspaceStore((s) => s.renameTable);
   const deleteTable = useWorkspaceStore((s) => s.deleteTable);
   const logout = useAuthStore((s) => s.logout);
+  const initWorkspace = useWorkspaceStore((s) => s.init);
+  const showToast = useToastStore((s) => s.show);
 
   const [rowCounts, setRowCounts] = useState<Record<string, number>>({});
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState('');
+  const [migrating, setMigrating] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -39,6 +45,28 @@ export function WorkspaceView({ onOpenTable }: WorkspaceViewProps) {
     if (await confirmDeleteTable(name, rowCounts[id] ?? 0)) deleteTable(id);
   };
 
+  // One-time move of this browser's own local IndexedDB tables/rows up to
+  // the server — see utils/migrateTableData.ts's own doc comment. Always
+  // visible (not hidden once run once) since it's a safe, idempotent
+  // upsert — re-running it after adding more local data, or on a second
+  // device that also has old local data, is fine.
+  const handleMigrate = async () => {
+    const ok = await confirmDialog(
+      'Perkelti visus šio naršyklės lokalius duomenis (lenteles ir eilutes) į serverį? Vietiniai duomenys liks nepaliesti — tai tik nusiunčia kopiją.',
+    );
+    if (!ok) return;
+    setMigrating(true);
+    try {
+      const result = await migrateLocalDataToServer();
+      showToast(`Perkelta: ${result.tablesMigrated} lentelių, ${result.rowsMigrated} eilučių`);
+      await initWorkspace();
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Nepavyko perkelti duomenų');
+    } finally {
+      setMigrating(false);
+    }
+  };
+
   return (
     <div className="workspace-view">
       <div className="workspace-header">
@@ -49,6 +77,14 @@ export function WorkspaceView({ onOpenTable }: WorkspaceViewProps) {
         <div className="workspace-header-actions">
           <button type="button" className="primary" onClick={handleCreate}>
             + Nauja lentelė
+          </button>
+          <button
+            type="button"
+            disabled={migrating}
+            title="Vienkartinis veiksmas — nusiunčia šios naršyklės lenteles/eilutes į serverį, kad jos būtų matomos ir kituose įrenginiuose (pvz. telefone)."
+            onClick={() => void handleMigrate()}
+          >
+            {migrating ? 'Perkeliama…' : '⬆ Perkelti į serverį'}
           </button>
           <button type="button" onClick={logout}>
             Atsijungti

@@ -1,5 +1,5 @@
 import type { Column, Row } from '../types';
-import { parseContacts, contactTextToFields } from './contacts';
+import { parseContacts, contactTextToFields, extractPhoneNumber } from './contacts';
 
 export function getPrimaryLabel(row: Row, columns: Column[]): string {
   // Prefer a dedicated Company column if one exists; older tables without
@@ -34,4 +34,26 @@ export function getLinkedContactName(row: Row, columns: Column[]): string | null
   const { firstName, lastName } = contactTextToFields(entry.text);
   const name = `${firstName} ${lastName}`.trim();
   return name || entry.text;
+}
+
+/** The number to actually dial for this row's next-action date — the
+ * linked contact's own phone (extracted from their freeform Contacts
+ * entry, same as click-to-call already does) if one is linked and has a
+ * phone-shaped value, else this row's own `phone`-type column. Prefers the
+ * specific person over the generic company number since it's more
+ * actionable for a call queue ("who to call" already answered the *who* —
+ * this answers the *what number*). Quietly resolves to null when neither
+ * is available, same graceful-fallback spirit as getLinkedContactName. */
+export function getNextActionPhone(row: Row, columns: Column[]): string | null {
+  if (row.linkedContactId) {
+    const contactColumn = getColumnByType(columns, 'contact');
+    const entry = contactColumn
+      ? parseContacts(row.cells[contactColumn.id] ?? '').find((c) => c.id === row.linkedContactId)
+      : undefined;
+    const phone = entry ? extractPhoneNumber(entry.text) : null;
+    if (phone) return phone;
+  }
+  const phoneColumn = getColumnByType(columns, 'phone');
+  const value = phoneColumn ? row.cells[phoneColumn.id]?.trim() : '';
+  return value || null;
 }

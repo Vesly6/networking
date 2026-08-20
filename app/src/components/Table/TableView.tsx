@@ -62,7 +62,6 @@ interface CellPos {
   r: number;
   c: number;
 }
-type ViewSort = { columnId: string; direction: SortDirection } | null;
 
 // Below this many digits, a numeric search query is treated as plain text
 // only (not also matched against phone-digit substrings) — otherwise a
@@ -97,35 +96,36 @@ function computeFillRange(origin: CellPos, current: CellPos): CellPos[] {
   return cells;
 }
 
-// Search text and sort survive a full page reload (not just switching
-// tabs — see App.tsx's tab-panel comment for that half of "my work keeps
+// Search text survives a full page reload (not just switching tabs — see
+// App.tsx's tab-panel comment for that half of "my work keeps
 // disappearing"), keyed per table id so a filter left over in one table
-// can never silently hide rows in a different one after a reload. Scroll
-// position and the active cell/range aren't included here — restoring
-// those meaningfully after an async table load, potentially against rows
-// that no longer exist, is a fair bit more machinery for less payoff than
-// the two things actually reported as "resetting to some default."
-function loadPersistedViewState(tableId: string | null): { search: string; sort: ViewSort } {
-  if (!tableId) return { search: '', sort: null };
+// can never silently hide rows in a different one after a reload. Sort is
+// deliberately NOT persisted (or tracked as view state at all) — see
+// toggleSort's own doc comment: sorting commits a real, permanent row
+// order via applySortOrder() the moment it's clicked, so there is no
+// "currently sorted" mode left to remember by the time this would run
+// again. Scroll position and the active cell/range aren't included here
+// either — restoring those meaningfully after an async table load,
+// potentially against rows that no longer exist, is a fair bit more
+// machinery for less payoff than what's actually reported as "resetting
+// to some default."
+function loadPersistedViewState(tableId: string | null): { search: string } {
+  if (!tableId) return { search: '' };
   try {
     const raw = localStorage.getItem(`${TABLE_VIEW_STATE_KEY_PREFIX}${tableId}`);
-    if (!raw) return { search: '', sort: null };
-    const parsed = JSON.parse(raw) as { search?: unknown; sort?: unknown };
+    if (!raw) return { search: '' };
+    const parsed = JSON.parse(raw) as { search?: unknown };
     const search = typeof parsed.search === 'string' ? parsed.search : '';
-    const sort =
-      parsed.sort && typeof parsed.sort === 'object' && 'columnId' in parsed.sort && 'direction' in parsed.sort
-        ? (parsed.sort as { columnId: string; direction: SortDirection })
-        : null;
-    return { search, sort };
+    return { search };
   } catch {
-    return { search: '', sort: null };
+    return { search: '' };
   }
 }
 
-function saveViewState(tableId: string | null, search: string, sort: ViewSort) {
+function saveViewState(tableId: string | null, search: string) {
   if (!tableId) return;
   try {
-    localStorage.setItem(`${TABLE_VIEW_STATE_KEY_PREFIX}${tableId}`, JSON.stringify({ search, sort }));
+    localStorage.setItem(`${TABLE_VIEW_STATE_KEY_PREFIX}${tableId}`, JSON.stringify({ search }));
   } catch {
     // localStorage can throw (quota exceeded, private-browsing
     // restrictions) — persistence here is a nice-to-have, not required
@@ -167,6 +167,7 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
   const setDropdownOptions = useTableStore((s) => s.setDropdownOptions);
   const moveColumns = useTableStore((s) => s.moveColumns);
   const moveRows = useTableStore((s) => s.moveRows);
+  const applySortOrder = useTableStore((s) => s.applySortOrder);
   const setColumnWidth = useTableStore((s) => s.setColumnWidth);
   const setRowHeight = useTableStore((s) => s.setRowHeight);
   const undo = useTableStore((s) => s.undo);
@@ -176,10 +177,15 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
   const showToast = useToastStore((s) => s.show);
 
   const [search, setSearch] = useState(() => loadPersistedViewState(tableId).search);
-  const [sort, setSort] = useState<ViewSort>(() => loadPersistedViewState(tableId).sort);
   useEffect(() => {
-    saveViewState(tableId, search, sort);
-  }, [tableId, search, sort]);
+    saveViewState(tableId, search);
+  }, [tableId, search]);
+  // Memory for "which direction did the last click on this same column
+  // use" — purely so a second click on the same header flips asc -> desc,
+  // same as before. Deliberately a ref, not state: nothing should
+  // re-render or show any "currently sorted" indicator off the back of
+  // this — see toggleSort's own doc comment below for why.
+  const lastSortRef = useRef<{ columnId: string; direction: SortDirection } | null>(null);
   // note/contact cells expand into CellHoverEditor on click (see DataCell's
   // note/contact branch) — closed the same way every other popover in this
   // file is: `.table-view`'s onClick={closePopovers} below, or a click on
@@ -191,6 +197,30 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
   // matched the missed call, since a Contacts column can hold several
   // people and the row/cell-level jump alone doesn't say which one.
   const [highlightContactId, setHighlightContactId] = useState<string | null>(null);
+  // The next-action-date cell's own 📝 note / 👤 "who to call" mini-popovers
+  // (DataCell.tsx) — lifted up here, rather than local state inside
+  // DataCell, specifically so they close the same way every other popover
+  // in this file does: via closePopovers below (a document-level "click
+  // anywhere else" listener). A real, reported bug: while this lived as
+  // local state inside DataCell, clicking any other cell did nothing to it
+  // at all — the only way to close it was clicking the exact same 📝/👤
+  // button again, which read as broken/unintuitive ("I click any other
+  // cell and it doesn't close"). Keyed by rowId+columnId (not just "is one
+  // open") since many date cells can exist across the table and only one's
+  // popover should ever ee open at a time.
+  const [dateCellPopover, setDateCellPopover] = useState<{
+    rowId: string;
+    columnId: string;
+    kind: 'note' | 'contact';
+    anchor: HTMLElement;
+  } | null>(null);
+  const toggleDatePopover = (rowId: string, columnId: string, kind: 'note' | 'contact', anchor: HTMLElement) => {
+    setDateCellPopover((prev) =>
+      prev && prev.rowId === rowId && prev.columnId === columnId && prev.kind === kind
+        ? null
+        : { rowId, columnId, kind, anchor },
+    );
+  };
   const [addColumnAnchor, setAddColumnAnchor] = useState<HTMLElement | null>(null);
   // Set once a CSV file is parsed, holding the raw parse result until the
   // user resolves the CsvImportMapping modal (confirm or cancel) — see
@@ -317,9 +347,6 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
     if (found) {
       scrollToRowId(focusRowId);
       setFlashRowId(focusRowId);
-      const timer = setTimeout(() => setFlashRowId(null), 1600);
-      onFocusHandled();
-      return () => clearTimeout(timer);
     }
     onFocusHandled();
     // scrollToRowId is intentionally omitted — it's a plain function
@@ -330,6 +357,27 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
     // ref, so it's never stale regardless of which render's closure fires.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusRowId, onFocusHandled]);
+
+  // The flash-clearing timer used to live inside the effect above, keyed on
+  // [focusRowId, onFocusHandled] — a real, reported bug: onFocusHandled()
+  // calls setFocusRowId(null) in the parent (App.tsx), which changes
+  // focusRowId almost immediately, which is one of that *same* effect's own
+  // dependencies — so React tears down and reruns that effect right away,
+  // and the teardown's `clearTimeout(timer)` cancelled the pending
+  // setFlashRowId(null) before it ever fired. flashRowId was then left set
+  // to that row's id forever, so every time the (virtualized) row scrolled
+  // out of view and back in — a fresh <tr> DOM node, per TanStack Virtual —
+  // it mounted with the `row-flash` class already present, replaying the
+  // CSS animation on that new element, indefinitely, on every scroll.
+  // Splitting the timer into its own effect, keyed only on the *local*
+  // flashRowId state, decouples it from focusRowId/onFocusHandled entirely
+  // — nothing about clearing focusRowId in the parent can cancel this timer
+  // anymore, so flashRowId reliably clears once, 1.6s after being set.
+  useEffect(() => {
+    if (!flashRowId) return;
+    const timer = setTimeout(() => setFlashRowId(null), 1600);
+    return () => clearTimeout(timer);
+  }, [flashRowId]);
 
   // Same "scroll to it" step as the focusRowId effect above, but this one
   // also has to *open* that row's Kontaktai popup afterward — and the row
@@ -377,86 +425,37 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusContact, onContactFocusHandled]);
 
-  // Sort is applied as a one-time snapshot (an ordered list of row ids),
-  // recomputed only when `sort` itself changes (a fresh column/direction
-  // pick) — NOT every time `rows` changes. This was a real, reported bug:
-  // with sort continuously re-applied live, changing a cell's value in the
-  // sort column (e.g. a Status dropdown while sorted by Status) re-sorted
-  // the row out from under the cursor the instant it committed, and a
-  // rapid sequence of edits would land on whatever row the reflow left
-  // under the mouse rather than the one actually clicked — reported as
-  // "sometimes it just won't let me change the status." Matches how
-  // Excel/Sheets' own sort behaves too: a deliberate action that arranges
-  // rows once, not a continuously-live rule. Values inside cells always
-  // stay live and correct regardless — only the row's *position* is
-  // frozen until sort is next (re-)applied (a different column, or the
-  // other direction).
-  const sortSnapshotRef = useRef<{ sort: ViewSort; order: string[] } | null>(null);
-
+  // Sort is a one-time, permanent action (see toggleSort below,
+  // applySortOrder in useTableStore.ts) — it commits a new row order
+  // directly into the data itself the moment a column header is clicked,
+  // rather than layering a separate "currently sorted by X" view state on
+  // top of `rows`. So there's nothing sort-related left to do here: `rows`
+  // already arrives in the right order (same as any other row-reorder
+  // action, e.g. manual drag), and this memo only needs to apply the
+  // search filter.
   const filteredSortedRows = useMemo(() => {
-    let result = rows;
-
-    if (search.trim()) {
-      const q = search.trim().toLowerCase();
-      // Phone numbers get typed/stored in wildly different formats
-      // ("+370 640 11013" vs "37064011013" vs a bare "64011013") — a plain
-      // substring match on the raw text misses all but an exact match.
-      // Comparing digits-only (in addition to, not instead of, the normal
-      // text match) lets any of those find the same cell. Gated to queries
-      // with at least a handful of digits so short numeric searches (a
-      // year, a single digit) don't start matching every phone-containing
-      // cell in the table.
-      const qDigits = normalizePhoneDigits(search);
-      const phoneSearchActive = qDigits.length >= MIN_PHONE_SEARCH_DIGITS;
-      result = result.filter((row) =>
-        Object.values(row.cells).some((v) => {
-          if (!v) return false;
-          if (v.toLowerCase().includes(q)) return true;
-          if (!phoneSearchActive) return false;
-          const vDigits = normalizePhoneDigits(v);
-          return vDigits.length > 0 && vDigits.includes(qDigits);
-        }),
-      );
-    }
-
-    if (sort) {
-      const prev = sortSnapshotRef.current;
-      const sortUnchanged = prev?.sort?.columnId === sort.columnId && prev?.sort?.direction === sort.direction;
-      if (!sortUnchanged) {
-        const { columnId, direction } = sort;
-        const order = [...rows]
-          .sort((a, b) => {
-            const av = a.cells[columnId] ?? '';
-            const bv = b.cells[columnId] ?? '';
-            const cmp = av.localeCompare(bv, 'en');
-            return direction === 'asc' ? cmp : -cmp;
-          })
-          .map((r) => r.id);
-        sortSnapshotRef.current = { sort, order };
-      }
-
-      const byId = new Map(result.map((r) => [r.id, r]));
-      const ordered: Row[] = [];
-      for (const id of sortSnapshotRef.current!.order) {
-        const r = byId.get(id);
-        if (r) {
-          ordered.push(r);
-          byId.delete(id);
-        }
-      }
-      // Anything left over — a row added since the snapshot was taken —
-      // is appended in its natural order rather than dropped; its exact
-      // sorted position lands correctly next time sort is re-applied.
-      for (const r of result) {
-        if (byId.has(r.id)) ordered.push(r);
-      }
-      result = ordered;
-    } else {
-      sortSnapshotRef.current = null;
-    }
-
-    return result;
-  }, [rows, search, sort]);
+    if (!search.trim()) return rows;
+    const q = search.trim().toLowerCase();
+    // Phone numbers get typed/stored in wildly different formats
+    // ("+370 640 11013" vs "37064011013" vs a bare "64011013") — a plain
+    // substring match on the raw text misses all but an exact match.
+    // Comparing digits-only (in addition to, not instead of, the normal
+    // text match) lets any of those find the same cell. Gated to queries
+    // with at least a handful of digits so short numeric searches (a
+    // year, a single digit) don't start matching every phone-containing
+    // cell in the table.
+    const qDigits = normalizePhoneDigits(search);
+    const phoneSearchActive = qDigits.length >= MIN_PHONE_SEARCH_DIGITS;
+    return rows.filter((row) =>
+      Object.values(row.cells).some((v) => {
+        if (!v) return false;
+        if (v.toLowerCase().includes(q)) return true;
+        if (!phoneSearchActive) return false;
+        const vDigits = normalizePhoneDigits(v);
+        return vDigits.length > 0 && vDigits.includes(qDigits);
+      }),
+    );
+  }, [rows, search]);
 
   // Kept in sync on every render (not just inside effects) so rAF/timeout
   // callbacks elsewhere in this file (handleAddRow, the focusRowId effect)
@@ -502,27 +501,20 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
   };
 
 
-  // Search still blocks drag — a search-filtered view isn't the table's
-  // real row order, so "drag to position N" wouldn't mean anything stable
-  // once the search clears. Sort no longer blocks it: handleRowDrop/
-  // handleRowDropAtEnd splice the drop directly into sortSnapshotRef's
-  // frozen order (spliceSortSnapshot, below) immediately after moveRows,
-  // so a drag while sorted updates both the real `rows` order and the
-  // visible sorted position in the same tick — matching Excel/Sheets,
-  // where a manual drag while sorted is allowed and just repositions the
-  // row in the current view. This was a real, reported complaint: on the
-  // production site, dragging a row while sorted by Status silently did
-  // nothing, which only became clear once the user sent a screenshot of
-  // the exact sorted view they were stuck in.
+  // Search still blocks drag/insert — a search-filtered view isn't the
+  // table's real row order, so "drag to position N" or "insert above this
+  // row" wouldn't mean anything stable once the search clears. Sort no
+  // longer needs its own gate here at all: since toggleSort commits a real,
+  // permanent row order the instant it's clicked (applySortOrder, in
+  // useTableStore.ts) rather than layering a separate live "currently
+  // sorted" view state on top of `rows`, there's no second order for a
+  // drag or insert to conflict with — `rows` IS the current order, same as
+  // any other time. (This used to be two different answers — drag allowed
+  // while sorted via a snapshot-splice mechanism, insert still blocked —
+  // which was itself a real, reported complaint: sorting used to feel like
+  // it "wouldn't let go." Both are just unconditionally allowed now.)
   const rowDragEnabled = search.trim() === '';
-  // "Insert N rows above/below" is a different action from dragging an
-  // existing row — inserting a brand-new row has no id yet to splice into
-  // sortSnapshotRef, so a new row would land at the *end* of the sorted
-  // view (filteredSortedRows' own "append leftovers" fallback) instead of
-  // the position the menu implied, regardless of any drag fix. Keeping
-  // this gated on sort===null avoids that mismatch; only plain drag of an
-  // *existing* row got the fix above.
-  const rowInsertEnabled = sort === null && search.trim() === '';
+  const rowInsertEnabled = search.trim() === '';
 
   // --- Row-header (number) range selection: click / shift+click / drag ---
   const selectedRowIds = useMemo(() => {
@@ -803,6 +795,18 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
     // if that's the cell that was actually clicked (see onOpenEditor below).
     setExpandedCell(null);
     setHighlightContactId(null);
+    // Same reasoning as expandedCell above, for the date cell's own 📝/👤
+    // mini-popovers — needs clearing here too, not just in closePopovers.
+    // A real, reproduced bug without this: clicking a text/phone/company
+    // cell (which becomes `editable` on this very mousedown, swapping to a
+    // live autoFocus <input>) left the date popover open even though the
+    // *next* click's bubble-to-document closePopovers should have caught
+    // it — closePopovers does fire, but something about the same tick's
+    // editable-cell/autoFocus transition made the popover reappear (or
+    // never actually close) in practice. Clearing it immediately on
+    // mousedown, before any of that has a chance to happen, sidesteps the
+    // race entirely rather than chasing its exact mechanism.
+    setDateCellPopover(null);
     if (extend && rangeAnchor) setRangeFocus({ r, c });
     else {
       setRangeAnchor({ r, c });
@@ -1161,12 +1165,36 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
     setColorPickerAnchor(null);
   };
 
+  // Sorting is a one-time, permanent action — on explicit request: "the
+  // filter should do its job once and then be done," not hold a separate
+  // "currently sorted" mode that other actions (drag, insert) have to work
+  // around or that needs its own "turn it off" step. An earlier version
+  // kept `sort` as persistent view state (asc/desc/null, shown as a
+  // header arrow, snapshotted into sortSnapshotRef so drag-while-sorted
+  // wouldn't get undone by a live re-sort) — correct, but still visibly
+  // "on" after running, which is exactly what was reported as the problem.
+  // Now a click just computes the new order and commits it for real via
+  // applySortOrder (useTableStore.ts), the same way a manual drag commits
+  // an order — so immediately afterward there is nothing sort-related
+  // left "active" at all. lastSortRef is a plain ref (not state) purely so
+  // a second click on the same header still flips asc -> desc rather than
+  // sorting ascending every time; it drives no rendering.
+  const commitSort = (columnId: string, direction: SortDirection) => {
+    const order = [...rows]
+      .sort((a, b) => {
+        const av = a.cells[columnId] ?? '';
+        const bv = b.cells[columnId] ?? '';
+        const cmp = av.localeCompare(bv, 'en');
+        return direction === 'asc' ? cmp : -cmp;
+      })
+      .map((r) => r.id);
+    applySortOrder(order);
+    lastSortRef.current = { columnId, direction };
+  };
   const toggleSort = (columnId: string) => {
-    setSort((prev) => {
-      if (!prev || prev.columnId !== columnId) return { columnId, direction: 'asc' };
-      if (prev.direction === 'asc') return { columnId, direction: 'desc' };
-      return null;
-    });
+    const prev = lastSortRef.current;
+    const direction: SortDirection = prev?.columnId === columnId && prev.direction === 'asc' ? 'desc' : 'asc';
+    commitSort(columnId, direction);
   };
 
   // Right-clicking a column not already part of the current selection
@@ -1310,25 +1338,6 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
     setDragRowIds(ids);
     e.dataTransfer.effectAllowed = 'move';
   };
-  // While sort is active, filteredSortedRows renders from the frozen
-  // sortSnapshotRef.current.order rather than recomputing live (see the
-  // big comment above sortSnapshotRef's declaration) — so moveRows() alone
-  // correctly updates the underlying rows' `order` field, but the visible
-  // position wouldn't reflect the drop until sort was toggled off and back
-  // on. This splices the dragged id(s) out of their old slot in that same
-  // frozen list and into the new one, using the identical "insert
-  // immediately before targetId, or append at the end if targetId is
-  // null" semantics moveRows itself uses — so the two always agree.
-  const spliceSortSnapshot = (draggedIds: string[], targetId: string | null) => {
-    const snap = sortSnapshotRef.current;
-    if (!snap) return;
-    const draggedSet = new Set(draggedIds);
-    const remaining = snap.order.filter((id) => !draggedSet.has(id));
-    let insertAt = targetId === null ? remaining.length : remaining.indexOf(targetId);
-    if (insertAt === -1) insertAt = remaining.length;
-    remaining.splice(insertAt, 0, ...draggedIds);
-    sortSnapshotRef.current = { ...snap, order: remaining };
-  };
   const dropRowIndexFromEvent = (e: DragEvent, rowIndex: number) => {
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const after = e.clientY > rect.top + rect.height / 2;
@@ -1347,7 +1356,6 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
       const { targetIndex } = dropRowIndexFromEvent(e, rowIndex);
       const target = targetIndex < filteredSortedRows.length ? filteredSortedRows[targetIndex] : null;
       moveRows(dragRowIds, target ? target.id : null);
-      spliceSortSnapshot(dragRowIds, target ? target.id : null);
       pendingRowSelectionSyncRef.current = dragRowIds;
     }
     setDragRowIds(null);
@@ -1358,7 +1366,6 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
     e.preventDefault();
     if (dragRowIds) {
       moveRows(dragRowIds, null);
-      spliceSortSnapshot(dragRowIds, null);
       pendingRowSelectionSyncRef.current = dragRowIds;
     }
     setDragRowIds(null);
@@ -1370,6 +1377,59 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
     setDragOverRowId(null);
     setDragOverAfter(false);
   };
+
+  // Auto-scroll while dragging a row near the top/bottom edge of the
+  // scroll container — a real, reported gap: the table is virtualized (see
+  // the class doc comment on the virtualizer below), so only rows near the
+  // current viewport actually exist as DOM elements with drop handlers on
+  // them. Without this, dragging row 37 up to row 2 (or the reverse) was
+  // structurally impossible whenever row 2 wasn't already mounted — native
+  // HTML5 drag events have nothing to fire dragover/drop on for a target
+  // that isn't rendered, and nothing was scrolling the container to bring
+  // it into view during the drag. Effect only runs while a row drag is
+  // actually in progress (`dragRowIds` non-null); handleRowDragEnd
+  // resetting it to null on every drag end (dropped or cancelled) is what
+  // reliably tears this down again, so no separate document-level
+  // dragend listener is needed here.
+  useEffect(() => {
+    if (!dragRowIds) return;
+    const scrollEl = tableScrollRef.current;
+    if (!scrollEl) return;
+
+    const EDGE_ZONE_PX = 60;
+    const MAX_SPEED_PX_PER_FRAME = 18;
+    let scrollSpeed = 0;
+    let rafId = requestAnimationFrame(function tick() {
+      if (scrollSpeed !== 0) scrollEl.scrollTop += scrollSpeed;
+      rafId = requestAnimationFrame(tick);
+    });
+
+    const handleDragOver = (e: globalThis.DragEvent) => {
+      const rect = scrollEl.getBoundingClientRect();
+      const y = e.clientY;
+      if (y < rect.top + EDGE_ZONE_PX) {
+        const proximity = Math.min(1, (rect.top + EDGE_ZONE_PX - y) / EDGE_ZONE_PX);
+        scrollSpeed = -MAX_SPEED_PX_PER_FRAME * proximity;
+      } else if (y > rect.bottom - EDGE_ZONE_PX) {
+        const proximity = Math.min(1, (y - (rect.bottom - EDGE_ZONE_PX)) / EDGE_ZONE_PX);
+        scrollSpeed = MAX_SPEED_PX_PER_FRAME * proximity;
+      } else {
+        scrollSpeed = 0;
+      }
+    };
+    // Recomputed on every dragover anyway (many times/sec while the mouse
+    // moves), so scrollSpeed naturally goes back to 0 the instant the
+    // cursor isn't near an edge anymore — no dragleave handling needed,
+    // which would otherwise have to fight the classic nested-child
+    // dragenter/dragleave bubbling problem (rows are children of this same
+    // scroll container).
+    scrollEl.addEventListener('dragover', handleDragOver);
+
+    return () => {
+      cancelAnimationFrame(rafId);
+      scrollEl.removeEventListener('dragover', handleDragOver);
+    };
+  }, [dragRowIds]);
 
   // --- Column resize ---
   // Live values live in a ref (not just state) so `handleUp` can read the
@@ -1521,6 +1581,7 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
     setColumnContextMenu(null);
     setRowContextMenu(null);
     setHiddenColumnsAnchor(null);
+    setDateCellPopover(null);
     if (!justFinishedHeaderDragRef.current) {
       setRowRangeAnchor(null);
       setRowRangeFocus(null);
@@ -1669,7 +1730,7 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
             y={columnContextMenu.y}
             columns={columns}
             targetIds={columnContextMenu.targetIds}
-            onSort={(direction) => setSort({ columnId: columnContextMenu.targetIds[0], direction })}
+            onSort={(direction) => commitSort(columnContextMenu.targetIds[0], direction)}
             onCopy={() => copyColumnsToClipboard(columnContextMenu.targetIds)}
             onPaste={() => pasteAtColumns(columnContextMenu.targetIds)}
             onClose={() => setColumnContextMenu(null)}
@@ -1794,9 +1855,6 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
                     <div className="th-content">
                       <button type="button" className="th-name" onClick={() => toggleSort(col.id)}>
                         {col.name}
-                        {sort?.columnId === col.id && (
-                          <span className="sort-arrow">{sort.direction === 'asc' ? ' ▲' : ' ▼'}</span>
-                        )}
                       </button>
                       <button
                         type="button"
@@ -1920,6 +1978,12 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
                         onOpenEditor={(anchor) => openCellEditor(row.id, col.id, anchor)}
                         highlightQuery={search.trim() || undefined}
                         contactsRaw={contactColumn ? row.cells[contactColumn.id] : undefined}
+                        activeDatePopover={
+                          dateCellPopover && dateCellPopover.rowId === row.id && dateCellPopover.columnId === col.id
+                            ? dateCellPopover.kind
+                            : null
+                        }
+                        onToggleDatePopover={(kind, anchor) => toggleDatePopover(row.id, col.id, kind, anchor)}
                       />
                     ))}
                   </tr>
@@ -1981,12 +2045,15 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
           const rawValue = row.cells[column.id] ?? '';
           const rowCompanyColumn = getColumnByType(columns, 'company');
           const rowCompanyName = rowCompanyColumn ? row.cells[rowCompanyColumn.id] : undefined;
+          const rowContactColumn = getColumnByType(columns, 'contact');
+          const rowContactsRaw = rowContactColumn ? row.cells[rowContactColumn.id] : undefined;
           return (
             <CellHoverEditor
               anchor={expandedCell.anchor}
               mode={column.type}
               value={rawValue}
               companyName={rowCompanyName}
+              contactsRaw={rowContactsRaw}
               highlightEntryId={highlightContactId}
               onAddNoteEntry={(text) => updateCell(row.id, column.id, addNoteEntry(rawValue, text))}
               onUpdateNoteEntry={(id, text) => updateCell(row.id, column.id, updateNoteEntry(rawValue, id, text))}

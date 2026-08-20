@@ -48,6 +48,61 @@ export async function parseContactText(rawText: string): Promise<{ text: string 
   return { text };
 }
 
+export class DiacriticGuessError extends Error {}
+
+const DIACRITIC_GUESS_MODEL = 'gpt-4o-mini';
+
+const DIACRITIC_GUESS_SYSTEM_PROMPT = `You restore Lithuanian diacritics (ą č ę ė į š ų ū ž) in a personal name typed without them.
+Plain "s"/"c"/"z" could come from "š"/"č"/"ž"; plain "u"/"e"/"i"/"a" could come from "ų"/"ū"/"ė"/"į"/"ą" — use your knowledge of real, common Lithuanian name spellings to restore the single most likely correct form.
+If the name doesn't look Lithuanian, already has diacritics, or you are not genuinely confident of the correct spelling, respond with the exact input unchanged.
+Respond with ONLY the name (corrected or unchanged) — no explanation, no quotes, no extra text.`;
+
+/** A narrow, single-purpose text task — NOT a search, and its output is
+ * never itself treated as a verified fact about anyone. This exists to
+ * fill a real, reported gap in server/src/serper.ts's social-profile
+ * search: a contact's name may be stored with no Lithuanian diacritics at
+ * all (however it was typed/imported), and a real profile that *does* use
+ * them then simply never turns up in a plain-text search — Google's own
+ * matching isn't reliably accent-fuzzy in the other direction, confirmed
+ * live (searching "Sarunas Marciulionis" found nothing, even though the
+ * real profile is "Šarūnas Marčiulionis" and a search for THAT spelling
+ * finds it immediately). The reverse direction (stripping diacritics that
+ * are already present) is pure, deterministic Unicode normalization
+ * (serper.ts's own stripDiacritics) and doesn't need this — only
+ * *restoring* missing diacritics is inherently a guess, which is exactly
+ * the kind of narrow language task an LLM is well-suited for, as opposed
+ * to the profile-finding/verification job this deliberately stays out of.
+ * Returns null when the model didn't offer a genuine change (nothing
+ * useful to add to the search query) or the call itself fails — a failure
+ * here should never block the real search from still running with
+ * whatever spelling was actually given. */
+export async function guessLithuanianDiacritics(name: string): Promise<string | null> {
+  try {
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${getApiKey()}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: DIACRITIC_GUESS_MODEL,
+        messages: [
+          { role: 'system', content: DIACRITIC_GUESS_SYSTEM_PROMPT },
+          { role: 'user', content: name },
+        ],
+        temperature: 0,
+      }),
+    });
+    if (!res.ok) return null;
+    const json: any = await res.json().catch(() => null);
+    const guess = json?.choices?.[0]?.message?.content?.trim();
+    if (!guess || guess.toLowerCase() === name.toLowerCase()) return null;
+    return guess;
+  } catch {
+    return null;
+  }
+}
+
 export class SummarizeError extends Error {}
 
 const SUMMARIZE_MODEL = 'gpt-4o-mini';
@@ -125,134 +180,143 @@ export async function summarizeCall(transcriptText: string): Promise<{ summary: 
   return { summary };
 }
 
-export class SocialLookupError extends Error {}
+export class LinkedInPersonalizeError extends Error {}
 
-// gpt-4o-mini's Chat Completions endpoint (used by everything else in this
-// file) has no live web access at all — asked to name someone's Instagram/
-// Facebook URL directly, it can only guess from training data, and a wrong
-// guess presented as a real profile is worse than finding nothing (this is
-// used to actually contact real people). The Responses API's built-in
-// web_search tool is a different thing: the model issues a real search,
-// gets real result snippets back, and grounds its answer in those — this
-// was verified directly against two real, born-with-search-results
-// results (Bill Gates' actual public Instagram/Facebook, and a second
-// person where it correctly returned an empty array for the platform it
-// couldn't confidently find rather than guessing).
-const SOCIAL_LOOKUP_MODEL = 'gpt-4o-mini';
+const LINKEDIN_PERSONALIZE_MODEL = 'gpt-4o-mini';
 
-const SOCIAL_LOOKUP_SYSTEM_PROMPT = `You search the public web to find a specific person's real Instagram and Facebook profile pages, for a B2B sales CRM contact record. Use the person's name and company/job context to disambiguate from other people who share the same name — prefer profiles whose bio, posts, or connections reference the same company, industry, or location.
+// Deliberately takes a *template* to rewrite, not a blank "write something
+// for this person" prompt — the human already decided what the message
+// should say (the campaign's own sequence-step text); this only makes it
+// read as written for this specific person instead of a form letter, the
+// same "human writes the intent, AI adapts the wording" split this
+// codebase already uses for the contact-paste cleanup. Explicitly told to
+// keep the template's own language (Lithuanian templates stay Lithuanian)
+// rather than translating, since nothing about "personalize" implies a
+// language change and an unwanted translation would be a worse output
+// than a slightly generic one.
+const LINKEDIN_PERSONALIZE_SYSTEM_PROMPT = `You lightly personalize a LinkedIn outreach message template for one specific recipient, using their name/title/company. Keep the template's own structure, tone, and language (do not translate it). Weave in the recipient's first name and, where it fits naturally, their job title or company — do not force in a detail that has nowhere natural to go. Keep it sounding like something a person typed, not a mail-merge. Do not add claims, offers, or specifics the template didn't already contain. Output ONLY the rewritten message text, no explanation, no quotes around it.`;
 
-The person's name may be Lithuanian (or another Baltic/diacritic-using language) and may be given to you both with and without its native diacritics (e.g. "Ušackas" and its plain-ASCII spelling "Usackas") — real profiles inconsistently use either form (some people register their own profile with the ASCII spelling for an international audience or keyboard convenience; some platforms/exports strip diacritics automatically; some don't). Whenever both spellings are given below, search using BOTH — a profile that only matches the ASCII spelling is just as valid a find as one that only matches the diacritic spelling, and skipping one form is a real, reported way this search misses the correct person entirely.
+// LinkedIn hard-caps a connection request's own note at 300 characters —
+// enforced separately from just asking nicely in the prompt (a model can
+// still overshoot), since a note that gets silently truncated by LinkedIn
+// itself at send time is worse than one this function trims to fit first.
+const LINKEDIN_CONNECT_NOTE_LIMIT = 300;
 
-Only the diacritics-present -> ASCII direction is given to you automatically (a plain, deterministic transliteration). The reverse also happens just as often — a name arrives with NO diacritics at all (e.g. a CRM record typed without a Lithuanian keyboard, or from an English-language export), even though the person's real name and real profile use them. Restoring the correct diacritics isn't mechanical — plain "s"/"c"/"z" could come from "š"/"č"/"ž", plain "u"/"e"/"i"/"a" could come from "ų"/"ū"/"ė"/"į"/"ą" — so use your own knowledge of common Lithuanian name spellings to also try the most plausible diacritic form(s) of an ASCII-only name yourself, the same way a native speaker would recognize "Usackas" as almost certainly "Ušackas". Try more than one restoration if genuinely ambiguous, but don't invent a spelling so unusual it's more likely wrong than right.
-
-A candidate profile's own displayed name must plausibly match BOTH the given first name AND last name — not the surname alone. Surnames are shared by many unrelated people (including, often, close relatives), and a search that's lenient enough to try diacritic variants must NOT become lenient about which person it's willing to call a match: a profile belonging to a *different* first name than the one given is not this person, even if the surname is an exact or diacritic-variant match, and even if that other person is more prominent/easier to find. Only loosen the first-name match for genuinely equivalent forms of the *same* given name (a nickname, an initial, a diacritic variant of the same name) — never for a different name entirely.
-
-Never guess or fabricate a URL: only return a URL you actually found in search results. If you cannot find a confident match on a platform, return an empty array for that platform rather than a low-confidence guess — a human will manually open and visually verify every candidate you return before anything is saved, so returning fewer, more plausible candidates is always better than more, weaker ones.
-
-Return ONLY a JSON object: {"instagram": ["url", ...], "facebook": ["url", ...]} — up to 3 candidates per platform, most likely match first, real instagram.com/facebook.com profile URLs only (no other domains). No explanation, no markdown, just the JSON.`;
-
-export interface SocialLookupResult {
-  instagram: string[];
-  facebook: string[];
+export interface LinkedInPersonalizeParams {
+  template: string;
+  firstName: string | null;
+  lastName: string | null;
+  title: string | null;
+  company: string | null;
+  /** LinkedIn connect notes have a hard 300-char cap; follow-up messages
+   * don't — the prompt and the post-hoc trim both need to know which
+   * applies. */
+  isConnectNote: boolean;
 }
 
-const isInstagramUrl = (u: unknown): u is string => typeof u === 'string' && /^https?:\/\/(www\.)?instagram\.com\//i.test(u);
-const isFacebookUrl = (u: unknown): u is string => typeof u === 'string' && /^https?:\/\/(www\.)?facebook\.com\//i.test(u);
-
-// Lithuanian/Baltic diacritics (Ą Č Ę Ė Į Š Ų Ū Ž and lowercase) all decompose
-// under Unicode NFD into a plain ASCII base letter + a separate combining
-// mark (e.g. Š -> S + U+030C COMBINING CARON) — stripping every combining
-// mark in the U+0300–U+036F block after NFD-normalizing is a correct,
-// general transliteration for this alphabet without needing a hand-written
-// per-letter table. Confirmed directly: "Ušackas" -> "Usackas", "Šarūnas"
-// -> "Sarunas", etc.
-function stripDiacritics(s: string): string {
-  return s.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-}
-
-// A real, reported accuracy bug: a contact's stored name might carry
-// Lithuanian diacritics or might not (depends entirely on how it was
-// typed/pasted/imported), but the person's actual social profile could be
-// registered under *either* spelling — searching only the one spelling the
-// contact happens to be stored under silently misses real matches, or
-// worse, matches a different namesake. This gives the model both spellings
-// explicitly (when they actually differ) instead of leaving it to guess.
-function withDiacriticVariant(value: string): string {
-  const ascii = stripDiacritics(value);
-  return ascii !== value ? `${value} (also: ${ascii})` : value;
-}
-
-/** Uses OpenAI's Responses API (not the Chat Completions endpoint every
- * other function in this file uses) with the built-in web_search tool —
- * the only way this server can ground a search in real, current web
- * results rather than the model's own (possibly wrong, possibly outdated)
- * training data. Real, per-call cost: confirmed live at roughly $0.001–
- * 0.03 depending on how much search context the model pulls in, on top of
- * this account's existing OpenAI usage — small, but not free, which is
- * why this is only ever triggered by an explicit per-contact 🔍 click,
- * never automatically. */
-export async function findSocialProfiles(params: {
-  firstName: string;
-  lastName: string;
-  company?: string;
-}): Promise<SocialLookupResult> {
-  const name = [params.firstName, params.lastName].filter(Boolean).join(' ').trim();
-  if (!name) throw new SocialLookupError('Reikia bent vardo, kad būtų galima ieškoti');
-  const company = params.company?.trim();
-  const input = `Person: ${withDiacriticVariant(name)}${company ? `\nCompany: ${withDiacriticVariant(company)}` : ''}`;
+/** Cheap chat-completion, same model/cost tier as everything else in this
+ * file. Called from a real "🤖 Personalizuoti" button in the Pending
+ * Approval panel — the result lands back in an editable field for the
+ * human to review/adjust before approving, never auto-applied straight
+ * into a send (same "AI drafts, human reviews" pattern as the contact-
+ * paste cleanup and the AI-suggested inbox replies below). */
+export async function personalizeLinkedInMessage(params: LinkedInPersonalizeParams): Promise<{ text: string }> {
+  const person = [
+    params.firstName && `First name: ${params.firstName}`,
+    params.lastName && `Last name: ${params.lastName}`,
+    params.title && `Title: ${params.title}`,
+    params.company && `Company: ${params.company}`,
+  ]
+    .filter(Boolean)
+    .join('\n');
+  const input = `Template:\n${params.template}\n\nRecipient:\n${person || '(no details available — keep the template mostly as-is)'}${
+    params.isConnectNote ? `\n\n(This is a LinkedIn connection-request note — it must stay under ${LINKEDIN_CONNECT_NOTE_LIMIT} characters.)` : ''
+  }`;
 
   let res: Response;
   try {
-    res = await fetch('https://api.openai.com/v1/responses', {
+    res = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${getApiKey()}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: SOCIAL_LOOKUP_MODEL,
-        instructions: SOCIAL_LOOKUP_SYSTEM_PROMPT,
-        input,
-        tools: [{ type: 'web_search' }],
+        model: LINKEDIN_PERSONALIZE_MODEL,
+        messages: [
+          { role: 'system', content: LINKEDIN_PERSONALIZE_SYSTEM_PROMPT },
+          { role: 'user', content: input },
+        ],
+        temperature: 0.4,
       }),
     });
   } catch {
-    throw new SocialLookupError('Could not reach OpenAI');
+    throw new LinkedInPersonalizeError('Could not reach OpenAI');
   }
 
   const json: any = await res.json().catch(() => null);
   if (!res.ok || !json) {
-    throw new SocialLookupError(json?.error?.message ?? `OpenAI request failed (HTTP ${res.status})`);
+    throw new LinkedInPersonalizeError(json?.error?.message ?? `OpenAI request failed (HTTP ${res.status})`);
   }
-  if (json.error) throw new SocialLookupError(json.error.message ?? 'OpenAI returned an error');
+  let text = json.choices?.[0]?.message?.content?.trim();
+  if (!text) throw new LinkedInPersonalizeError('OpenAI returned an empty result');
+  if (params.isConnectNote && text.length > LINKEDIN_CONNECT_NOTE_LIMIT) {
+    text = text.slice(0, LINKEDIN_CONNECT_NOTE_LIMIT);
+  }
+  return { text };
+}
 
-  // The Responses API returns an `output` array mixing tool-call records
-  // (type: "web_search_call") with the actual assistant message — unlike
-  // Chat Completions' flat `choices[0].message.content`, the text has to
-  // be found by locating the "message" item and its "output_text" content
-  // part. Confirmed against real responses during development — there is
-  // no top-level `output_text` convenience field on the raw REST response
-  // (some SDKs synthesize one client-side; this is a plain fetch call).
-  const output: any[] = Array.isArray(json.output) ? json.output : [];
-  const message = output.find((item) => item?.type === 'message');
-  const textPart = Array.isArray(message?.content)
-    ? message.content.find((c: any) => c?.type === 'output_text')
-    : null;
-  const text = typeof textPart?.text === 'string' ? textPart.text.trim() : '';
-  if (!text) throw new SocialLookupError('OpenAI returned an empty result');
+export class LinkedInReplyError extends Error {}
 
-  let parsed: any;
+const LINKEDIN_REPLY_MODEL = 'gpt-4o-mini';
+
+const LINKEDIN_REPLY_SYSTEM_PROMPT = `You draft one suggested reply in an ongoing LinkedIn B2B outreach conversation, for a human to review and edit before sending. Read the full message history to understand context and tone (match the language the conversation is actually in — Lithuanian, English, or whatever else). Write a natural, appropriately brief reply to the other person's most recent message — advance the conversation (answer their question, propose a concrete next step like a call, or acknowledge what they said) rather than being generic or overly salesy. Do not fabricate facts, prices, dates, or commitments the conversation hasn't already established. Output ONLY the suggested reply text, no explanation, no quotes around it.`;
+
+export interface LinkedInReplyMessage {
+  direction: 'in' | 'out';
+  content: string;
+}
+
+/** Same "draft for human review" role as personalizeLinkedInMessage above,
+ * for the Inbox panel's reply box instead of an outbound sequence step —
+ * the suggestion lands in the reply textarea already-editable, it never
+ * sends on its own. Takes the *whole* visible thread (LinkedIn's DOM gives
+ * no cheap way to fetch just "the last few messages" more cheaply than
+ * what inbox.ts already scrapes) so the model can pick up on context from
+ * earlier in the conversation, not just the single latest message. */
+export async function suggestLinkedInReply(
+  participantName: string | null,
+  messages: LinkedInReplyMessage[],
+): Promise<{ text: string }> {
+  if (messages.length === 0) throw new LinkedInReplyError('No messages in this conversation yet');
+  const transcript = messages.map((m) => `${m.direction === 'out' ? 'Me' : participantName || 'Them'}: ${m.content}`).join('\n');
+
+  let res: Response;
   try {
-    parsed = JSON.parse(text);
+    res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${getApiKey()}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: LINKEDIN_REPLY_MODEL,
+        messages: [
+          { role: 'system', content: LINKEDIN_REPLY_SYSTEM_PROMPT },
+          { role: 'user', content: transcript },
+        ],
+        temperature: 0.4,
+      }),
+    });
   } catch {
-    throw new SocialLookupError('Nepavyko apdoroti OpenAI atsakymo');
+    throw new LinkedInReplyError('Could not reach OpenAI');
   }
 
-  // Filtered against the real domain regardless of what the model claims
-  // — belt-and-suspenders against a malformed/off-topic result slipping
-  // through as if it were a verified profile URL.
-  const instagram = (Array.isArray(parsed?.instagram) ? parsed.instagram : []).filter(isInstagramUrl).slice(0, 3);
-  const facebook = (Array.isArray(parsed?.facebook) ? parsed.facebook : []).filter(isFacebookUrl).slice(0, 3);
-  return { instagram, facebook };
+  const json: any = await res.json().catch(() => null);
+  if (!res.ok || !json) {
+    throw new LinkedInReplyError(json?.error?.message ?? `OpenAI request failed (HTTP ${res.status})`);
+  }
+  const text = json.choices?.[0]?.message?.content?.trim();
+  if (!text) throw new LinkedInReplyError('OpenAI returned an empty result');
+  return { text };
 }

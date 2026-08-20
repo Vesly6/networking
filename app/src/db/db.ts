@@ -2,6 +2,7 @@ import { openDB, type IDBPDatabase, type DBSchema } from 'idb';
 import type { Row, TableMeta } from '../types';
 import type { TranscriptionRecord, SmsLogRecord } from '../utils/callsApi';
 import type { CallStatRecord } from '../utils/callStats';
+import { localApiRequest } from '../utils/localApi';
 
 interface AppDB extends DBSchema {
   tables: {
@@ -75,72 +76,114 @@ function getDB(): Promise<IDBPDatabase<AppDB>> {
   return dbPromise;
 }
 
+// --- Table/row data now lives server-side (server/src/tableData/db.ts) —
+// see CLAUDE.md's own section on this migration for the full "phone
+// showed zero contacts" story that drove it. These functions keep their
+// exact original names/signatures (all still return the same Promise<T>
+// shapes as before) and are called from exactly the same places
+// (useTableStore.ts/useWorkspaceStore.ts, which never touched IndexedDB
+// directly to begin with) — only the body changed, from `idb` calls to
+// `localApiRequest` calls against the new server routes. The `tables`/
+// `rows` IndexedDB object stores themselves are untouched and still
+// declared below (see AppDB) purely so the one-time migration helpers
+// further down this file can still read whatever old local data exists.
+
 export async function loadTables(): Promise<TableMeta[]> {
+  const { tables } = await localApiRequest<{ tables: TableMeta[] }>('/api/tables');
+  return tables;
+}
+
+export async function saveTable(table: TableMeta): Promise<void> {
+  await localApiRequest('/api/tables', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(table),
+  });
+}
+
+export async function getTable(id: string): Promise<TableMeta | null> {
+  try {
+    return await localApiRequest<TableMeta>(`/api/tables/${encodeURIComponent(id)}`);
+  } catch {
+    return null;
+  }
+}
+
+/** Read-modify-write server-side (server/src/tableData/db.ts's own
+ * updateTableColumns) for the identical reason this always worked this
+ * way client-side: a stale in-memory `columns`/`name` copy from one store
+ * must never clobber a fresher write made through the other. */
+export async function updateTableColumns(tableId: string, columns: TableMeta['columns']): Promise<void> {
+  await localApiRequest(`/api/tables/${encodeURIComponent(tableId)}/columns`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ columns }),
+  });
+}
+
+export async function updateTableName(tableId: string, name: string): Promise<void> {
+  await localApiRequest(`/api/tables/${encodeURIComponent(tableId)}/name`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+}
+
+export async function countRowsForTable(tableId: string): Promise<number> {
+  const { count } = await localApiRequest<{ count: number }>(`/api/tables/${encodeURIComponent(tableId)}/rows/count`);
+  return count;
+}
+
+export async function deleteTableDB(id: string): Promise<void> {
+  await localApiRequest(`/api/tables/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+export async function loadRowsForTable(tableId: string): Promise<Row[]> {
+  const { rows } = await localApiRequest<{ rows: Row[] }>(`/api/tables/${encodeURIComponent(tableId)}/rows`);
+  return rows;
+}
+
+export async function saveRow(row: Row): Promise<void> {
+  await localApiRequest(`/api/rows/${encodeURIComponent(row.id)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(row),
+  });
+}
+
+/** One request for the whole batch — critical, not just tidy: a
+ * drag-reorder or column sort rewrites `order` across *every* row in the
+ * table (see useTableStore.ts's moveRows/insertRows/applySortOrder), so a
+ * 14,000-row table doing this as one row per HTTP request would be
+ * unusable. Matches server/src/tableData/db.ts's own saveRows(), which
+ * wraps the whole batch in a single SQLite transaction. */
+export async function saveRows(rows: Row[]): Promise<void> {
+  if (rows.length === 0) return;
+  await localApiRequest('/api/rows', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ rows }),
+  });
+}
+
+export async function deleteRowDB(id: string): Promise<void> {
+  await localApiRequest(`/api/rows/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+// --- Legacy IndexedDB readers — kept only for the one-time "migrate my
+// existing local data to the server" action (utils/migrateTableData.ts).
+// Deliberately separate names from the now-server-backed functions above
+// so nothing accidentally reads local data instead of the server by
+// mistake. Never call these for normal app operation. ---
+
+export async function loadTablesFromIndexedDB(): Promise<TableMeta[]> {
   const db = await getDB();
   return db.getAll('tables');
 }
 
-export async function saveTable(table: TableMeta): Promise<void> {
-  const db = await getDB();
-  await db.put('tables', table);
-}
-
-export async function getTable(id: string): Promise<TableMeta | null> {
-  const db = await getDB();
-  return (await db.get('tables', id)) ?? null;
-}
-
-/** Read-modify-write so a stale in-memory `columns`/`name` copy from one
- * store never clobbers a fresher write made through the other store. */
-export async function updateTableColumns(tableId: string, columns: TableMeta['columns']): Promise<void> {
-  const db = await getDB();
-  const existing = await db.get('tables', tableId);
-  if (!existing) return;
-  await db.put('tables', { ...existing, columns, updatedAt: Date.now() });
-}
-
-export async function updateTableName(tableId: string, name: string): Promise<void> {
-  const db = await getDB();
-  const existing = await db.get('tables', tableId);
-  if (!existing) return;
-  await db.put('tables', { ...existing, name, updatedAt: Date.now() });
-}
-
-export async function countRowsForTable(tableId: string): Promise<number> {
-  const db = await getDB();
-  return db.countFromIndex('rows', 'by-table', tableId);
-}
-
-export async function deleteTableDB(id: string): Promise<void> {
-  const db = await getDB();
-  const tx = db.transaction(['tables', 'rows'], 'readwrite');
-  await tx.objectStore('tables').delete(id);
-  const rowIds = await tx.objectStore('rows').index('by-table').getAllKeys(id);
-  await Promise.all(rowIds.map((rowId) => tx.objectStore('rows').delete(rowId)));
-  await tx.done;
-}
-
-export async function loadRowsForTable(tableId: string): Promise<Row[]> {
+export async function loadRowsForTableFromIndexedDB(tableId: string): Promise<Row[]> {
   const db = await getDB();
   return db.getAllFromIndex('rows', 'by-table', tableId);
-}
-
-export async function saveRow(row: Row): Promise<void> {
-  const db = await getDB();
-  await db.put('rows', row);
-}
-
-export async function saveRows(rows: Row[]): Promise<void> {
-  if (rows.length === 0) return;
-  const db = await getDB();
-  const tx = db.transaction('rows', 'readwrite');
-  await Promise.all(rows.map((row) => tx.store.put(row)));
-  await tx.done;
-}
-
-export async function deleteRowDB(id: string): Promise<void> {
-  const db = await getDB();
-  await db.delete('rows', id);
 }
 
 export async function getTranscription(callId: string): Promise<TranscriptionRecord | null> {

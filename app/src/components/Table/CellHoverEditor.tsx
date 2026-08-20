@@ -29,6 +29,7 @@ import { confirmDialog } from '../../store/useConfirmStore';
 import { getAllTranscriptions, saveSmsLogEntry, getAllSmsLog } from '../../db/db';
 import { ApolloContactSearchModal } from './ApolloContactSearchModal';
 import { SocialLookupModal } from './SocialLookupModal';
+import { Popover } from '../Popover';
 
 interface CellHoverEditorProps {
   anchor: HTMLElement;
@@ -44,6 +45,14 @@ interface CellHoverEditorProps {
    * (a missed call matched to a specific person inside this row's Contacts
    * entries, not just the row itself). Not used in note mode. */
   highlightEntryId?: string | null;
+  /** This row's raw Contacts-cell value, if any — feeds the "neatsiliepė"
+   * (didn't answer) quick-tag's contact picker in note mode (see
+   * NEATSILIEPE_LABEL below). Same computed-once-per-row-in-TableView
+   * convention as DataCell's own contactsRaw prop, and undefined/empty just
+   * means that one tag has nothing to pick from — every other note feature
+   * works unchanged. Not used in contact mode (that mode already has direct
+   * access to this row's own contacts via `value`). */
+  contactsRaw?: string;
   onAddNoteEntry: (text: string) => void;
   onUpdateNoteEntry: (id: string, text: string) => void;
   onRemoveNoteEntry: (id: string) => void;
@@ -120,6 +129,28 @@ const NOTE_TAGS: Array<{ label: string; color: string }> = [
 // never guaranteed to match a tag in the first place.
 const NOTE_TAG_COLORS: Record<string, string> = Object.fromEntries(NOTE_TAGS.map((t) => [t.label, t.color]));
 
+// "neatsiliepė" (Lithuanian: "didn't answer") is a quick-tag like the ones
+// above, but not a fixed label — clicking it opens a small picker of this
+// row's own Contacts entries (see contactsRaw prop) so the exact person who
+// didn't pick up can be named, e.g. "Andrius Ivanaitis neatsiliepė". Kept
+// out of NOTE_TAGS (a plain "add this exact label" list) since its click
+// behavior is genuinely different — it opens a picker instead of adding a
+// note directly.
+const NEATSILIEPE_SUFFIX = 'neatsiliepė';
+const NEATSILIEPE_COLOR = '#e2e2e2';
+
+// Same purpose as NOTE_TAG_COLORS above, extended to also recognize a
+// neatsiliepė entry — those don't have a fixed label (the contact's name is
+// part of the text), so an exact-match lookup alone can't find them; a
+// suffix check is the next best thing without inventing a separate stored
+// "this entry is a neatsiliepė" flag for what's still fundamentally just
+// free text.
+function getHistoryEntryColor(text: string): string | undefined {
+  if (NOTE_TAG_COLORS[text]) return NOTE_TAG_COLORS[text];
+  if (text.endsWith(` ${NEATSILIEPE_SUFFIX}`)) return NEATSILIEPE_COLOR;
+  return undefined;
+}
+
 // Temporarily disabled on explicit request — kept (not deleted) since
 // callContact/requestCallback are meant to come back, not go away for
 // good. Flip back to true to restore the 📞 button on each contact entry.
@@ -131,6 +162,7 @@ export function CellHoverEditor({
   value,
   companyName,
   highlightEntryId,
+  contactsRaw,
   onAddNoteEntry,
   onUpdateNoteEntry,
   onRemoveNoteEntry,
@@ -146,6 +178,7 @@ export function CellHoverEditor({
   const [contactDraft, setContactDraft] = useState('');
   const [parsingContact, setParsingContact] = useState(false);
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
+  const [neatsiliepeAnchor, setNeatsiliepeAnchor] = useState<HTMLElement | null>(null);
   const [editDraft, setEditDraft] = useState('');
   const [loadingLastSummary, setLoadingLastSummary] = useState(false);
   const [apolloModalOpen, setApolloModalOpen] = useState(false);
@@ -613,7 +646,15 @@ export function CellHoverEditor({
   return (
     <>
       {createPortal(
-        <div className="cell-hover-editor" ref={rootRef} style={style} onClick={(e) => e.stopPropagation()}>
+        <div
+          className="cell-hover-editor"
+          ref={rootRef}
+          style={style}
+          onClick={(e) => {
+            e.stopPropagation();
+            setNeatsiliepeAnchor(null);
+          }}
+        >
           {mode === 'note' ? (
             <>
               <textarea
@@ -655,7 +696,49 @@ export function CellHoverEditor({
                     {tag.label}
                   </button>
                 ))}
+                <button
+                  type="button"
+                  className="cell-hover-tag"
+                  style={{ backgroundColor: NEATSILIEPE_COLOR }}
+                  disabled={parseContacts(contactsRaw ?? '').length === 0}
+                  title={
+                    parseContacts(contactsRaw ?? '').length === 0
+                      ? 'Šioje eilutėje dar nėra kontaktų'
+                      : 'Pasirinkite, kas neatsiliepė'
+                  }
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const anchorEl = e.currentTarget;
+                    setNeatsiliepeAnchor((prev) => (prev ? null : anchorEl));
+                  }}
+                >
+                  {NEATSILIEPE_SUFFIX}
+                </button>
               </div>
+              {neatsiliepeAnchor && (
+                <Popover anchor={neatsiliepeAnchor} width={220}>
+                  <div className="popover-field">
+                    <span>Kas neatsiliepė?</span>
+                  </div>
+                  {parseContacts(contactsRaw ?? '').map((c) => {
+                    const { firstName, lastName } = contactTextToFields(c.text);
+                    const name = `${firstName} ${lastName}`.trim() || c.text;
+                    return (
+                      <button
+                        key={c.id}
+                        type="button"
+                        className="date-cell-contact-option"
+                        onClick={() => {
+                          onAddNoteEntry(`${name} ${NEATSILIEPE_SUFFIX}`);
+                          setNeatsiliepeAnchor(null);
+                        }}
+                      >
+                        {name}
+                      </button>
+                    );
+                  })}
+                </Popover>
+              )}
               {parseNoteHistory(value).length > 0 && (
                 <div className="cell-hover-history">
                   {parseNoteHistory(value).map((entry) => (
@@ -663,8 +746,8 @@ export function CellHoverEditor({
                       key={entry.id}
                       className="cell-hover-history-entry"
                       style={
-                        NOTE_TAG_COLORS[entry.text]
-                          ? { backgroundColor: NOTE_TAG_COLORS[entry.text], borderRadius: '6px' }
+                        getHistoryEntryColor(entry.text)
+                          ? { backgroundColor: getHistoryEntryColor(entry.text), borderRadius: '6px' }
                           : undefined
                       }
                     >
@@ -1097,6 +1180,7 @@ export function CellHoverEditor({
       {apolloModalOpen && companyName?.trim() && (
         <ApolloContactSearchModal
           initialCompanyName={companyName}
+          existingContactsRaw={value}
           onAddContact={onAddContact}
           onUpdateContact={onUpdateContact}
           onClose={() => setApolloModalOpen(false)}

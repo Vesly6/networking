@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { useTableStore } from '../../store/useTableStore';
-import { getLinkedContactName, getNextActionColumn, getPrimaryLabel } from '../../utils/row';
+import { getLinkedContactName, getNextActionColumn, getNextActionPhone, getPrimaryLabel } from '../../utils/row';
 import { formatDisplayDate, getTimePart, isDueToday, isOverdue } from '../../utils/date';
 import type { Row } from '../../types';
 
@@ -39,13 +39,26 @@ export function TaskListView({ onJumpToRow }: TaskListViewProps) {
   const renderItem = (row: Row) => {
     const dateValue = row.cells[dateColumn.id] ?? '';
     const time = getTimePart(dateValue);
+    // Name AND number, not just one or the other — showing only the phone
+    // (an earlier version of this) was a real, reported regression: a
+    // bare number looks identical whether or not a specific contact was
+    // ever picked via the date cell's 👤 button, so there was no visible
+    // sign the pick actually took effect. The name answers "who did I
+    // choose," the number is still what a call queue needs to act on.
     const contactName = getLinkedContactName(row, columns);
+    const phone = getNextActionPhone(row, columns);
+    const whoLabel = contactName && phone ? `${contactName} · ${phone}` : contactName || phone;
     return (
       <li key={row.id} className="task-row">
         <span className="task-row-label">
           {getPrimaryLabel(row, columns)}
-          {contactName && <span className="task-row-contact"> | {contactName}</span>}
+          {whoLabel && <span className="task-row-contact"> | {whoLabel}</span>}
         </span>
+        {row.nextActionNote && (
+          <span className="task-row-note" title={row.nextActionNote}>
+            {row.nextActionNote}
+          </span>
+        )}
         <span className="task-row-date">{formatDisplayDate(dateValue)}</span>
         {time && <span className="task-row-time">{time}</span>}
         <button type="button" className="task-open" onClick={() => onJumpToRow(row.id)}>

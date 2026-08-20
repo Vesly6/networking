@@ -6,6 +6,13 @@
   color: var(--text-muted);
 }
 
+.app-loading-error {
+  flex-direction: column;
+  gap: 12px;
+  text-align: center;
+  padding: 0 24px;
+}
+
 .login-screen {
   height: 100%;
   display: flex;
@@ -455,10 +462,6 @@ thead tr:nth-child(2) th {
   color: var(--text-muted);
 }
 
-.sort-arrow {
-  color: var(--accent);
-}
-
 table.sheet tbody td {
   border-bottom: 1px solid var(--border);
   border-right: 1px solid var(--border);
@@ -716,6 +719,34 @@ tr.row-flash td.cell-row-bg {
 .date-cell-add-time:hover {
   opacity: 1;
   background: var(--bg-hover);
+}
+/* A time IS set but the input stays collapsed by default (see the long
+   comment in DataCell.tsx) — a colored icon is the only in-table hint that
+   one exists; the actual time value only shows in the calendar/task-list
+   views or in this button's own title tooltip. */
+.date-cell-add-time-set {
+  opacity: 1;
+  color: var(--accent);
+}
+
+/* "Add a note about this call" — same collapsed icon-button treatment as
+   .date-cell-add-time, opening a small Popover (not shown inline in the
+   table) with a single freeform textarea. See Row.nextActionNote. */
+.date-cell-note-btn {
+  border: none;
+  background: transparent;
+  padding: 0.15em 0.3em;
+  font-size: 0.85em;
+  opacity: 0.55;
+  flex-shrink: 0;
+}
+.date-cell-note-btn:hover {
+  opacity: 1;
+  background: var(--bg-hover);
+}
+.date-cell-note-set {
+  opacity: 1;
+  color: var(--accent);
 }
 
 /* One clear button for the whole cell — date, time, and linked contact
@@ -1012,6 +1043,17 @@ tr.row-drop-end td {
 .popover-field input,
 .popover-field select {
   width: 100%;
+}
+
+.date-cell-note-textarea {
+  width: 100%;
+  resize: vertical;
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.4em 0.5em;
 }
 
 .popover-checkbox {
@@ -1346,6 +1388,10 @@ tr.row-drop-end td {
 .cell-hover-tag:hover {
   background: var(--bg-hover);
   border-color: var(--border-strong);
+}
+.cell-hover-tag:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* Deliberately brighter/more saturated than the other (muted) quick-tags —
@@ -1865,6 +1911,24 @@ tr.row-drop-end td {
   cursor: default;
 }
 
+/* A result already present among this row's own Contacts entries (best-
+   effort name match — see ApolloContactSearchModal.tsx's isAlreadyAdded).
+   Dimmed like any other "already handled" row in this app, plus an
+   explicit badge rather than relying on the dimming alone to read as
+   "already added" vs. just "less relevant." */
+.cell-hover-apollo-result-existing {
+  opacity: 0.6;
+}
+.cell-hover-apollo-result-existing:hover {
+  opacity: 1;
+}
+.cell-hover-apollo-result-added-badge {
+  margin-left: 0.4em;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
 /* The "🔍 Paieška" button's full company→people search flow — a real
    modal (reuses .modal/.modal-backdrop chrome), wider than the default
    .modal since it hosts CompanyFilterForm/PeopleFilterForm (the same
@@ -1977,6 +2041,16 @@ tr.row-drop-end td {
   padding: 0.3rem;
   border-bottom: 1px solid var(--border);
   margin-bottom: 0.2rem;
+}
+
+.apollo-search-modal-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.8rem;
+  padding: 0.6rem 0.3rem 0.2rem;
+  margin-top: 0.2rem;
+  border-top: 1px solid var(--border);
 }
 
 /* SocialLookupModal — a single-column, narrower cousin of
@@ -2705,6 +2779,173 @@ tr.row-drop-end td {
   gap: 0.6rem;
   font-size: 0.85rem;
 }
+
+.sms-inbox-view {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.sms-thread-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.sms-thread-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.sms-thread-header {
+  width: 100%;
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  padding: 0.6rem 0.8rem;
+  border: none;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.sms-thread-header:hover {
+  background: var(--bg-hover);
+}
+
+.sms-thread-header-main {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  min-width: 9rem;
+}
+
+.sms-thread-phone {
+  font-weight: 600;
+  font-size: 0.88rem;
+  color: var(--text);
+}
+
+.sms-thread-label {
+  font-size: 0.74rem;
+  color: var(--text-muted);
+}
+
+.sms-thread-preview {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+.sms-thread-time {
+  flex: 0 0 auto;
+  font-size: 0.76rem;
+  color: var(--text-muted);
+}
+
+.sms-thread-body {
+  border-top: 1px solid var(--border);
+  padding: 0.6rem 0.8rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.sms-thread-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.sms-thread-jump {
+  font-size: 0.78rem;
+}
+
+.sms-thread-entries {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.sms-thread-entry {
+  border-radius: 8px;
+  padding: 0.4em 0.6em;
+  font-size: 0.82rem;
+  max-width: 80%;
+}
+.sms-thread-entry-in {
+  background: var(--bg-alt);
+  align-self: flex-start;
+}
+.sms-thread-entry-out {
+  background: var(--today-bg);
+  align-self: flex-end;
+}
+
+.sms-thread-entry-meta {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  margin-bottom: 0.15rem;
+}
+.sms-thread-entry-dir {
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.sms-thread-entry-text {
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.sms-thread-entry-raw {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+.sms-thread-entry-raw pre {
+  background: var(--bg-alt);
+  border-radius: 6px;
+  padding: 0.5rem;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin-top: 0.3rem;
+}
+
+.sms-inbox-compose {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.6rem 0.8rem;
+}
+.sms-inbox-compose-phone {
+  font-size: 0.85rem;
+}
+.sms-inbox-compose textarea {
+  width: 100%;
+  min-height: 3.2em;
+  resize: vertical;
+  font-size: 0.85rem;
+  font-family: inherit;
+  padding: 0.4em 0.5em;
+}
+.sms-inbox-compose-actions {
+  display: flex;
+  gap: 0.4rem;
+}
 .calls-stats-range-title {
   min-width: 11rem;
   text-align: center;
@@ -3197,4 +3438,841 @@ tr.row-drop-end td {
 }
 .search-results-table-actions button {
   white-space: nowrap;
+}
+
+/* LinkedIn tab (Phase 0) — same page-level layout as .calls-view/
+   .search-view: flex column, own padding, own scroll. */
+.linkedin-view {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  padding: 1rem 1.25rem;
+  overflow: auto;
+  /* Wider than Phase 0's original 640px — the leads table (Campaigns tab)
+     needs real room for 5 columns; the Testas/Nustatymai forms just sit
+     narrower than the full width, which reads fine since they're simple
+     stacked forms either way. */
+  max-width: 900px;
+}
+
+.linkedin-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.linkedin-status-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.linkedin-status {
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 0.3em 0.7em;
+  border-radius: 999px;
+  background: var(--bg-alt);
+}
+.linkedin-status-connected {
+  color: #1b7a3d;
+}
+.linkedin-status-checkpoint {
+  color: var(--danger);
+}
+.linkedin-status-logged_out,
+.linkedin-status-not_connected {
+  color: var(--text-muted);
+}
+
+.linkedin-status-message {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.linkedin-hint {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin: 0 0 0.5rem;
+}
+
+.linkedin-test-connect,
+.linkedin-actions-log {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.linkedin-test-connect h3,
+.linkedin-actions-log h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+.linkedin-test-connect input {
+  padding: 0.5em 0.7em;
+  font-size: 0.85rem;
+}
+
+.linkedin-action-entry {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: baseline;
+  padding: 0.5em 0;
+  border-top: 1px solid var(--border);
+  font-size: 0.8rem;
+}
+.linkedin-action-entry:first-child {
+  border-top: none;
+}
+.linkedin-action-type {
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+.linkedin-action-target {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.linkedin-action-time {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+.linkedin-action-detail {
+  flex-basis: 100%;
+  color: var(--danger);
+}
+.linkedin-action-success .linkedin-action-type {
+  color: #1b7a3d;
+}
+.linkedin-action-error .linkedin-action-type {
+  color: var(--danger);
+}
+
+/* The always-visible "⏸ Stop everything" control — deliberately styled
+   like a real warning action (danger-tinted border) rather than a plain
+   toolbar button, so it reads as "the emergency one" at a glance. Once
+   paused, the same slot shows "▶ Continue" using .primary instead. */
+.linkedin-pause-btn {
+  border: 1px solid var(--danger);
+  background: var(--danger-bg);
+  color: var(--danger);
+  font-weight: 600;
+}
+.linkedin-pause-btn:hover {
+  background: var(--danger);
+  color: var(--accent-contrast);
+}
+
+.linkedin-paused-banner {
+  margin: 0;
+  padding: 0.5em 0.8em;
+  border-radius: 8px;
+  background: var(--danger-bg);
+  color: var(--danger);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.linkedin-safety-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+.linkedin-warmup-note {
+  color: var(--accent);
+}
+
+.linkedin-settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+.linkedin-settings-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+.linkedin-settings-form label input[type='number'],
+.linkedin-settings-form label input[type='time'] {
+  padding: 0.4em 0.6em;
+  font-size: 0.85rem;
+}
+.linkedin-settings-checkbox {
+  flex-direction: row !important;
+  align-items: center;
+  gap: 0.5rem !important;
+}
+.linkedin-settings-checkbox input[type='checkbox'] {
+  width: auto;
+}
+
+/* Sub-nav (Kampanijos | Testas | Nustatymai) — smaller cousin of
+   .app-tabs, same visual language (active = filled pill) but scoped
+   inside the LinkedIn tab's own content instead of the app's top nav. */
+.linkedin-subnav {
+  display: flex;
+  gap: 0.4rem;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.6rem;
+}
+.linkedin-subnav button {
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: 6px;
+  padding: 0.35em 0.7em;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+.linkedin-subnav button.active {
+  background: var(--bg-alt);
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.linkedin-campaigns-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.linkedin-new-campaign {
+  display: flex;
+  gap: 0.5rem;
+}
+.linkedin-new-campaign input {
+  flex: 1;
+  padding: 0.5em 0.7em;
+  font-size: 0.85rem;
+}
+
+.linkedin-campaigns-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.linkedin-campaign-row {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  padding: 0.6em 0.8em;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  text-align: left;
+}
+.linkedin-campaign-row:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-alt);
+}
+
+.linkedin-campaign-name {
+  font-weight: 600;
+  flex: 1;
+}
+
+.linkedin-campaign-status {
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.2em 0.6em;
+  border-radius: 999px;
+  background: var(--bg-alt);
+  color: var(--text-muted);
+}
+.linkedin-campaign-status-active {
+  background: #e5f0e3;
+  color: #1b7a3d;
+}
+.linkedin-campaign-status-paused {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.linkedin-campaign-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.linkedin-campaign-detail-header {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+}
+.linkedin-campaign-detail-header h3 {
+  margin: 0;
+  flex: 1;
+}
+
+.linkedin-delete-campaign {
+  color: var(--danger);
+}
+
+.linkedin-leads-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+/* Same look as .linkedin-subnav (top-level LinkedIn tab sub-nav) — reused
+   here at a smaller scale for the Sent/Connected/Messaged/All split within
+   one campaign's lead list, so both sub-navs in this feature read as the
+   same visual pattern rather than two different ones. */
+.linkedin-lead-panel-nav {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.4rem;
+}
+.linkedin-lead-panel-nav button {
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: 6px;
+  padding: 0.3em 0.6em;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+.linkedin-lead-panel-nav button.active {
+  background: var(--bg-alt);
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.linkedin-lead-date-filter {
+  display: flex;
+  align-items: center;
+  margin: 0.4rem 0;
+}
+.linkedin-lead-date-filter label {
+  display: flex;
+  align-items: center;
+  gap: 0.4em;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+.linkedin-lead-date-filter select {
+  font-size: 0.8rem;
+  padding: 0.25em 0.4em;
+}
+
+.linkedin-leads-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+.linkedin-leads-table th {
+  text-align: left;
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 0.72rem;
+  padding: 0.4em 0.5em;
+  border-bottom: 1px solid var(--border);
+}
+.linkedin-leads-table td {
+  padding: 0.4em 0.5em;
+  border-bottom: 1px solid var(--border);
+}
+
+.linkedin-lead-remove {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  line-height: 1;
+  padding: 0.1em 0.4em;
+}
+.linkedin-lead-remove:hover {
+  color: var(--danger);
+  background: var(--danger-bg);
+}
+
+.linkedin-csv-picker,
+.linkedin-csv-mapping {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.linkedin-csv-mapping label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+.linkedin-csv-mapping select {
+  padding: 0.4em 0.6em;
+  font-size: 0.85rem;
+}
+
+.linkedin-search-import-modal {
+  max-width: 560px;
+}
+.linkedin-search-import-form {
+  display: flex;
+  gap: 0.5rem;
+}
+.linkedin-search-import-form input {
+  flex: 1;
+  padding: 0.4em 0.6em;
+  font-size: 0.85rem;
+}
+.linkedin-search-import-results {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.4rem;
+}
+.linkedin-search-import-result {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.3em 0.4em;
+  border-radius: 6px;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+.linkedin-search-import-result:hover {
+  background: var(--bg-hover);
+}
+.linkedin-search-import-result-main {
+  min-width: 0;
+}
+
+.linkedin-sequence {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.linkedin-sequence h4 {
+  margin: 0;
+}
+
+.linkedin-sequence-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  counter-reset: linkedin-step;
+}
+.linkedin-sequence-step {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.4em 0.6em;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.82rem;
+  counter-increment: linkedin-step;
+}
+.linkedin-sequence-step::before {
+  content: counter(linkedin-step);
+  flex: 0 0 auto;
+  width: 1.4em;
+  height: 1.4em;
+  border-radius: 999px;
+  background: var(--bg-alt);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.linkedin-sequence-step-type {
+  font-weight: 600;
+}
+.linkedin-sequence-step-message {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.linkedin-add-step {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.linkedin-add-step select,
+.linkedin-add-step input {
+  padding: 0.4em 0.6em;
+  font-size: 0.85rem;
+}
+.linkedin-add-step label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+.linkedin-add-step input[type='text'] {
+  flex: 1;
+  min-width: 160px;
+}
+
+.linkedin-pending-approval,
+.linkedin-stale-invites {
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  background: var(--bg-alt);
+}
+.linkedin-pending-approval-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.linkedin-pending-approval-header h4 {
+  margin: 0;
+}
+
+.linkedin-pending-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  padding: 0.5em 0.6em;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  font-size: 0.82rem;
+}
+.linkedin-pending-row > span:nth-child(2) {
+  flex: 1;
+  min-width: 120px;
+  font-weight: 600;
+}
+
+.linkedin-pending-row-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.linkedin-pending-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.5em 0.6em;
+  border: 1px dashed var(--accent);
+  border-radius: 8px;
+  background: var(--bg);
+}
+.linkedin-pending-edit textarea {
+  width: 100%;
+  min-height: 4.5em;
+  resize: vertical;
+  font-family: inherit;
+  font-size: 0.82rem;
+  padding: 0.4em 0.5em;
+}
+.linkedin-pending-edit-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.linkedin-inbox {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+  height: 600px;
+}
+
+.linkedin-inbox-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.linkedin-inbox-layout {
+  display: flex;
+  gap: 0.8rem;
+  flex: 1;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.linkedin-inbox-list {
+  flex: 0 0 260px;
+  overflow-y: auto;
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+}
+
+.linkedin-inbox-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+  padding: 0.6em 0.8em;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  position: relative;
+}
+.linkedin-inbox-row:hover {
+  background: var(--bg-alt);
+}
+.linkedin-inbox-row.active {
+  background: var(--bg-alt);
+  border-left: 3px solid var(--accent);
+}
+.linkedin-inbox-row .linkedin-hint {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+.linkedin-inbox-row-name {
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+.linkedin-inbox-unread-dot {
+  position: absolute;
+  top: 0.7em;
+  right: 0.7em;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
+.linkedin-inbox-thread {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0.8rem;
+  gap: 0.6rem;
+}
+
+.linkedin-inbox-thread-header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding-bottom: 0.6rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.linkedin-inbox-messages {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.linkedin-inbox-message {
+  max-width: 70%;
+  padding: 0.5em 0.7em;
+  border-radius: 10px;
+  font-size: 0.85rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.linkedin-inbox-message-out {
+  align-self: flex-end;
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+.linkedin-inbox-message-in {
+  align-self: flex-start;
+  background: var(--bg-alt);
+}
+
+.linkedin-inbox-reply {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-end;
+}
+.linkedin-inbox-reply textarea {
+  flex: 1;
+  min-height: 3em;
+  max-height: 8em;
+  padding: 0.5em 0.7em;
+  font-size: 0.85rem;
+  resize: vertical;
+}
+.linkedin-inbox-reply-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  flex-shrink: 0;
+}
+.linkedin-inbox-reply-actions button {
+  white-space: nowrap;
+}
+
+.linkedin-analytics {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.linkedin-analytics h3 {
+  margin: 0;
+}
+
+/* Same visual language as .calls-stats-cards — a separate, dedicated
+   ruleset rather than reusing that class directly, matching how every
+   other feature area in this app (Calls vs LinkedIn vs Search) keeps its
+   own CSS classes even where the visual design is intentionally similar. */
+.linkedin-stats-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.75rem;
+}
+.linkedin-stats-card {
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+}
+.linkedin-stats-card-value {
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: var(--text);
+}
+.linkedin-stats-card-label {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  margin-top: 0.15rem;
+}
+
+.linkedin-analytics-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+.linkedin-analytics-table th {
+  text-align: left;
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 0.72rem;
+  padding: 0.4em 0.5em;
+  border-bottom: 1px solid var(--border);
+}
+.linkedin-analytics-table td {
+  padding: 0.4em 0.5em;
+  border-bottom: 1px solid var(--border);
+}
+
+.linkedin-activity-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.linkedin-activity-section h4 {
+  margin: 0;
+}
+
+/* Same hand-rolled-SVG approach/sizing as .calls-bar-chart — see
+   LinkedInActivityChart.tsx's own doc comment for why this isn't just a
+   reuse of that exact component (three-series vs. two, and a stacked/
+   overlay reading here would be misleading between two unrelated action
+   counts). */
+.linkedin-activity-chart {
+  width: 100%;
+  height: 180px;
+  display: block;
+}
+.linkedin-activity-chart-baseline {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+.linkedin-activity-bar-connect {
+  fill: var(--accent);
+}
+.linkedin-activity-bar-message {
+  fill: var(--border-strong);
+}
+.linkedin-activity-chart-label {
+  fill: var(--text-muted);
+  font-size: 9px;
+}
+
+.linkedin-activity-legend {
+  display: flex;
+  gap: 1.25rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+.linkedin-activity-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.linkedin-activity-legend-swatch {
+  display: inline-block;
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 2px;
+}
+.linkedin-activity-legend-connect {
+  background: var(--accent);
+}
+.linkedin-activity-legend-message {
+  background: var(--border-strong);
+}
+
+.linkedin-step-breakdown-toggle {
+  font-size: 0.76rem;
+  padding: 0.2em 0.5em;
+}
+
+.linkedin-step-breakdown-row td {
+  background: var(--bg-alt);
+  padding: 0.6rem;
+}
+
+.linkedin-step-breakdown-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+.linkedin-step-breakdown-table th {
+  text-align: left;
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 0.7rem;
+  padding: 0.3em 0.5em;
+}
+.linkedin-step-breakdown-table td {
+  padding: 0.3em 0.5em;
+}
+.linkedin-step-failing {
+  color: var(--danger);
+  font-weight: 600;
 }

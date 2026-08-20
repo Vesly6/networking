@@ -12,6 +12,9 @@ interface ColumnHeaderMenuProps {
    * handleColumnContextMenu: right-clicking outside the current selection
    * collapses it to just the clicked column first, matching Excel). */
   targetIds: string[];
+  /** Sorting is a one-time, permanent action (see TableView's commitSort)
+   * — there's no persistent "currently sorted" state to clear afterward,
+   * so this menu only ever offers to run a sort, never to undo one. */
   onSort: (direction: 'asc' | 'desc') => void;
   onCopy: () => void;
   onPaste: () => void;

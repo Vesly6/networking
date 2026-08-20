@@ -8,6 +8,15 @@ interface WorkspaceState {
   tables: TableMeta[];
   activeTableId: string | null;
   ready: boolean;
+  /** Set when `init()` fails outright (most likely: the table-data
+   * migration made `server/` load-bearing for the whole app, not just the
+   * Calls tab — see CLAUDE.md — so "server/ isn't running" is now a real,
+   * common way for this to fail, not a rare edge case). Left `null` on
+   * success. App.tsx shows this instead of leaving the user staring at an
+   * infinite "Kraunama…" spinner with no explanation, which is what
+   * happened before this was added — `init()` throwing left `ready` stuck
+   * at `false` forever with no user-facing signal at all. */
+  initError: string | null;
   init: () => Promise<void>;
   createTable: (name: string) => string;
   /** Clones a table's columns and every row (fresh ids throughout, cell
@@ -26,25 +35,34 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   tables: [],
   activeTableId: null,
   ready: false,
+  initError: null,
 
   init: async () => {
-    let tables = await loadTables();
-    if (tables.length === 0) {
-      const now = Date.now();
-      const table: TableMeta = {
-        id: crypto.randomUUID(),
-        name: 'Lentelė 1',
-        columns: [],
-        createdAt: now,
-        updatedAt: now,
-      };
-      await saveTable(table);
-      tables = [table];
+    try {
+      let tables = await loadTables();
+      if (tables.length === 0) {
+        const now = Date.now();
+        const table: TableMeta = {
+          id: crypto.randomUUID(),
+          name: 'Lentelė 1',
+          columns: [],
+          createdAt: now,
+          updatedAt: now,
+        };
+        await saveTable(table);
+        tables = [table];
+      }
+      tables = [...tables].sort((a, b) => a.createdAt - b.createdAt);
+      const savedActiveId = localStorage.getItem(LAST_ACTIVE_KEY);
+      const activeTableId = tables.some((t) => t.id === savedActiveId) ? savedActiveId : null;
+      set({ tables, activeTableId, ready: true, initError: null });
+    } catch {
+      // Server unreachable (down, wrong VITE_API_BASE_URL, phone off the
+      // Mac's wifi, etc). Deliberately doesn't set ready: true — App.tsx's
+      // initError branch is what the user sees instead of the normal
+      // workspace, with a retry button that just calls init() again.
+      set({ initError: 'Nepavyko pasiekti serverio — patikrinkite, ar veikia server/ ir ar teisingas adresas.' });
     }
-    tables = [...tables].sort((a, b) => a.createdAt - b.createdAt);
-    const savedActiveId = localStorage.getItem(LAST_ACTIVE_KEY);
-    const activeTableId = tables.some((t) => t.id === savedActiveId) ? savedActiveId : null;
-    set({ tables, activeTableId, ready: true });
   },
 
   createTable: (name) => {

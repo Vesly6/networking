@@ -226,6 +226,43 @@ export async function sendSms(opts: {
   return callZadarma('/v1/sms/send/', params, 'POST');
 }
 
+/** POST /v1/pbx/webhooks/url/ — sets the one URL Zadarma calls back to for
+ * every enabled webhook event type (see setWebhookHooks below for which
+ * ones fire). A one-time (or "re-run after moving hosts") admin action,
+ * not something normal app usage ever needs to call — see the
+ * /api/zadarma/setup-sms-webhook route in index.ts for the only caller. */
+export async function setWebhookUrl(url: string): Promise<unknown> {
+  return callZadarma('/v1/pbx/webhooks/url/', { url }, 'POST');
+}
+
+/** POST /v1/pbx/webhooks/hooks/ — toggles *which* event types get sent to
+ * the URL set above. `sms` is what this app currently cares about
+ * (confirmed by Zadarma's own support as the correct way to receive
+ * incoming SMS — see CLAUDE.md's Zadarma section); the others are exposed
+ * too since they're real, documented params on the same endpoint, but
+ * nothing in this app currently sets them. Undefined fields are left
+ * untouched by Zadarma (only the fields actually included in the request
+ * get toggled), so this can be called with just `{ sms: true }` without
+ * silently turning any other hook off. Values must be the literal strings
+ * "true"/"false", per Zadarma's own docs — confirmed live: sending 1/0
+ * (this codebase's usual boolean-as-int convention for other Zadarma
+ * params) got rejected outright with a generic "Wrong parameters" error. */
+export async function setWebhookHooks(opts: {
+  sms?: boolean;
+  numberLookup?: boolean;
+  callTracking?: boolean;
+  speechRecognition?: boolean;
+}): Promise<unknown> {
+  const b = (v: boolean) => (v ? 'true' : 'false');
+  const params: Record<string, string | number> = {
+    ...(opts.sms !== undefined ? { sms: b(opts.sms) } : {}),
+    ...(opts.numberLookup !== undefined ? { number_lookup: b(opts.numberLookup) } : {}),
+    ...(opts.callTracking !== undefined ? { call_tracking: b(opts.callTracking) } : {}),
+    ...(opts.speechRecognition !== undefined ? { speech_recognition: b(opts.speechRecognition) } : {}),
+  };
+  return callZadarma('/v1/pbx/webhooks/hooks/', params, 'POST');
+}
+
 /** Temporary (72h-lifetime, per Zadarma's docs) key for the browser-side
  * WebRTC widget (zadarmaWidgetFn, loaded client-side from Zadarma's own
  * CDN — see app/index.html) — this is the one piece of this feature where

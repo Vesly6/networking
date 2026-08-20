@@ -42,6 +42,13 @@ export interface Row {
    * contact was since deleted) is handled gracefully wherever this is
    * read — just resolves to no name, never an error. */
   linkedContactId?: string;
+  /** Optional free-text note for this row's next-action date — "what to
+   * say/do on this call" (e.g. "ask about the budget approval"). Row-level,
+   * not column-keyed, same reasoning as linkedContactId above: there's only
+   * ever one next-action-date column per table, so nothing to disambiguate.
+   * Set via the date cell's 📝 button (DataCell.tsx); shown in the
+   * calendar/task-list views, never in the table itself. */
+  nextActionNote?: string;
   /** Row height in pixels; falls back to a default when unset. */
   height?: number;
   createdAt: number;

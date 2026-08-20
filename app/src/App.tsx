@@ -7,6 +7,7 @@ import { CalendarView } from './components/Calendar/CalendarView';
 import { WorkspaceView } from './components/Workspace/WorkspaceView';
 import { CallsView } from './components/Calls/CallsView';
 import { SearchView } from './components/Search/SearchView';
+import { LinkedInView } from './components/LinkedIn/LinkedInView';
 import { Toast } from './components/Toast';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { Softphone } from './components/Softphone';
@@ -17,7 +18,7 @@ import { getNextActionColumn } from './utils/row';
 import { isOverdue, isDueToday } from './utils/date';
 import './App.css';
 
-type Tab = 'table' | 'calendar' | 'calls' | 'search';
+type Tab = 'table' | 'calendar' | 'calls' | 'search' | 'linkedin';
 
 function App() {
   const token = useAuthStore((s) => s.token);
@@ -26,6 +27,7 @@ function App() {
   const dismissRecoveryNotice = useAuthStore((s) => s.dismissRecoveryNotice);
 
   const workspaceReady = useWorkspaceStore((s) => s.ready);
+  const workspaceInitError = useWorkspaceStore((s) => s.initError);
   const initWorkspace = useWorkspaceStore((s) => s.init);
   const tables = useWorkspaceStore((s) => s.tables);
   const activeTableId = useWorkspaceStore((s) => s.activeTableId);
@@ -113,6 +115,25 @@ function App() {
   // matching local-only relaxation for the backend side of the gate.
   if (!token && !import.meta.env.DEV) {
     return <LoginScreen />;
+  }
+
+  // Table/row data moved from client-only IndexedDB to a server-backed
+  // store (see CLAUDE.md's Persistence section) — that made server/
+  // load-bearing for the entire app, not just the Calls tab as before, so
+  // a server-down/unreachable scenario needs its own explicit, actionable
+  // error here rather than leaving the user on an infinite "Kraunama…"
+  // spinner with no explanation (which is what happened before this
+  // branch existed — initWorkspace() throwing left workspaceReady stuck
+  // at false forever with zero user-facing signal).
+  if (workspaceInitError) {
+    return (
+      <div className="app-loading app-loading-error">
+        <span>{workspaceInitError}</span>
+        <button type="button" onClick={() => void initWorkspace()}>
+          Bandyti dar kartą
+        </button>
+      </div>
+    );
   }
 
   if (!workspaceReady) {
@@ -205,6 +226,9 @@ function App() {
               <button type="button" className={tab === 'search' ? 'active' : ''} onClick={() => setTab('search')}>
                 Paieška
               </button>
+              <button type="button" className={tab === 'linkedin' ? 'active' : ''} onClick={() => setTab('linkedin')}>
+                LinkedIn
+              </button>
             </nav>
             <button type="button" className="logout-btn" onClick={logout}>
               Atsijungti
@@ -252,6 +276,12 @@ function App() {
                 active table — no stale-state risk to guard against. */}
             <div className={`tab-panel ${tab === 'search' ? 'tab-panel-active' : ''}`}>
               <SearchView />
+            </div>
+            {/* Same reasoning as Search above — account-level, not scoped to
+                the active table, so no tableReady gate or activeTableId
+                key. */}
+            <div className={`tab-panel ${tab === 'linkedin' ? 'tab-panel-active' : ''}`}>
+              <LinkedInView />
             </div>
             <div className={`tab-panel ${tab === 'table' ? 'tab-panel-active' : ''}`}>
               {tableReady ? (

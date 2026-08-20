@@ -2,3 +2,9 @@ node_modules
 .env
 dist
 *.log
+linkedin.sqlite
+linkedin.sqlite-*
+sms-inbox.sqlite
+sms-inbox.sqlite-*
+table-data.sqlite
+table-data.sqlite-*

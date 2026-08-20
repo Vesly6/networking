@@ -82,10 +82,21 @@ interface TableState {
   setRowHeight: (id: string, height: number) => void;
   /** null clears the link. See Row.linkedContactId in types.ts. */
   setLinkedContact: (rowId: string, contactId: string | null) => void;
+  /** null/empty clears the note. See Row.nextActionNote in types.ts. */
+  setNextActionNote: (rowId: string, note: string | null) => void;
   updateCell: (rowId: string, columnId: string, value: string) => boolean;
   updateCells: (updates: CellUpdate[]) => number;
   setCellColors: (updates: CellColorUpdate[]) => void;
   moveRows: (draggedIds: string[], targetRowId: string | null) => void;
+  /** Permanently reassigns every row's `order` to match `sortedIds` — used
+   * by TableView's one-click column-sort action to actually commit the new
+   * order into the data itself, rather than holding a separate "currently
+   * sorted by X" view state that stays active until manually cleared. On
+   * explicit request: sorting should do its one-time rearrangement job and
+   * then be done — not leave anything "on" for the user to notice and turn
+   * off later. Rows not present in `sortedIds` (shouldn't normally happen —
+   * TableView always passes every row's id) are left untouched. */
+  applySortOrder: (sortedIds: string[]) => void;
   importCsvRows: (headers: string[], dataRows: string[][], mapping: Record<string, ImportColumnMapping>) => ImportResult;
 }
 
@@ -438,6 +449,19 @@ export const useTableStore = create<TableState>((set, get) => {
       if (updatedRow) void saveRow(updatedRow);
     },
 
+    setNextActionNote: (rowId, note) => {
+      snapshot();
+      const trimmed = note?.trim() ?? '';
+      let updatedRow: Row | undefined;
+      const rows = get().rows.map((r) => {
+        if (r.id !== rowId) return r;
+        updatedRow = { ...r, nextActionNote: trimmed || undefined, updatedAt: Date.now() };
+        return updatedRow;
+      });
+      set({ rows });
+      if (updatedRow) void saveRow(updatedRow);
+    },
+
     updateCell: (rowId, columnId, value) => {
       snapshot();
       const { value: clamped, truncated } = clampToLimit(value);
@@ -528,6 +552,33 @@ export const useTableStore = create<TableState>((set, get) => {
 
       const now = Date.now();
       const updated = reordered.map((r, i) => ({ ...r, order: i, updatedAt: now }));
+      set({ rows: updated });
+      void saveRows(updated);
+    },
+
+    applySortOrder: (sortedIds) => {
+      snapshot();
+      const now = Date.now();
+      const byId = new Map(get().rows.map((r) => [r.id, r]));
+      // Rebuild the array itself in the new sequence (not just each row's
+      // own `order` field) — the rest of this store's own convention
+      // (moveRows, above) is that the in-memory `rows` array's own
+      // iteration order IS the visual order; only touching the field
+      // without touching the array would leave the table showing the old
+      // order until something else happened to re-trigger a re-render off
+      // real array movement.
+      const ordered: Row[] = [];
+      for (const id of sortedIds) {
+        const r = byId.get(id);
+        if (r) {
+          ordered.push(r);
+          byId.delete(id);
+        }
+      }
+      // Any row not present in sortedIds (shouldn't normally happen) is
+      // appended at the end rather than dropped.
+      for (const r of byId.values()) ordered.push(r);
+      const updated = ordered.map((r, i) => ({ ...r, order: i, updatedAt: now }));
       set({ rows: updated });
       void saveRows(updated);
     },

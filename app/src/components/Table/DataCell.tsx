@@ -44,6 +44,14 @@ interface DataCellProps {
    * if any — see getColumnByType), for the next-action-date cell's "who to
    * call" picker. Only read by the `date` branch when `column.isNextActionDate`. */
   contactsRaw?: string;
+  /** Which of THIS cell's own mini-popovers (📝 note / 👤 contact-pick — not
+   * the 🕐 time input, which is a plain inline toggle, not a floating
+   * popover) is open, lifted up to TableView so "click anywhere else
+   * closes it" works via the same closePopovers mechanism every other
+   * popover in this app already uses. null/undefined means neither is open
+   * for this specific cell. */
+  activeDatePopover?: 'note' | 'contact' | null;
+  onToggleDatePopover?: (kind: 'note' | 'contact', anchor: HTMLElement) => void;
 }
 
 function DataCellImpl({
@@ -57,20 +65,64 @@ function DataCellImpl({
   onOpenEditor,
   highlightQuery,
   contactsRaw,
+  activeDatePopover,
+  onToggleDatePopover,
 }: DataCellProps) {
   const updateCell = useTableStore((s) => s.updateCell);
   const setLinkedContact = useTableStore((s) => s.setLinkedContact);
+  const setNextActionNote = useTableStore((s) => s.setNextActionNote);
   const showToast = useToastStore((s) => s.show);
   const storedValue = row.cells[column.id] ?? '';
   const color = row.colors?.[column.id];
   // Declared unconditionally (not just inside the branches that use them)
   // so the hook order stays stable even if this column's type changes.
   const [timeExpanded, setTimeExpanded] = useState(false);
-  const [contactPickerAnchor, setContactPickerAnchor] = useState<HTMLElement | null>(null);
+  const isContactPickerOpen = activeDatePopover === 'contact';
+  const isNoteOpen = activeDatePopover === 'note';
+  const [noteDraft, setNoteDraft] = useState(row.nextActionNote ?? '');
+  // Same Escape-vs-blur race documented at length elsewhere in this
+  // codebase for note/text editing: Enter/Escape both close the popover
+  // synchronously, unmounting the textarea, and whether the browser's
+  // native blur fires before or after that unmount isn't guaranteed —
+  // Escape's own onKeyDown branch sets this so the (possibly still-firing)
+  // onBlur discards the edit instead of re-saving the draft it just reset.
+  const skipNoteCommitRef = useRef(false);
+  // The note popover can now also close because a *different* cell/button
+  // was clicked (activeDatePopover flipping away from 'note', lifted up to
+  // TableView — see the prop doc comment above) — not just this cell's own
+  // Enter/Escape/blur. commitNoteRef always holds the latest commit
+  // closure; the effect below fires it from cleanup whenever isNoteOpen
+  // flips to false, for any reason, mirroring the exact pattern already
+  // established for text/phone/company autosave elsewhere in this file.
+  const commitNoteRef = useRef<() => void>(() => {});
+  const commitNote = () => {
+    if (skipNoteCommitRef.current) {
+      skipNoteCommitRef.current = false;
+      return;
+    }
+    setNextActionNote(row.id, noteDraft);
+  };
+  commitNoteRef.current = commitNote;
+  useEffect(() => {
+    if (!isNoteOpen) return;
+    return () => commitNoteRef.current();
+  }, [isNoteOpen]);
+  // Popover needs a live anchor *element*, but the lifted activeDatePopover
+  // prop only carries which kind is open (not the DOM node — TableView has
+  // no reason to hold onto raw HTMLElements in its own state). These two
+  // buttons are always the same DOM node across this cell's re-renders (as
+  // long as the row/column identity doesn't change), so a plain ref
+  // populated on every render is simpler and sufficient — no need to
+  // capture/store anything at click time.
+  const noteBtnRef = useRef<HTMLButtonElement | null>(null);
+  const contactBtnRef = useRef<HTMLButtonElement | null>(null);
   const [draft, setDraft] = useState(storedValue);
   useEffect(() => {
     setDraft(storedValue);
   }, [storedValue]);
+  useEffect(() => {
+    setNoteDraft(row.nextActionNote ?? '');
+  }, [row.nextActionNote]);
 
   // Autosave for text | phone | company. A plain onBlur isn't reliable on
   // its own: single-clicking a *different* cell flips this cell's `editable`
@@ -146,7 +198,15 @@ function DataCellImpl({
   if (column.type === 'date') {
     const datePart = getDatePart(storedValue);
     const timePart = getTimePart(storedValue);
-    const showTimeInput = timeExpanded || !!timePart;
+    // Collapsed by default even once a time is set — deliberately NOT
+    // `timeExpanded || !!timePart` (the earlier behavior): a set time used
+    // to permanently occupy a second, always-visible input in the table
+    // cell, which was a real, reported complaint ("не хочу чтобы
+    // отображалась в табеле — оно видно только в календаре"). The time is
+    // still fully visible in the calendar/task-list views (getTimePart());
+    // in the table, the 🕐 button below is the only entry point, toggled
+    // open/closed explicitly rather than tied to whether a time exists.
+    const showTimeInput = timeExpanded;
     return (
       <td
         className={cellClassName}
@@ -162,7 +222,20 @@ function DataCellImpl({
             onFocus={onSelect}
             onChange={(e) => updateCell(row.id, column.id, combineDateTime(e.target.value, timePart))}
           />
-          {showTimeInput ? (
+          {datePart && (
+            <button
+              type="button"
+              className={`date-cell-add-time ${timePart ? 'date-cell-add-time-set' : ''}`}
+              title={timePart ? `Laikas: ${timePart} (spustelėkite peržiūrėti/keisti)` : 'Nurodyti konkretų laiką'}
+              onClick={(e) => {
+                e.stopPropagation();
+                setTimeExpanded((v) => !v);
+              }}
+            >
+              🕐
+            </button>
+          )}
+          {showTimeInput && (
             <input
               type="time"
               className="date-cell-time"
@@ -171,20 +244,33 @@ function DataCellImpl({
               onFocus={onSelect}
               onChange={(e) => updateCell(row.id, column.id, combineDateTime(datePart, e.target.value))}
             />
-          ) : (
-            datePart && (
-              <button
-                type="button"
-                className="date-cell-add-time"
-                title="Nurodyti konkretų laiką"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setTimeExpanded(true);
-                }}
-              >
-                🕐
-              </button>
-            )
+          )}
+          {column.isNextActionDate && datePart && (
+            <button
+              ref={noteBtnRef}
+              type="button"
+              className={`date-cell-note-btn ${row.nextActionNote ? 'date-cell-note-set' : ''}`}
+              title={row.nextActionNote ? `Užrašas: ${row.nextActionNote}` : 'Pridėti užrašą apie šį skambutį'}
+              // TableView's handleCellMouseDown clears dateCellPopover on
+              // *every* cell mousedown (mirroring how it already clears
+              // expandedCell) — necessary so clicking away actually closes
+              // this popover (see the doc comment there), but mousedown
+              // fires and fully re-renders *before* this button's own
+              // onClick runs, so without stopping it here, clicking this
+              // exact button to toggle its own popover *closed* would see
+              // dateCellPopover already cleared by its own mousedown and
+              // re-open instead. Stopping propagation here only skips the
+              // generic mousedown-triggered clear for this one button — the
+              // click below still runs and decides open/closed correctly
+              // from whatever state existed before this press.
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleDatePopover?.('note', e.currentTarget);
+              }}
+            >
+              📝
+            </button>
           )}
           {column.isNextActionDate &&
             datePart &&
@@ -198,6 +284,7 @@ function DataCellImpl({
               const linked = contacts.find((c) => c.id === row.linkedContactId);
               return (
                 <button
+                  ref={contactBtnRef}
                   type="button"
                   className={`date-cell-contact-btn ${linked ? 'date-cell-contact-linked' : ''}`}
                   title={
@@ -205,10 +292,12 @@ function DataCellImpl({
                       ? `Skambinama: ${contactTextToFields(linked.text).firstName || linked.text}`
                       : 'Pasirinkite, kam skambinate'
                   }
+                  // See the 📝 button's identical comment above — same
+                  // mousedown-vs-click-toggle race, same fix.
+                  onMouseDown={(e) => e.stopPropagation()}
                   onClick={(e) => {
                     e.stopPropagation();
-                    const anchor = e.currentTarget;
-                    setContactPickerAnchor((prev) => (prev ? null : anchor));
+                    onToggleDatePopover?.('contact', e.currentTarget);
                   }}
                 >
                   👤
@@ -219,20 +308,55 @@ function DataCellImpl({
             <button
               type="button"
               className="date-cell-clear-all"
-              title="Išvalyti datą, laiką ir susietą kontaktą"
+              title="Išvalyti datą, laiką, susietą kontaktą ir užrašą"
               onClick={(e) => {
                 e.stopPropagation();
                 updateCell(row.id, column.id, '');
                 setTimeExpanded(false);
                 if (column.isNextActionDate && row.linkedContactId) setLinkedContact(row.id, null);
+                if (column.isNextActionDate && row.nextActionNote) setNextActionNote(row.id, null);
               }}
             >
               ×
             </button>
           )}
         </div>
-        {contactPickerAnchor && (
-          <Popover anchor={contactPickerAnchor} width={220}>
+        {isNoteOpen && noteBtnRef.current && (
+          <Popover anchor={noteBtnRef.current} width={260}>
+            <div className="popover-field">
+              <span>Užrašas apie šį skambutį</span>
+              <textarea
+                autoFocus
+                className="date-cell-note-textarea"
+                rows={3}
+                placeholder="Pvz.: paklausti apie biudžeto patvirtinimą"
+                value={noteDraft}
+                onChange={(e) => setNoteDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    setNextActionNote(row.id, noteDraft);
+                    onToggleDatePopover?.('note', e.currentTarget);
+                  }
+                  if (e.key === 'Escape') {
+                    skipNoteCommitRef.current = true;
+                    setNoteDraft(row.nextActionNote ?? '');
+                    onToggleDatePopover?.('note', e.currentTarget);
+                  }
+                }}
+                onBlur={() => {
+                  if (skipNoteCommitRef.current) {
+                    skipNoteCommitRef.current = false;
+                    return;
+                  }
+                  setNextActionNote(row.id, noteDraft);
+                }}
+              />
+            </div>
+          </Popover>
+        )}
+        {isContactPickerOpen && contactBtnRef.current && (
+          <Popover anchor={contactBtnRef.current} width={220}>
             <div className="popover-field">
               <span>Kam skambinate?</span>
             </div>
@@ -241,9 +365,9 @@ function DataCellImpl({
                 key={c.id}
                 type="button"
                 className={`date-cell-contact-option ${row.linkedContactId === c.id ? 'date-cell-contact-option-active' : ''}`}
-                onClick={() => {
+                onClick={(e) => {
                   setLinkedContact(row.id, row.linkedContactId === c.id ? null : c.id);
-                  setContactPickerAnchor(null);
+                  onToggleDatePopover?.('contact', e.currentTarget);
                 }}
               >
                 {c.text}
@@ -253,9 +377,9 @@ function DataCellImpl({
               <button
                 type="button"
                 className="date-cell-contact-clear"
-                onClick={() => {
+                onClick={(e) => {
                   setLinkedContact(row.id, null);
-                  setContactPickerAnchor(null);
+                  onToggleDatePopover?.('contact', e.currentTarget);
                 }}
               >
                 Išvalyti
@@ -413,14 +537,19 @@ function DataCellImpl({
 // compared: they're fresh closures every render (they close over this
 // cell's row/col index), but behave identically to the previous render's
 // closures whenever the compared props are unchanged, so skipping
-// re-render on their identity alone is safe. highlightQuery and
-// contactsRaw ARE compared — unlike the callbacks, their values actually
-// change what gets rendered, and neither is reliably implied by `row`
-// alone: contactsRaw is derived from a *different* column (the row's
+// re-render on their identity alone is safe. highlightQuery, contactsRaw,
+// and activeDatePopover ARE compared — unlike the callbacks, their values
+// actually change what gets rendered, and none is reliably implied by
+// `row` alone: contactsRaw is derived from a *different* column (the row's
 // Contacts cell, for the next-action-date picker) than the `column` prop
 // this particular cell instance has, so adding a Contacts column after a
 // date was already set wouldn't otherwise be picked up until some other
-// prop changed too.
+// prop changed too. activeDatePopover is TableView's own state, entirely
+// independent of both row and column — omitting it here was a real,
+// reproduced bug: clicking 📝/👤 correctly updated TableView's state and
+// called onToggleDatePopover, but this comparator had no idea that
+// mattered, so React skipped re-rendering the cell and the popover never
+// actually appeared.
 export const DataCell = memo(DataCellImpl, (prev, next) => {
   return (
     prev.row === next.row &&
@@ -429,6 +558,7 @@ export const DataCell = memo(DataCellImpl, (prev, next) => {
     prev.editable === next.editable &&
     prev.inRange === next.inRange &&
     prev.highlightQuery === next.highlightQuery &&
+    prev.activeDatePopover === next.activeDatePopover &&
     prev.contactsRaw === next.contactsRaw
   );
 });

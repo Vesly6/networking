@@ -16,12 +16,16 @@ export interface SocialLookupResult {
   facebook: string[];
 }
 
-/** Uses OpenAI's real web-search-grounded lookup (server/src/openai.ts's
- * findSocialProfiles) to find candidate Instagram/Facebook profile URLs
- * for a person — up to 3 per platform, never auto-saved. A real,
- * per-call cost (a live web search), so this should only ever be called
- * from an explicit user click (the 🔍 button on a contact entry), never
- * automatically. */
+/** Real Google search results (server/src/serper.ts's searchSocialProfiles,
+ * via serper.dev) for candidate Instagram/Facebook profile URLs for a
+ * person — up to 5 per platform, never auto-saved; the user opens and
+ * visually verifies each one before confirming (SocialLookupModal). Not
+ * AI-guessed — see serper.ts's own doc comment for why that approach was
+ * replaced. `company` is still accepted here for the modal's own display
+ * text but is no longer sent on to narrow the search itself. A real,
+ * per-call cost (billed search credits), so this should only ever be
+ * called from an explicit user click (the 🔍 button on a contact entry),
+ * never automatically. */
 export function findSocialProfiles(firstName: string, lastName: string, company?: string): Promise<SocialLookupResult> {
   return localApiRequest('/api/contacts/social-lookup', {
     method: 'POST',

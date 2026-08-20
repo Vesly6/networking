@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { CompanyFilterForm } from '../Search/CompanyFilterForm';
 import { PeopleFilterForm } from '../Search/PeopleFilterForm';
@@ -13,7 +13,7 @@ import {
   type PeopleSearchParams,
 } from '../../utils/apolloApi';
 import { cleanCompanyNameForSearch } from '../../utils/companyName';
-import { joinContactFields } from '../../utils/contacts';
+import { joinContactFields, parseContacts, contactTextToFields } from '../../utils/contacts';
 import { useToastStore } from '../../store/useToastStore';
 
 interface ApolloContactSearchModalProps {
@@ -21,9 +21,33 @@ interface ApolloContactSearchModalProps {
    * query (cleaned, still fully editable) so the common case is still
    * "open, confirm, done," not "open, retype the company from scratch." */
   initialCompanyName: string;
+  /** This row's raw Contacts-cell value (same string CellHoverEditor's own
+   * `value` prop already holds in contact mode) — used only to flag people
+   * search results that have already been added to this row (see
+   * `alreadyAddedKeys` below), never written to. Reported bug: reopening
+   * this modal after adding someone re-ran the same people search and
+   * showed that exact person again with no indication they were already a
+   * contact — Apollo's own results have no idea what this app already
+   * saved, so the cross-reference has to happen here. */
+  existingContactsRaw: string;
   onAddContact: (text: string, id?: string) => void;
   onUpdateContact: (id: string, text: string) => void;
   onClose: () => void;
+}
+
+// Best-effort match key: normalized first name + last-name initial. Apollo's
+// unenriched search results only ever expose an obfuscated last name (e.g.
+// "S." for "Smith"), so a full last-name comparison against an already-added
+// contact's real, enriched name would almost never line up — the initial is
+// the most either side can reliably agree on. When an existing contact has
+// no parseable last name at all, first-name-only is used as a looser
+// fallback rather than never matching.
+function normalizeNamePart(v: string): string {
+  return v.trim().toLowerCase();
+}
+function lastInitialOf(v: string | null | undefined): string {
+  const s = typeof v === 'string' ? v.trim() : '';
+  return s ? s.replace(/\./g, '').charAt(0).toLowerCase() : '';
 }
 
 // Fallback for the rare Apollo company record with a website_url but no
@@ -59,6 +83,7 @@ const PHONE_POLL_MAX_MS = 5 * 60 * 1000;
  * full filter set, not just a name. */
 export function ApolloContactSearchModal({
   initialCompanyName,
+  existingContactsRaw,
   onAddContact,
   onUpdateContact,
   onClose,
@@ -92,8 +117,9 @@ export function ApolloContactSearchModal({
   const [companySearched, setCompanySearched] = useState(false);
 
   const [selectedCompany, setSelectedCompany] = useState<ApolloCompany | null>(null);
-  const [peopleParams, setPeopleParams] = useState<PeopleSearchParams>({ per_page: 25 });
+  const [peopleParams, setPeopleParams] = useState<PeopleSearchParams>({ per_page: 100 });
   const [peopleResults, setPeopleResults] = useState<ApolloSearchPerson[]>([]);
+  const [peopleTotalEntries, setPeopleTotalEntries] = useState(0);
   const [peopleLoading, setPeopleLoading] = useState(false);
   const [peopleError, setPeopleError] = useState('');
   const [peopleSearched, setPeopleSearched] = useState(false);
@@ -156,8 +182,8 @@ export function ApolloContactSearchModal({
     // organization_ids alone 0, both together also 0).
     const domain = company.primary_domain || extractHostname(company.website_url);
     const params: PeopleSearchParams = domain
-      ? { per_page: 25, q_organization_domains_list: [domain] }
-      : { per_page: 25, organization_ids: [company.id] };
+      ? { per_page: 100, q_organization_domains_list: [domain] }
+      : { per_page: 100, organization_ids: [company.id] };
     setPeopleParams(params);
     await runPeopleSearchWith(params);
   };
@@ -168,6 +194,7 @@ export function ApolloContactSearchModal({
     try {
       const res = await searchPeople(params);
       setPeopleResults(res.people);
+      setPeopleTotalEntries(res.total_entries);
       setPeopleSearched(true);
       if (res.people.length === 0) setPeopleError('Šioje įmonėje žmonių nerasta');
     } catch (err) {
@@ -176,7 +203,53 @@ export function ApolloContactSearchModal({
       setPeopleLoading(false);
     }
   };
-  const runPeopleSearch = () => void runPeopleSearchWith(peopleParams);
+  // A filter-form resubmit is a *new* search, not "keep paging" — always
+  // starts back at page 1, even if the previous search had paged further
+  // in. goToPage (below) is the only thing that ever advances past page 1.
+  const runPeopleSearch = () => {
+    const next = { ...peopleParams, page: 1 };
+    setPeopleParams(next);
+    void runPeopleSearchWith(next);
+  };
+  const peoplePerPage = peopleParams.per_page ?? 100;
+  const peopleCurrentPage = peopleParams.page ?? 1;
+  const peopleTotalPages = peoplePerPage > 0 ? Math.max(1, Math.ceil(peopleTotalEntries / peoplePerPage)) : 1;
+  const goToPeoplePage = (page: number) => {
+    const next = { ...peopleParams, page };
+    setPeopleParams(next);
+    void runPeopleSearchWith(next);
+  };
+
+  // Best-effort "already added to this row" lookup — see the doc comment on
+  // existingContactsRaw above. pairKeys covers the common case (an existing
+  // contact whose name split into a first + last part); firstOnlyKeys is the
+  // fallback for a legacy/freeform entry that didn't split cleanly (better
+  // to over-flag a same-first-name coincidence than to silently miss an
+  // actual duplicate).
+  const { pairKeys, firstOnlyKeys } = useMemo(() => {
+    const pairs = new Set<string>();
+    const firstOnly = new Set<string>();
+    for (const entry of parseContacts(existingContactsRaw)) {
+      const fields = contactTextToFields(entry.text);
+      const first = normalizeNamePart(fields.firstName);
+      if (!first) continue;
+      const lastInitial = lastInitialOf(fields.lastName);
+      if (lastInitial) {
+        pairs.add(`${first}|${lastInitial}`);
+      } else {
+        firstOnly.add(first);
+      }
+    }
+    return { pairKeys: pairs, firstOnlyKeys: firstOnly };
+  }, [existingContactsRaw]);
+
+  const isAlreadyAdded = (person: ApolloSearchPerson): boolean => {
+    const first = normalizeNamePart(person.first_name ?? '');
+    if (!first) return false;
+    const lastInitial = lastInitialOf(person.last_name_obfuscated);
+    if (lastInitial && pairKeys.has(`${first}|${lastInitial}`)) return true;
+    return firstOnlyKeys.has(first);
+  };
 
   // Revealing a phone number is Apollo's separate, pricier, start-then-poll
   // lookup (up to +8 credits on top of email's 1) that "can take several
@@ -357,23 +430,54 @@ export function ApolloContactSearchModal({
                   </span>
                 </div>
               )}
-              {peopleResults.map((p) => (
-                <div key={p.id} className="cell-hover-apollo-result">
-                  <span className="cell-hover-apollo-result-name">
-                    {[p.first_name, p.last_name_obfuscated].filter(Boolean).join(' ') || 'Nežinoma'}
-                    {p.title && <span className="search-result-detail-muted"> — {p.title}</span>}
+              {peopleResults.map((p) => {
+                const added = isAlreadyAdded(p);
+                return (
+                  <div key={p.id} className={`cell-hover-apollo-result${added ? ' cell-hover-apollo-result-existing' : ''}`}>
+                    <span className="cell-hover-apollo-result-name">
+                      {[p.first_name, p.last_name_obfuscated].filter(Boolean).join(' ') || 'Nežinoma'}
+                      {p.title && <span className="search-result-detail-muted"> — {p.title}</span>}
+                      {added && <span className="cell-hover-apollo-result-added-badge">✓ Jau pridėta</span>}
+                    </span>
+                    <button
+                      type="button"
+                      className="cell-hover-apollo-result-add"
+                      disabled={addingPersonIds.has(p.id)}
+                      title={
+                        added
+                          ? 'Panašus kontaktas jau yra šioje eilutėje — vis tiek galima pridėti dar kartą'
+                          : 'Prideda kontaktą iškart; telefono numerį (jei Apollo jį randa) įrašo pačiam po kelių minučių'
+                      }
+                      onClick={() => void handleAddPerson(p)}
+                    >
+                      {addingPersonIds.has(p.id) ? '…' : added ? '+ Pridėti vėl' : '+ Pridėti'}
+                    </button>
+                  </div>
+                );
+              })}
+              {peopleSearched && peopleTotalEntries > 0 && (
+                <div className="apollo-search-modal-pagination">
+                  <button
+                    type="button"
+                    className="apollo-search-modal-back"
+                    disabled={peopleLoading || peopleCurrentPage <= 1}
+                    onClick={() => goToPeoplePage(peopleCurrentPage - 1)}
+                  >
+                    ← Ankstesnis
+                  </button>
+                  <span className="search-result-detail-muted">
+                    {peopleCurrentPage} / {peopleTotalPages} psl. ({peopleTotalEntries} viso)
                   </span>
                   <button
                     type="button"
-                    className="cell-hover-apollo-result-add"
-                    disabled={addingPersonIds.has(p.id)}
-                    title="Prideda kontaktą iškart; telefono numerį (jei Apollo jį randa) įrašo pačiam po kelių minučių"
-                    onClick={() => void handleAddPerson(p)}
+                    className="apollo-search-modal-back"
+                    disabled={peopleLoading || peopleCurrentPage >= peopleTotalPages}
+                    onClick={() => goToPeoplePage(peopleCurrentPage + 1)}
                   >
-                    {addingPersonIds.has(p.id) ? '…' : '+ Pridėti'}
+                    Kitas →
                   </button>
                 </div>
-              ))}
+              )}
             </div>
           </div>
         )}

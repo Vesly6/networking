@@ -60,6 +60,26 @@ export function Popover({ anchor, width = 260, children }: PopoverProps) {
         visibility: pos ? 'visible' : 'hidden',
       }}
       onClick={(e) => e.stopPropagation()}
+      // Stopping only onClick used to be enough, because every *other*
+      // popover in this app is only ever closed by a click-based mechanism
+      // (TableView's document-level closePopovers listener). DataCell's own
+      // date-cell mini-popovers (📝/👤) broke that assumption: they're
+      // closed on *mousedown* too (handleCellMouseDown clears
+      // dateCellPopover on every cell mousedown, needed so clicking a
+      // different cell actually closes them). React's synthetic events
+      // bubble through the *logical* component tree, not the portal's real
+      // DOM position — and this popover's content is logically nested
+      // inside whichever DataCell rendered it, physically portaled or not.
+      // So a mousedown on, say, a contact-picker option synthetically
+      // bubbled up to that same cell's own <td onMouseDown={onSelect}>,
+      // which immediately closed this popover (removing the very button
+      // being pressed) before the browser's native 'click' had anything
+      // left to dispatch to — a real, reproduced bug: mousedown fired,
+      // click never did, so setLinkedContact() never ran and picking a
+      // contact silently did nothing. Stopping mousedown here too closes
+      // that gap for every popover, not just the two that happen to
+      // trigger it today.
+      onMouseDown={(e) => e.stopPropagation()}
     >
       {children}
     </div>,
