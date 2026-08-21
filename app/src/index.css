@@ -15,6 +15,13 @@
   --today-bg: #eaf2ff;
   --overdue-bg: #fdecec;
   --shadow: 0 8px 24px rgba(20, 24, 32, 0.14);
+  /* Real value only on a phone with a gesture-navigation bar or notch
+     (and only once index.html's viewport-fit=cover is set — otherwise
+     this is always 0px regardless of the device). Read from JS
+     (CellHoverEditor.tsx's place()) to keep popup buttons clear of that
+     system-reserved area, where a tap gets intercepted by the OS/browser
+     chrome before it ever reaches the page. */
+  --safe-area-inset-bottom: env(safe-area-inset-bottom, 0px);
 
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   line-height: 1.45;
@@ -26,6 +33,20 @@
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+
+  /* iOS Safari auto-boosts font size on a block of text it judges "too
+     small to read", a heuristic that tends to trigger for text sitting
+     inside a wider-than-viewport container — which .calls-table now is
+     on mobile (min-width: 900px, scrolls horizontally). Real, reported
+     complaint: clicking "🤖 Santrauka" made "everything" jump to a huge
+     font — not actually caused by the click itself, but by the summary
+     block (a new, previously-unrendered text block) appearing for the
+     first time inside that wide table and tripping the heuristic. This
+     is the standard, global fix — it only disables the automatic
+     boosting, every font-size in this app still renders at its own
+     specified size exactly as before. */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
 * {
@@ -37,6 +58,21 @@ body,
 #root {
   height: 100%;
   margin: 0;
+}
+
+/* Safety net for phone-width screens: no width constraint existed here
+   before, so any descendant row that didn't wrap (real, reported case:
+   the header/toolbar before their own mobile fixes in App.css) grew the
+   whole page wider than the viewport instead of just overflowing its own
+   box — the page visibly shifted sideways rather than staying put with a
+   scrollbar. Scoped to mobile only; a genuinely wide table still scrolls
+   normally within its own .table-scroll container on desktop and mobile
+   alike, this only stops the *page itself* from doing it. */
+@media (max-width: 640px) {
+  html,
+  body {
+    overflow-x: hidden;
+  }
 }
 
 body {

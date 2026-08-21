@@ -1,3 +1,5 @@
+import { randomUUID } from './uuid';
+
 export interface ContactEntry {
   id: string;
   text: string;
@@ -34,7 +36,7 @@ export function parseContacts(raw: string): ContactEntry[] {
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed) && parsed.every((e) => e && typeof e === 'object')) {
       return parsed.map((e) => ({
-        id: typeof e.id === 'string' ? e.id : crypto.randomUUID(),
+        id: typeof e.id === 'string' ? e.id : randomUUID(),
         text: typeof e.text === 'string' ? e.text : formatLegacyEntryText(e),
         socialLookup: e.socialLookup && typeof e.socialLookup === 'object' ? e.socialLookup : undefined,
       }));
@@ -61,7 +63,7 @@ export function serializeContacts(entries: ContactEntry[]): string {
  * new entry's id *before* this returns, so a slow background phone-number
  * lookup can later call updateContact() on the exact same entry instead of
  * appending a duplicate once the number arrives. */
-export function addContact(raw: string, text: string, id: string = crypto.randomUUID()): string {
+export function addContact(raw: string, text: string, id: string = randomUUID()): string {
   const trimmed = text.trim();
   if (!trimmed) return raw;
   const existing = parseContacts(raw);

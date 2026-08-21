@@ -4,7 +4,15 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/png" href="/favicon.png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- viewport-fit=cover is required for CSS env(safe-area-inset-*) to
+         report real, non-zero values on phones with a gesture-navigation
+         bar or notch — without it those env() values are always 0px,
+         even on a device that actually has one. Added alongside
+         CellHoverEditor.tsx's own place() using this, so a popup's
+         buttons don't end up rendered inside that system gesture area,
+         where taps get intercepted by the OS/browser chrome instead of
+         ever reaching the page. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>MyDesk</title>
   </head>
   <body>

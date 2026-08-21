@@ -5,6 +5,7 @@ import { confirmDialog } from '../../store/useConfirmStore';
 import { getAllSmsLog, saveSmsLogEntry } from '../../db/db';
 import { phoneMatchKey } from '../../utils/phoneMatch';
 import { formatHistoryTimestamp } from '../../utils/date';
+import { randomUUID } from '../../utils/uuid';
 
 const UNKNOWN_KEY = '__unknown__';
 
@@ -74,7 +75,7 @@ function SmsComposeForm({
     if (!text || !target) return;
     if (!(await confirmDialog(`Siųsti SMS ${target}?\n\n${text}`))) return;
     setSending(true);
-    const entry: SmsLogRecord = { id: crypto.randomUUID(), phone: target, message: text, sentAt: Date.now(), success: false };
+    const entry: SmsLogRecord = { id: randomUUID(), phone: target, message: text, sentAt: Date.now(), success: false };
     try {
       const result = await sendSms(target, text);
       entry.success = true;

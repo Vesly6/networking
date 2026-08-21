@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useTableStore } from '../../store/useTableStore';
 import { getLinkedContactName, getNextActionColumn, getNextActionPhone, getPrimaryLabel } from '../../utils/row';
 import { formatDisplayDate, getTimePart, isDueToday, isOverdue } from '../../utils/date';
@@ -13,6 +13,23 @@ export function TaskListView({ onJumpToRow }: TaskListViewProps) {
   const rows = useTableStore((s) => s.rows);
 
   const dateColumn = getNextActionColumn(columns);
+
+  // Mobile only (see .task-row's collapsed state in App.css) — on a phone
+  // the label/contact/note/date/time/button all competing for one row
+  // read as "all squished together, can't tell what's happening" (real,
+  // reported complaint). Below that breakpoint only the date/time and the
+  // open-in-table button stay visible by default; this toggles the rest
+  // per row. A Set (not a single id) since there's no reason opening one
+  // row's details should force-close another's.
+  const [expandedRowIds, setExpandedRowIds] = useState<Set<string>>(new Set());
+  const toggleExpanded = (rowId: string) => {
+    setExpandedRowIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(rowId)) next.delete(rowId);
+      else next.add(rowId);
+      return next;
+    });
+  };
 
   const groups = useMemo(() => {
     if (!dateColumn) return null;
@@ -48,8 +65,9 @@ export function TaskListView({ onJumpToRow }: TaskListViewProps) {
     const contactName = getLinkedContactName(row, columns);
     const phone = getNextActionPhone(row, columns);
     const whoLabel = contactName && phone ? `${contactName} · ${phone}` : contactName || phone;
+    const expanded = expandedRowIds.has(row.id);
     return (
-      <li key={row.id} className="task-row">
+      <li key={row.id} className={`task-row ${expanded ? 'task-row-expanded' : ''}`}>
         <span className="task-row-label">
           {getPrimaryLabel(row, columns)}
           {whoLabel && <span className="task-row-contact"> | {whoLabel}</span>}
@@ -61,6 +79,14 @@ export function TaskListView({ onJumpToRow }: TaskListViewProps) {
         )}
         <span className="task-row-date">{formatDisplayDate(dateValue)}</span>
         {time && <span className="task-row-time">{time}</span>}
+        <button
+          type="button"
+          className="task-row-expand-toggle"
+          title={expanded ? 'Slėpti detales' : 'Rodyti detales'}
+          onClick={() => toggleExpanded(row.id)}
+        >
+          ⋯
+        </button>
         <button type="button" className="task-open" onClick={() => onJumpToRow(row.id)}>
           Atverti lentelėje →
         </button>

@@ -45,6 +45,13 @@ function App() {
   const [focusContact, setFocusContact] = useState<{ rowId: string; columnId: string; contactId: string } | null>(null);
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
+  // Mobile only (see .app-tabs's collapsed state in App.css) — the tab
+  // list + logout button used to just overflow the header sideways on a
+  // phone-width screen (5 tabs + brand + title + logout all in one
+  // unwrapping flex row). Below the mobile breakpoint they move into a
+  // dropdown behind a ☰ toggle instead; above it this state is simply
+  // never read (the CSS shows .app-tabs unconditionally on desktop).
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   // Guards against React StrictMode's dev-only mount→cleanup→mount
   // double-invoke — without it, two overlapping initWorkspace() calls
@@ -58,12 +65,26 @@ function App() {
   // double-fire (hasAutoLoadedRef) — a ref survives the simulated
   // unmount, so it only suppresses the fake double-call, not a genuine
   // remount later.
-  const hasInitedWorkspaceRef = useRef(false);
+  //
+  // Keyed on `token`, not just "ran once ever" — a real, live-reproduced
+  // bug found once the login gate started actually being enforced
+  // locally too (see useWorkspaceStore's initError work): this effect's
+  // hooks all run on the very first render, before the `if (!token)
+  // return <LoginScreen />` branch below even exists yet — so the very
+  // first initWorkspace() call always fired pre-login, with no token,
+  // got a 401, and (thanks to the initError handling) surfaced "Nepavyko
+  // pasiekti serverio" instead of hanging — but a plain "ran once" guard
+  // then never retried after a *successful* login, leaving the user
+  // stuck on that error screen with no path forward but a manual retry
+  // click. Tracking the token value each init actually ran for — and
+  // re-running when it changes — fixes this while still collapsing
+  // StrictMode's duplicate call at the *same* token value.
+  const initedForTokenRef = useRef<string | null | undefined>(undefined);
   useEffect(() => {
-    if (hasInitedWorkspaceRef.current) return;
-    hasInitedWorkspaceRef.current = true;
+    if (initedForTokenRef.current === token) return;
+    initedForTokenRef.current = token;
     void initWorkspace();
-  }, [initWorkspace]);
+  }, [token, initWorkspace]);
 
   // Only the id drives loading — the table's name/columns are always fetched
   // fresh from IndexedDB inside loadTable(), never trusted from this cached
@@ -107,13 +128,19 @@ function App() {
   // Gated before workspace loading even starts — nothing in this app is
   // meant to be reachable without logging in first, and checking here
   // (rather than after workspaceReady) avoids a flash of "Loading…" before
-  // the login form appears on a fresh visit. import.meta.env.DEV is
-  // statically false in any production build (vite build), so this can't
-  // be flipped by a Render env var or anything else at the deployed
-  // app.serteo.lt — the skip only exists in the actual `vite dev` process.
-  // requireAuth's own AUTH_DISABLED bypass (server/src/auth.ts) is the
-  // matching local-only relaxation for the backend side of the gate.
-  if (!token && !import.meta.env.DEV) {
+  // the login form appears on a fresh visit.
+  //
+  // Local dev used to skip this entirely (`&& !import.meta.env.DEV`) for
+  // convenience — removed on request: the local server is reachable from
+  // the whole wifi network (HOST=0.0.0.0, needed for phone access), so
+  // "no password on localhost" really meant "no password for anyone on
+  // the same wifi," not just this one Mac. requireAuth's matching
+  // AUTH_DISABLED bypass (server/src/auth.ts) was turned off the same way
+  // — see server/.env's own comment on it. Both need to change together;
+  // re-enabling just one half leaves either a login screen that can't
+  // actually reach the API, or an API that's reachable without ever
+  // logging in.
+  if (!token) {
     return <LoginScreen />;
   }
 
@@ -204,14 +231,37 @@ function App() {
                 {activeTable.name}
               </h1>
             )}
-            <nav className="app-tabs">
-              <button type="button" className={tab === 'table' ? 'active' : ''} onClick={() => setTab('table')}>
+            <button
+              type="button"
+              className="mobile-nav-toggle"
+              aria-label="Meniu"
+              onClick={() => setMobileNavOpen((v) => !v)}
+            >
+              ☰
+              {(dueBadge.overdue > 0 || dueBadge.today > 0) && (
+                <span className={`tab-badge ${dueBadge.overdue > 0 ? 'tab-badge-overdue' : ''}`}>
+                  {dueBadge.overdue + dueBadge.today}
+                </span>
+              )}
+            </button>
+            <nav className={`app-tabs ${mobileNavOpen ? 'app-tabs-open' : ''}`}>
+              <button
+                type="button"
+                className={tab === 'table' ? 'active' : ''}
+                onClick={() => {
+                  setTab('table');
+                  setMobileNavOpen(false);
+                }}
+              >
                 Lentelė
               </button>
               <button
                 type="button"
                 className={tab === 'calendar' ? 'active' : ''}
-                onClick={() => setTab('calendar')}
+                onClick={() => {
+                  setTab('calendar');
+                  setMobileNavOpen(false);
+                }}
               >
                 Kalendorius
                 {(dueBadge.overdue > 0 || dueBadge.today > 0) && (
@@ -220,19 +270,47 @@ function App() {
                   </span>
                 )}
               </button>
-              <button type="button" className={tab === 'calls' ? 'active' : ''} onClick={() => setTab('calls')}>
+              <button
+                type="button"
+                className={tab === 'calls' ? 'active' : ''}
+                onClick={() => {
+                  setTab('calls');
+                  setMobileNavOpen(false);
+                }}
+              >
                 Skambučiai
               </button>
-              <button type="button" className={tab === 'search' ? 'active' : ''} onClick={() => setTab('search')}>
+              <button
+                type="button"
+                className={tab === 'search' ? 'active' : ''}
+                onClick={() => {
+                  setTab('search');
+                  setMobileNavOpen(false);
+                }}
+              >
                 Paieška
               </button>
-              <button type="button" className={tab === 'linkedin' ? 'active' : ''} onClick={() => setTab('linkedin')}>
+              <button
+                type="button"
+                className={tab === 'linkedin' ? 'active' : ''}
+                onClick={() => {
+                  setTab('linkedin');
+                  setMobileNavOpen(false);
+                }}
+              >
                 LinkedIn
               </button>
+              <button
+                type="button"
+                className="logout-btn"
+                onClick={() => {
+                  logout();
+                  setMobileNavOpen(false);
+                }}
+              >
+                Atsijungti
+              </button>
             </nav>
-            <button type="button" className="logout-btn" onClick={logout}>
-              Atsijungti
-            </button>
           </header>
 
           <main className="app-main tab-panel-container">

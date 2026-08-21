@@ -1,3 +1,5 @@
+import { randomUUID } from './uuid';
+
 export interface NoteEntry {
   id: string;
   text: string;
@@ -16,7 +18,7 @@ export function parseNoteHistory(raw: string): NoteEntry[] {
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed) && parsed.every((e) => e && typeof e.text === 'string')) {
       return parsed.map((e) => ({
-        id: typeof e.id === 'string' ? e.id : crypto.randomUUID(),
+        id: typeof e.id === 'string' ? e.id : randomUUID(),
         text: e.text,
         createdAt: typeof e.createdAt === 'number' ? e.createdAt : 0,
       }));
@@ -36,7 +38,7 @@ export function addNoteEntry(raw: string, text: string): string {
   const trimmed = text.trim();
   if (!trimmed) return raw;
   const existing = parseNoteHistory(raw);
-  const entry: NoteEntry = { id: crypto.randomUUID(), text: trimmed, createdAt: Date.now() };
+  const entry: NoteEntry = { id: randomUUID(), text: trimmed, createdAt: Date.now() };
   return serializeNoteHistory([entry, ...existing]);
 }
 

@@ -152,6 +152,103 @@
   border-color: var(--border);
 }
 
+/* ☰ toggle for the collapsed mobile nav below — hidden entirely on
+   desktop, where .app-tabs already shows every tab inline. */
+.mobile-nav-toggle {
+  display: none;
+  position: relative;
+  border: 1px solid var(--border);
+  background: transparent;
+  border-radius: 6px;
+  padding: 0.35em 0.6em;
+  font-size: 1.1rem;
+  line-height: 1;
+  color: var(--text);
+}
+.mobile-nav-toggle .tab-badge {
+  position: absolute;
+  top: -0.4em;
+  right: -0.4em;
+}
+
+/* --- Mobile layout (phone-width screens) ---
+   The header was a single unwrapping flex row (logo, back button, table
+   title, 5 nav tabs, logout) — on an actual phone width that's several
+   hundred px wider than the viewport, so the whole page shifted sideways
+   rather than the row wrapping (a real, reported bug: "заходит за
+   пределы телефона-боков"). 640px is comfortably above every common
+   phone width (iPhone SE 375px up to most large phones ~430px) and below
+   any tablet, so this only ever engages on an actual phone. */
+@media (max-width: 640px) {
+  .app-header {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    padding: 0.6rem 0.75rem;
+    position: relative;
+  }
+
+  /* The table name is what the user actually needs to see at a glance
+     ("Не видно название табели") — previously squeezed to a sliver by
+     five nav-tab buttons and a logout button competing for the same row.
+     Letting it grow (flex: 1) and dropping back-to-workspace's label
+     down to just the arrow keeps the row to two elements plus the
+     hamburger, which actually fits. */
+  .back-to-workspace {
+    padding: 0.4em;
+    font-size: 0;
+  }
+  .back-to-workspace::before {
+    content: '←';
+    font-size: 1rem;
+  }
+
+  .table-title,
+  .table-title-input {
+    max-width: none;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .mobile-nav-toggle {
+    display: inline-flex;
+    align-items: center;
+    order: 1;
+  }
+
+  /* Collapsed by default — becomes a dropdown panel under the header,
+     anchored via the header's own position: relative above, rather than
+     a popover component (this is a plain nav list, not worth a portal). */
+  .app-tabs {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    flex-direction: column;
+    gap: 0;
+    padding: 0.4rem;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-top: none;
+    box-shadow: var(--shadow);
+    z-index: 20;
+  }
+  .app-tabs.app-tabs-open {
+    display: flex;
+  }
+  .app-tabs button {
+    justify-content: flex-start;
+    padding: 0.65em 0.8em;
+  }
+  .app-tabs .logout-btn {
+    margin-left: 0;
+    margin-top: 0.3rem;
+    border-top: 1px solid var(--border);
+    border-radius: 0;
+    padding-top: 0.7em;
+  }
+}
+
 /* Excel-style sheet tabs, bottom of the window — a faster way to reach
    useWorkspaceStore's table list than going back to the Workspace screen.
    overflow-x: auto (not wrap) so a long list of tables scrolls
@@ -284,6 +381,56 @@
   width: 5.5em;
   flex: 0 0 auto;
   font-variant-numeric: tabular-nums;
+}
+
+/* ⋯ toggle for the collapsed mobile toolbar below — hidden on desktop,
+   where every toolbar control already fits in a couple of wrapped rows
+   and collapsing it would just be an extra click for no benefit. */
+.toolbar-toggle {
+  display: none;
+  border: 1px solid var(--border);
+  background: transparent;
+  border-radius: 6px;
+  padding: 0.3em 0.7em;
+  font-weight: 700;
+  line-height: 1;
+}
+
+@media (max-width: 640px) {
+  .toolbar-toggle {
+    display: inline-flex;
+  }
+  /* Collapsed by default on mobile — name box, search, undo/redo, color,
+     import/export, the selected-cell indicator, all of it hides behind
+     the ⋯ toggle (real, reported complaint: this block alone could run
+     to 3-4 wrapped rows on a phone, pushing the actual table off the
+     first screen). ":not(.toolbar-toggle)" is simpler than touching
+     every individual child's own class. */
+  .toolbar-collapsed > *:not(.toolbar-toggle) {
+    display: none;
+  }
+  /* Expanded state, tidied up — plain flex-wrap left every button at its
+     own natural width, so a mix of short ("↶") and long ("Eksportuoti
+     CSV") buttons produced a ragged, uneven-looking wrap (real, reported
+     complaint: "все разбросанно"). The name box and search input each
+     get a full-width row (an input reads better full-width than sharing
+     a row), the spacer serves no purpose once everything's already
+     wrapping (it only exists to push things right in the desktop's
+     single unwrapped row), and every remaining action button becomes a
+     clean, even two-column grid instead of wrapping wherever it happens
+     to fit. */
+  .toolbar-expanded .name-box,
+  .toolbar-expanded .search-input {
+    flex: 1 1 100%;
+  }
+  .toolbar-expanded .toolbar-spacer {
+    display: none;
+  }
+  .toolbar-expanded > button:not(.toolbar-toggle) {
+    flex: 1 1 calc(50% - 0.5rem);
+    justify-content: center;
+    white-space: nowrap;
+  }
 }
 
 /* Table */
@@ -707,6 +854,26 @@ tr.row-flash td.cell-row-bg {
   flex: 0 0 5.5em;
   padding: 0.25em 0.3em;
 }
+/* Two classes to outrank .cell input's own (0,1,1) specificity without
+   resorting to !important — which matters here because !important would
+   also beat the *inline* style={cellStyle} a colored row applies to this
+   same input, silently breaking custom cell colors on this one field
+   (see App.css's own note elsewhere on inline style already winning that
+   fight against a plain :focus rule). Only the border changes — .cell
+   input's border:transparent is fine for text/phone cells (the value
+   itself stays visible regardless of the border), but a native
+   <input type="time"> with no value yet draws its placeholder purely via
+   OS chrome, and iOS Safari specifically renders nothing visible at all
+   against a transparent, borderless box. Real, reported complaint:
+   tapping the 🕐 button revealed what looked like an empty, invisible
+   tap target ("прозрачное поле") rather than an obviously-there field.
+   Background is deliberately left alone (still transparent by default,
+   still overridden by a colored row's own inline style) — the border
+   alone is enough to read as "a real control is here." */
+.date-cell .date-cell-time {
+  border-color: var(--border);
+  border-radius: 4px;
+}
 
 .date-cell-add-time {
   border: none;
@@ -1012,6 +1179,18 @@ tr.row-drop-end td {
   color: var(--text-muted);
 }
 
+@media (max-width: 640px) {
+  /* The column name + row label prefix ("Produktai/Paslaugos ·
+     Uždaroji akcinė bendrovė...") ate most of the bar's width on a
+     narrow screen, squeezing the actual cell content — which is the one
+     thing this bar exists to show — down to almost nothing (real,
+     reported complaint, with that exact example). Dropping the label
+     leaves a plain, full-width preview of the cell's content. */
+  .formula-bar-label {
+    display: none;
+  }
+}
+
 /* Popovers (column menu / add column) — positioned via inline style by the
    Popover component (position: fixed, clamped to the viewport); this class
    only supplies the visual chrome. */
@@ -1029,6 +1208,17 @@ tr.row-drop-end td {
   text-align: left;
   font-weight: 400;
   max-height: calc(100vh - 16px);
+  /* 100vh on mobile Safari/Chrome measures the *layout* viewport — taller
+     than what's actually visible, since it includes the space the
+     browser's own address bar occupies before it auto-hides on scroll.
+     A popover sized against plain vh can render partly (or, on a short
+     enough popover trigger position, almost entirely) below the real
+     visible fold with no way to scroll back into view — this second
+     declaration using the newer dvh (dynamic viewport height) unit
+     overrides it in any browser that understands dvh, correctly matching
+     the real visible area; browsers that don't understand it simply skip
+     this line and keep the vh fallback above. */
+  max-height: calc(100dvh - 16px);
   overflow-y: auto;
 }
 
@@ -1185,9 +1375,24 @@ tr.row-drop-end td {
   max-width: 560px;
   width: 100%;
   max-height: calc(100vh - 4rem);
+  /* See .popover's own note above — 100vh overstates the real visible
+     area on mobile (it doesn't account for the browser's own address bar
+     height). A real, reported complaint ("всё заходит за рамки… не вижу
+     ничего") — every modal in this app (SocialLookupModal, this base
+     .modal, ApolloContactSearchModal below, CsvImportMapping,
+     ConfirmDialog) inherits this fix from here. */
+  max-height: calc(100dvh - 4rem);
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
+}
+/* Same fix, same reasoning as .cell-hover-editor button above — every
+   modal that can scroll (results lists, filter forms) risks a real touch
+   tap on one of its buttons being delayed/dropped by the browser's own
+   tap-vs-scroll disambiguation. Covers SocialLookupModal,
+   ApolloContactSearchModal, CsvImportMapping, ConfirmDialog. */
+.modal button {
+  touch-action: manipulation;
 }
 
 .modal h2 {
@@ -1323,6 +1528,26 @@ tr.row-drop-end td {
   overflow-x: hidden;
 }
 
+/* Every button inside this popup gets touch-action: manipulation — a
+   real, reported complaint ("не реагирует на мои нажатия" — a button not
+   responding to a real tap even after several tries) that can't be
+   caught by automated testing at all, since Playwright's synthetic taps
+   bypass the actual browser heuristic this fixes: on a genuinely
+   scrollable container (.cell-hover-editor has overflow-y: auto), a
+   mobile browser has to decide whether an incoming touch is the start of
+   a tap or the start of a scroll-drag, and by default it can delay or
+   even discard the "click" it would otherwise synthesize while making
+   that call — worse the closer a button sits to content that scrolls.
+   touch-action: manipulation tells the browser this element only ever
+   handles taps/pans, never a pinch-zoom or double-tap-zoom gesture, which
+   lets it commit to a tap immediately instead of waiting to disambiguate.
+   This is the standard, well-established fix for exactly this class of
+   "button inside a scrollable area doesn't reliably respond to a real
+   touch" issue. */
+.cell-hover-editor button {
+  touch-action: manipulation;
+}
+
 /* CellClickPopover (double-click, plain text/phone) — sits inside the
    generic .popover card chrome, so it just needs to fill it. */
 .cell-click-textarea {
@@ -1348,20 +1573,46 @@ tr.row-drop-end td {
   font-weight: 600;
 }
 
+.cell-hover-new-entry-row {
+  display: flex;
+  align-items: flex-end;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
 .cell-hover-new-entry {
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   min-height: 2.2em;
   max-height: 40vh;
   resize: none;
   border: none;
-  border-bottom: 1px solid var(--border);
+  border-bottom: none;
   border-radius: 0;
   padding: 0.45em 0.6em;
-  flex-shrink: 0;
 }
 .cell-hover-new-entry:focus {
   box-shadow: none;
   background: var(--today-bg);
+}
+
+/* Explicit save action next to the note-entry textarea — Enter/blur
+   still work too, this is just a visible, unambiguous alternative that
+   doesn't depend on either behaving correctly (real, reported complaint
+   about relying on Enter alone from a phone keyboard). */
+.cell-hover-new-entry-save {
+  flex: 0 0 auto;
+  border: none;
+  border-left: 1px solid var(--border);
+  background: var(--bg-alt);
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 1.1rem;
+  padding: 0.45em 0.8em;
+  align-self: stretch;
+}
+.cell-hover-new-entry-save:hover {
+  background: var(--bg-hover);
 }
 
 /* Quick-log tag buttons under "Add a note…" (CellHoverEditor note mode) —
@@ -1940,12 +2191,32 @@ tr.row-drop-end td {
 .apollo-search-modal {
   max-width: 960px;
   max-height: calc(100vh - 3rem);
+  /* See .modal's own note on this same fix — 100vh overstates the real
+     visible area on mobile, so this modal specifically (the one behind
+     the "🔍 Paieška" complaint) needs the same dvh override. */
+  max-height: calc(100dvh - 3rem);
 }
 
 .apollo-search-modal-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+}
+
+/* Hidden on desktop — the side-by-side layout there never needed
+   collapsing. Shown (see the mobile media query below) once the filters
+   stack above the results instead, where they can otherwise run long
+   enough to push every actual contact off the bottom of the screen with
+   no way back to a compact view. */
+.apollo-search-modal-filters-toggle {
+  display: none;
+  margin-left: auto;
+  border: 1px solid var(--border);
+  background: transparent;
+  border-radius: 6px;
+  padding: 0.3em 0.7em;
+  font-size: 0.8rem;
+  white-space: nowrap;
 }
 
 .apollo-search-modal-close {
@@ -1978,6 +2249,43 @@ tr.row-drop-end td {
   display: flex;
   flex-direction: column;
   gap: 0.6rem;
+}
+
+@media (max-width: 640px) {
+  /* Same bug, same fix as .search-sidebar/.search-view — a fixed 320px
+     filter column inside a modal that's itself only ~360px wide on a
+     phone (max-width:960px caps against the viewport long before it
+     matters) left the results column squeezed into ~20px. Real, reported
+     complaint ("кошмар какой-то") — this is the "🔍 Paieška" button in a
+     contact's editor, opens ApolloContactSearchModal, which happens to
+     reuse this exact same filters+results layout shape. Stacked instead,
+     same as the main Search tab. */
+  .apollo-search-modal-body {
+    flex-direction: column;
+    overflow-y: auto;
+  }
+  .apollo-search-modal-filters {
+    flex: 0 0 auto;
+    width: 100%;
+    padding-right: 0;
+  }
+  .apollo-search-modal-results {
+    overflow-y: visible;
+  }
+  .apollo-search-modal-filters-toggle {
+    display: inline-flex;
+  }
+  /* The header (with the close button) staying reachable was never
+     actually broken — flex-direction:column keeps it as the modal's own
+     first child regardless of how cramped the body got — but a low-
+     contrast, unbordered "✕" was easy to miss entirely inside what
+     already read as a broken layout. Bigger and clearly a button. */
+  .apollo-search-modal-close {
+    font-size: 1.3rem;
+    padding: 0.3em 0.6em;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+  }
 }
 
 .apollo-search-modal-results {
@@ -2317,6 +2625,58 @@ tr.row-drop-end td {
   white-space: nowrap;
 }
 
+/* ⋯ toggle for the collapsed mobile row layout below — hidden on
+   desktop, where every field already fits on one line. */
+.task-row-expand-toggle {
+  display: none;
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  background: transparent;
+  border-radius: 6px;
+  padding: 0.15em 0.5em;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+@media (max-width: 640px) {
+  /* Real, reported complaint: label + contact + note + date + time +
+     button all competing for one line read as "everything squished
+     together, can't tell what's happening." Reordered (via flex `order`,
+     not a DOM change, so desktop's own order is untouched) to date/time
+     first — the one thing this list exists to surface at a glance — then
+     the ⋯ toggle and the open-in-table button, with the company name/
+     contact/note hidden by default and only shown when a row is
+     expanded. */
+  .task-row {
+    flex-wrap: wrap;
+  }
+  .task-row-date {
+    order: 1;
+  }
+  .task-row-time {
+    order: 2;
+  }
+  .task-row-expand-toggle {
+    display: inline-flex;
+    order: 3;
+    margin-left: auto;
+  }
+  .task-open {
+    order: 4;
+  }
+  .task-row-label,
+  .task-row-note {
+    order: 5;
+    flex: 1 1 100%;
+    display: none;
+    white-space: normal;
+  }
+  .task-row-expanded .task-row-label,
+  .task-row-expanded .task-row-note {
+    display: block;
+  }
+}
+
 /* Calendar grid */
 
 .calendar-grid-view {
@@ -2443,6 +2803,27 @@ tr.row-drop-end td {
   gap: 0.5rem;
 }
 
+@media (max-width: 640px) {
+  /* Real, reported complaint: three buttons of wildly different natural
+     widths ("Atsijungti" vs. "⬆ Perkelti į serverį") sitting in one
+     space-between row read as uneven/messy on a phone, and on a narrow
+     enough screen could crowd right up against the edge. Stacking the
+     header and giving every action button equal width (flex: 1 on each)
+     makes them a clean, uniform group instead. */
+  .workspace-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.75rem;
+  }
+  .workspace-header-actions {
+    flex-wrap: wrap;
+  }
+  .workspace-header-actions button {
+    flex: 1 1 auto;
+    min-width: 8em;
+  }
+}
+
 .table-cards {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
@@ -2522,6 +2903,37 @@ tr.row-drop-end td {
   color: var(--text-muted);
   font-size: 0.8rem;
   margin-left: auto;
+}
+
+@media (max-width: 640px) {
+  /* No flex-wrap at all before this — two date inputs, a button, and a
+     summary string all tried to fit one line, which is what "всё
+     сплющивается" was describing. Wrapping alone (each control keeps its
+     natural size) already fixes it; the summary drops its margin-left:
+     auto so it doesn't try to justify itself off to nowhere once the row
+     has actually wrapped. */
+  .calls-toolbar {
+    flex-wrap: wrap;
+  }
+  .calls-summary {
+    margin-left: 0;
+    flex-basis: 100%;
+  }
+  /* Same reasoning as search-results-table above — a fixed 6-column
+     layout has nothing left to give any column at phone width; scrolling
+     the table itself horizontally beats squeezing every column at once. */
+  .calls-view {
+    padding: 0.75rem;
+    overflow-x: auto;
+  }
+  /* 560px first attempt still left the narrowest percentage columns
+     (Data/laikas at 11%, Trukmė at 6%) too tight for their own content
+     to fit on one line — confirmed live, "2026-08-21 07:36:32" was
+     wrapping across four lines. table-layout:fixed's percentages only
+     help once the table itself has enough real width to divide up. */
+  .calls-table {
+    min-width: 900px;
+  }
 }
 
 /* Deliberately its own ruleset, not table.sheet — that class carries
@@ -3071,6 +3483,48 @@ tr.row-drop-end td {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--accent-contrast);
+}
+
+/* Hidden on desktop — the sidebar is never collapsed there, so there's
+   nothing for this to toggle. */
+.search-filters-toggle {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  /* Fixed 320px side-by-side layout (.search-sidebar/.search-main below)
+     left almost no room for results on an actual phone — real, reported
+     complaint ("всё сплющивается"). Stacked instead, with the filter
+     form collapsible (search-filters-toggle) so it doesn't have to stay
+     open and eat screen space once you're actually looking at results. */
+  .search-view {
+    flex-direction: column;
+    overflow: auto;
+  }
+  .search-sidebar {
+    flex: 0 0 auto;
+    width: 100%;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    max-height: none;
+  }
+  .search-filters-toggle {
+    display: inline-flex;
+    margin-left: auto;
+  }
+  .search-main {
+    padding: 0.75rem;
+  }
+  /* A 5-7 column fixed-layout table has no readable width left to give
+     any column on a phone-width screen — letting the table keep a real
+     minimum width and scroll horizontally inside its own container reads
+     far better than every column being squeezed to a sliver at once. */
+  .search-results-table {
+    min-width: 640px;
+  }
+  .search-main {
+    overflow-x: auto;
+  }
 }
 
 .search-filters {
@@ -4275,4 +4729,21 @@ tr.row-drop-end td {
 .linkedin-step-failing {
   color: var(--danger);
   font-weight: 600;
+}
+
+/* Zadarma's floating softphone widget (Softphone.tsx) draws its own DOM
+   outside React once zadarmaWidgetFn() initializes it — .zdrm-webphone is
+   its real root container, confirmed live via devtools (348×61px in its
+   default collapsed state). Its own dashboard-issued embed snippet has no
+   size/scale parameter, so shrinking it on a phone (real, reported
+   complaint) has to happen from our side via a plain CSS transform.
+   transform-origin: bottom right matches how the widget itself is
+   positioned (right/bottom offsets in Softphone.tsx's zadarmaWidgetFn
+   call) — scaling from that corner keeps it flush against the same edges
+   instead of drifting toward the center as it shrinks. */
+@media (max-width: 640px) {
+  .zdrm-webphone {
+    transform: scale(0.75);
+    transform-origin: bottom right;
+  }
 }

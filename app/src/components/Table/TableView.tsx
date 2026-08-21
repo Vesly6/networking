@@ -175,6 +175,17 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
   const canUndo = useTableStore((s) => s.undoStack.length > 0);
   const canRedo = useTableStore((s) => s.redoStack.length > 0);
   const showToast = useToastStore((s) => s.show);
+  // Store owns data, this component owns the side effect — same
+  // convention useCallsStore's own error field already follows. See
+  // lastCellSaveError's own doc comment in useTableStore.ts for why this
+  // exists: every cell write (including a note/contact entry) was
+  // completely silent on failure, which reads as "doesn't save" on a
+  // flaky connection (e.g. a phone's wifi to this Mac's local server)
+  // right up until the change quietly reverts on the next reload.
+  const lastCellSaveError = useTableStore((s) => s.lastCellSaveError);
+  useEffect(() => {
+    if (lastCellSaveError) showToast(lastCellSaveError);
+  }, [lastCellSaveError, showToast]);
 
   const [search, setSearch] = useState(() => loadPersistedViewState(tableId).search);
   useEffect(() => {
@@ -232,6 +243,16 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
   const [openMenu, setOpenMenu] = useState<{ columnId: string; anchor: HTMLElement } | null>(null);
   const [colorPickerAnchor, setColorPickerAnchor] = useState<HTMLElement | null>(null);
   const [recentColors, setRecentColors] = useState<string[]>(() => loadRecentColors());
+  // Mobile only — the toolbar's own flex-wrap already keeps it from
+  // overflowing sideways, but on a phone-width screen ~8 controls (name
+  // box, a 240px-min-width search input, undo/redo, color, import/export…)
+  // wrap into a tall stack of rows that pushes the actual table far down
+  // the screen. Collapsed by default there (see .toolbar-collapsed in
+  // App.css, which only takes effect under that breakpoint — this state
+  // has no visible effect on desktop, where the toolbar was never a
+  // problem). Starts collapsed since a first-time mobile visit shouldn't
+  // default to the tall, cluttered state.
+  const [toolbarExpanded, setToolbarExpanded] = useState(false);
   const [flashRowId, setFlashRowId] = useState<string | null>(null);
 
   // Cell range selection (formula bar, copy/paste, color fill)
@@ -1612,7 +1633,15 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
 
   return (
     <div className="table-view">
-      <div className="toolbar">
+      <div className={`toolbar ${toolbarExpanded ? 'toolbar-expanded' : 'toolbar-collapsed'}`}>
+        <button
+          type="button"
+          className="toolbar-toggle"
+          title={toolbarExpanded ? 'Suskleisti įrankius' : 'Rodyti visus įrankius'}
+          onClick={() => setToolbarExpanded((v) => !v)}
+        >
+          ⋯
+        </button>
         <input
           className="name-box"
           title="Vardo laukas — įveskite langelio ar srities nuorodą (pvz., C13 arba A1:A10000) ir spauskite Enter, kad ją pasirinktumėte"

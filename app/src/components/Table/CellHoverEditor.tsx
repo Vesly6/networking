@@ -24,6 +24,7 @@ import { parseContactText } from '../../utils/contactsApi';
 import { requestCallback, sendSms, type SmsLogRecord } from '../../utils/callsApi';
 import { insertIntoSoftphone } from '../../utils/softphoneBridge';
 import { phoneMatchKey } from '../../utils/phoneMatch';
+import { randomUUID } from '../../utils/uuid';
 import { useToastStore } from '../../store/useToastStore';
 import { confirmDialog } from '../../store/useConfirmStore';
 import { getAllTranscriptions, saveSmsLogEntry, getAllSmsLog } from '../../db/db';
@@ -191,6 +192,13 @@ export function CellHoverEditor({
   // of Paieška in one flex row instead, so the two sit level with each
   // other, on explicit request ("кнопка поиск была бы на уровне с текстом
   // добавить контакт").
+  // Collapsed by default — briefly defaulted to open while a separate,
+  // real bug (crypto.randomUUID() throwing on a plain-HTTP LAN address —
+  // see utils/uuid.ts) made adding a contact silently fail, which looked
+  // at the time like the accordion itself was just too easy to miss.
+  // With that actual bug fixed, collapsed-by-default is what's wanted
+  // again — the form doesn't need to eat screen space every time a
+  // contact cell is opened just to browse existing entries.
   const [manualContactFormOpen, setManualContactFormOpen] = useState(false);
   // Which contact entry (by id) currently has SocialLookupModal open —
   // one at a time, same convention as smsComposeFor/editingContactId below.
@@ -310,9 +318,55 @@ export function CellHoverEditor({
       // раза") — the note editor's single-line comment input + tag row
       // read as cramped at the old width. Contact mode's 340 is unrelated
       // and untouched; the request was specifically about notes.
+      //
+      // That desktop-oriented width had no ceiling, though — on an actual
+      // phone (innerWidth ~375-430px) a flat 480px popup simply doesn't
+      // fit: `left` below clamps to stay on-screen, but the box itself
+      // stayed 480px wide regardless, so its right edge still ran well
+      // past the viewport (real, reported complaint — "заходит за
+      // рамку"). Capping at the same MARGIN-based budget `desiredHeight`
+      // already uses below fixes this on mobile while leaving desktop
+      // completely unaffected (innerWidth there is always well above
+      // 480+2*MARGIN, so this min() never actually engages).
       const minWidth = mode === 'contact' ? 340 : 480;
-      const width = Math.max(rect.width, minWidth);
+      const maxWidth = window.innerWidth - MARGIN * 2;
+      const width = Math.min(Math.max(rect.width, minWidth), maxWidth);
       const left = Math.max(MARGIN, Math.min(rect.left, window.innerWidth - width - MARGIN));
+      // Prefer the VisualViewport's height over window.innerHeight for
+      // every height calculation below. The two diverge specifically when
+      // an on-screen keyboard is open: some browsers/viewport-meta
+      // configurations shrink window.innerHeight right along with the
+      // keyboard ("resizes-content" behavior, the traditional default —
+      // window.innerHeight already correctly reflects the smaller usable
+      // area there), but others leave window.innerHeight at its full,
+      // pre-keyboard size and only report the shrunk usable area through
+      // VisualViewport ("resizes-visual" behavior). Using innerHeight
+      // unconditionally meant that on the second kind, this editor kept
+      // sizing/positioning itself against a viewport taller than what was
+      // actually visible the instant the keyboard opened — its own
+      // controls (the "+ Pridėti kontaktą" button, the tag row) could end
+      // up positioned underneath the keyboard, unreachable. This is a
+      // strict improvement either way: when the two already match (no
+      // keyboard, or a browser using resizes-content), visualViewport's
+      // height equals innerHeight and nothing changes.
+      const rawViewportHeight = window.visualViewport?.height ?? window.innerHeight;
+      // On a phone with a gesture-navigation bar (most current Android
+      // phones) or a home indicator (iPhone X and later), that strip
+      // along the very bottom of the screen is reserved by the OS — a
+      // tap landing there gets intercepted by system gesture handling
+      // before it ever reaches the page, even though the element is
+      // genuinely rendered and its coordinates look perfectly valid to
+      // both this code and to Playwright's own automation, which is
+      // exactly why this couldn't be caught by testing alone. Real,
+      // reported complaint: buttons near the bottom of this popup
+      // ("не разрешает даже нажать на кнопку") not responding to a real
+      // tap. Reading it via a CSS custom property (env() isn't directly
+      // readable from JS) — see index.css and index.html's own
+      // viewport-fit=cover, required for this to report anything but 0.
+      const safeAreaBottom = parseFloat(
+        getComputedStyle(document.documentElement).getPropertyValue('--safe-area-inset-bottom') || '0',
+      );
+      const viewportHeight = rawViewportHeight - (Number.isFinite(safeAreaBottom) ? safeAreaBottom : 0);
       // How tall the editor actually wants to be, measured from its own
       // rendered content (scrollHeight reflects the full content height
       // regardless of any maxHeight/overflow already applied to the node —
@@ -327,18 +381,18 @@ export function CellHoverEditor({
       // this correct regardless of how tall either mode's content gets in
       // the future.
       const naturalHeight = rootRef.current?.scrollHeight ?? MIN_USABLE_HEIGHT;
-      const desiredHeight = Math.min(naturalHeight, window.innerHeight - MARGIN * 2);
+      const desiredHeight = Math.min(naturalHeight, viewportHeight - MARGIN * 2);
       // Anchored at the cell's own top edge, growing downward, whenever
       // there's room below it for the full desired height. Once that room
       // is too small — a cell near the very bottom of the viewport, i.e.
       // the last few rows of a tall table — pull `top` up instead so the
       // editor still gets its full desired height, extending above the
       // cell rather than being squeezed under it.
-      const availableBelow = window.innerHeight - rect.top - MARGIN;
+      const availableBelow = viewportHeight - rect.top - MARGIN;
       const top =
         availableBelow >= desiredHeight
           ? rect.top
-          : Math.max(MARGIN, window.innerHeight - MARGIN - desiredHeight);
+          : Math.max(MARGIN, viewportHeight - MARGIN - desiredHeight);
       // Previously only `top` was clamped into the viewport — nothing capped
       // the editor's own height, so adding enough contacts/notes could grow
       // it past the bottom of the screen. Since it's position:fixed, content
@@ -352,12 +406,35 @@ export function CellHoverEditor({
       // last-resort fallback — the editor as a whole becomes scrollable
       // rather than silently clipping content with no way to reach it,
       // which is exactly what "overflow: hidden" used to do here.
-      const maxHeight = window.innerHeight - top - MARGIN;
+      const maxHeight = viewportHeight - top - MARGIN;
       setPos({ top, left, width, maxHeight });
     };
     place();
     window.addEventListener('resize', place);
     window.addEventListener('scroll', place, true);
+    // On mobile, opening the on-screen keyboard doesn't reliably fire a
+    // plain `resize` on `window` — Chrome/Android and Safari/iOS both
+    // increasingly report keyboard-driven size changes through the
+    // VisualViewport API instead, leaving `window.innerHeight` as the
+    // full (pre-keyboard) height in that case. Without this, `place()`'s
+    // math above (top/maxHeight computed from `window.innerHeight`) stays
+    // anchored to a taller viewport than what's actually visible once the
+    // keyboard is up — real, reported complaint ("не могу добавить
+    // заметку/контакт с телефона") that this editor's own controls could
+    // end up positioned underneath the keyboard, unreachable, with
+    // nothing about it looking visibly broken from a screenshot alone.
+    //
+    // Deliberately `resize` only, not also `scroll` — `visualViewport`'s
+    // `scroll` event fires on essentially every pixel of scroll momentum
+    // and every browser-chrome show/hide animation on mobile, far more
+    // often than the plain `window.addEventListener('scroll', place,
+    // true)` below already handles. Adding a second, more trigger-happy
+    // listener calling the same fairly expensive place() (getBoundingClientRect
+    // + getComputedStyle + a React state update) on top of that was a real
+    // regression on an actual phone's weaker CPU, not visible in desktop-
+    // based testing at all: a real, reported "button stops responding to
+    // taps entirely" complaint that only showed up after this was added.
+    window.visualViewport?.addEventListener('resize', place);
     // Content that changes the editor's natural height after the initial
     // placement (Apollo search results appearing, a contact/note entry
     // being added, switching a history entry into its edit textarea, …)
@@ -369,6 +446,7 @@ export function CellHoverEditor({
     return () => {
       window.removeEventListener('resize', place);
       window.removeEventListener('scroll', place, true);
+      window.visualViewport?.removeEventListener('resize', place);
       ro.disconnect();
     };
     // onClose intentionally excluded — it's a fresh inline closure every
@@ -607,7 +685,7 @@ export function CellHoverEditor({
     if (!text) return;
     if (!(await confirmDialog(`Siųsti SMS ${phone}?\n\n${text}`))) return;
     setSendingSms(true);
-    const entry: SmsLogRecord = { id: crypto.randomUUID(), phone, message: text, sentAt: Date.now(), success: false };
+    const entry: SmsLogRecord = { id: randomUUID(), phone, message: text, sentAt: Date.now(), success: false };
     try {
       const result = await sendSms(phone, text);
       entry.success = true;
@@ -657,25 +735,48 @@ export function CellHoverEditor({
         >
           {mode === 'note' ? (
             <>
-              <textarea
-                ref={newEntryRef}
-                className="cell-hover-new-entry"
-                autoFocus
-                placeholder="Pridėti komentarą…"
-                value={newEntryDraft}
-                onChange={(e) => setNewEntryDraft(e.target.value)}
-                onBlur={commitNewEntry}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    commitNewEntry();
-                  }
-                  if (e.key === 'Escape') {
-                    setNewEntryDraft('');
-                    onClose();
-                  }
-                }}
-              />
+              <div className="cell-hover-new-entry-row">
+                <textarea
+                  ref={newEntryRef}
+                  className="cell-hover-new-entry"
+                  autoFocus
+                  placeholder="Pridėti komentarą…"
+                  value={newEntryDraft}
+                  onChange={(e) => setNewEntryDraft(e.target.value)}
+                  onBlur={commitNewEntry}
+                  onKeyDown={(e) => {
+                    // e.keyCode is deprecated but still the one property
+                    // that reliably reports 13 on some Android keyboards'
+                    // IME composition flow, where e.key can come through
+                    // as "Unidentified" instead of "Enter" — a real,
+                    // known mobile quirk this codebase can't fully
+                    // reproduce in desktop-based testing. Checking both
+                    // is strictly more permissive, never less.
+                    if ((e.key === 'Enter' || e.keyCode === 13) && !e.shiftKey) {
+                      e.preventDefault();
+                      commitNewEntry();
+                    }
+                    if (e.key === 'Escape') {
+                      setNewEntryDraft('');
+                      onClose();
+                    }
+                  }}
+                />
+                {/* Explicit, always-visible save action — real, reported
+                    complaint that relying on Enter/blur alone didn't
+                    reliably save from a phone. Not conditionally shown
+                    only when there's a draft either — an always-present
+                    button is a much clearer, more discoverable affordance
+                    than one that pops in and out. */}
+                <button
+                  type="button"
+                  className="cell-hover-new-entry-save"
+                  title="Išsaugoti"
+                  onClick={() => commitNewEntry()}
+                >
+                  ✓
+                </button>
+              </div>
               <div className="cell-hover-tags">
                 <button
                   type="button"

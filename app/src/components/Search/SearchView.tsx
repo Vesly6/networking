@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useSearchStore } from '../../store/useSearchStore';
 import { useToastStore } from '../../store/useToastStore';
 import { PeopleFilterForm } from './PeopleFilterForm';
@@ -43,6 +43,17 @@ export function SearchView() {
   const companiesError = useSearchStore((s) => s.companiesError);
   const runCompanySearch = useSearchStore((s) => s.runCompanySearch);
 
+  // Mobile only (see .search-sidebar's collapsed state in App.css) — the
+  // sidebar is a fixed 320px column sitting next to the results on
+  // desktop, which is most of a phone's actual screen width; real,
+  // reported complaint was that the results area got squeezed down to
+  // nothing ("всё сплющивается") the moment there was anything to show.
+  // Starts expanded so the filter form is what a first-time visitor
+  // actually sees, same reasoning as the main toolbar's own collapse
+  // toggle starting the other way (collapsed) — that one hides controls
+  // for an already-populated table, this one exists to be filled in first.
+  const [filtersExpanded, setFiltersExpanded] = useState(true);
+
   const showToast = useToastStore((s) => s.show);
   useEffect(() => {
     if (peopleError) showToast(peopleError);
@@ -50,6 +61,22 @@ export function SearchView() {
   useEffect(() => {
     if (companiesError) showToast(companiesError);
   }, [companiesError, showToast]);
+
+  // Auto-collapses the filter panel once a search actually runs — on
+  // request, since manually tapping "Slėpti filtrus" first wasn't
+  // something everyone thought to do, and the whole point of running a
+  // search is to look at what it found. Desktop-gated (matchMedia against
+  // the same 640px breakpoint every mobile-only CSS rule in this file
+  // uses) since the side-by-side layout there has no reason to collapse
+  // after every search — filtersExpanded only visually does anything
+  // below that breakpoint to begin with, this just also stops it from
+  // silently flipping state in the background on desktop for no visible
+  // effect. Always collapses regardless of result count — a zero-result
+  // search still means "show me what happened," not "keep tweaking blind."
+  const runSearchAndCollapse = async (run: () => Promise<void>) => {
+    await run();
+    if (window.matchMedia('(max-width: 640px)').matches) setFiltersExpanded(false);
+  };
 
   const perPage = mode === 'people' ? peopleParams.per_page ?? 25 : companyParams.per_page ?? 25;
   const total = mode === 'people' ? peopleTotal : companiesTotal;
@@ -59,7 +86,7 @@ export function SearchView() {
 
   return (
     <div className="search-view">
-      <aside className="search-sidebar">
+      <aside className={`search-sidebar ${filtersExpanded ? 'search-sidebar-expanded' : 'search-sidebar-collapsed'}`}>
         <div className="search-mode-switch">
           <button type="button" className={mode === 'people' ? 'active' : ''} onClick={() => setMode('people')}>
             Žmonės
@@ -67,22 +94,29 @@ export function SearchView() {
           <button type="button" className={mode === 'companies' ? 'active' : ''} onClick={() => setMode('companies')}>
             Įmonės
           </button>
+          <button
+            type="button"
+            className="search-filters-toggle"
+            onClick={() => setFiltersExpanded((v) => !v)}
+          >
+            {filtersExpanded ? 'Slėpti filtrus ▲' : 'Filtrai ▼'}
+          </button>
         </div>
-        {mode === 'people' ? (
+        {filtersExpanded && (mode === 'people' ? (
           <PeopleFilterForm
             params={peopleParams}
             onChange={setPeopleParams}
-            onSubmit={() => void runPeopleSearch(1)}
+            onSubmit={() => void runSearchAndCollapse(() => runPeopleSearch(1))}
             loading={peopleLoading}
           />
         ) : (
           <CompanyFilterForm
             params={companyParams}
             onChange={setCompanyParams}
-            onSubmit={() => void runCompanySearch(1)}
+            onSubmit={() => void runSearchAndCollapse(() => runCompanySearch(1))}
             loading={companiesLoading}
           />
-        )}
+        ))}
       </aside>
 
       <div className="search-main">

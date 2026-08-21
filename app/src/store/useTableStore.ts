@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { Column, ColumnType, Row } from '../types';
 import { clampToLimit } from '../utils/cellLimit';
 import { deleteRowDB, getTable, loadRowsForTable, saveRow, saveRows, updateTableColumns } from '../db/db';
+import { randomUUID } from '../utils/uuid';
 
 export interface ImportResult {
   createdRows: number;
@@ -47,6 +48,23 @@ interface TableState {
   ready: boolean;
   undoStack: HistorySnapshot[];
   redoStack: HistorySnapshot[];
+  /** Set when the most recent updateCell() write to the server failed —
+   * null otherwise (including on success). Every row/cell write in this
+   * store is fire-and-forget (`void saveRow(...)`, no retry, no offline
+   * queue — a deliberate, documented scope cut from the table-data
+   * migration), which was a fine tradeoff when the only realistic failure
+   * was a local IndexedDB write, but a real, reported bug once writes
+   * started going over a phone's wifi to this Mac's local server instead:
+   * the local UI state updates immediately regardless (optimistic), so a
+   * failed write was completely silent — the note/contact looked saved
+   * right up until the next reload or tab switch, when it would just be
+   * gone, with zero indication anything had gone wrong. This doesn't add
+   * retry/queueing (a genuinely bigger project — see CLAUDE.md), just
+   * turns a silent failure into a visible one. Follows this codebase's
+   * "stores own data, components own side effects" convention (see
+   * useCallsStore's own `error` field) — TableView watches this and
+   * toasts, the store itself never calls showToast directly. */
+  lastCellSaveError: string | null;
   /** Always re-fetches the table fresh from IndexedDB rather than trusting a
    * cached copy from useWorkspaceStore — see CLAUDE.md for why. */
   loadTable: (tableId: string) => Promise<void>;
@@ -143,6 +161,7 @@ export const useTableStore = create<TableState>((set, get) => {
     ready: false,
     undoStack: [],
     redoStack: [],
+    lastCellSaveError: null,
 
     loadTable: async (tableId) => {
       set({ ready: false });
@@ -190,7 +209,7 @@ export const useTableStore = create<TableState>((set, get) => {
     addColumn: (name, type, options) => {
       snapshot();
       const column: Column = {
-        id: crypto.randomUUID(),
+        id: randomUUID(),
         name: name.trim() || 'Stulpelis',
         type,
         // The default column width (160px) is enough for a bare date, but
@@ -215,7 +234,7 @@ export const useTableStore = create<TableState>((set, get) => {
       const current = get().columns;
       const newColumns: Column[] = [];
       for (let i = 0; i < count; i++) {
-        newColumns.push({ id: crypto.randomUUID(), name: nextColumnName([...current, ...newColumns]), type: 'text' });
+        newColumns.push({ id: randomUUID(), name: nextColumnName([...current, ...newColumns]), type: 'text' });
       }
       const index = beforeColumnId === null ? -1 : current.findIndex((c) => c.id === beforeColumnId);
       const columns =
@@ -380,7 +399,7 @@ export const useTableStore = create<TableState>((set, get) => {
       const { tableId, rows } = get();
       if (!tableId) return '';
       snapshot();
-      const id = crypto.randomUUID();
+      const id = randomUUID();
       const now = Date.now();
       const maxOrder = rows.reduce((m, r) => Math.max(m, r.order), -1);
       const row: Row = { id, tableId, cells: {}, order: maxOrder + 1, createdAt: now, updatedAt: now };
@@ -396,7 +415,7 @@ export const useTableStore = create<TableState>((set, get) => {
       const current = [...get().rows].sort((a, b) => a.order - b.order);
       const now = Date.now();
       const newRows: Row[] = Array.from({ length: count }, () => ({
-        id: crypto.randomUUID(),
+        id: randomUUID(),
         tableId,
         cells: {},
         order: 0, // reassigned below, alongside every other row
@@ -472,7 +491,16 @@ export const useTableStore = create<TableState>((set, get) => {
         return updatedRow;
       });
       set({ rows });
-      if (updatedRow) void saveRow(updatedRow);
+      if (updatedRow) {
+        saveRow(updatedRow)
+          .then(() => set({ lastCellSaveError: null }))
+          .catch((err) => {
+            set({
+              lastCellSaveError:
+                err instanceof Error ? `Nepavyko išsaugoti — ${err.message}` : 'Nepavyko išsaugoti pakeitimo serveryje',
+            });
+          });
+      }
       return truncated;
     },
 
@@ -601,7 +629,7 @@ export const useTableStore = create<TableState>((set, get) => {
           headerToColumnId.set(header, decision.columnId);
           continue;
         }
-        const column: Column = { id: crypto.randomUUID(), name: header.trim() || 'Stulpelis', type: decision.columnType };
+        const column: Column = { id: randomUUID(), name: header.trim() || 'Stulpelis', type: decision.columnType };
         columns.push(column);
         createdColumns++;
         headerToColumnId.set(header, column.id);
@@ -622,7 +650,7 @@ export const useTableStore = create<TableState>((set, get) => {
             if (truncated) truncatedCells++;
             cells[columnId] = value;
           });
-          return { id: crypto.randomUUID(), tableId: state.tableId!, cells, order: nextOrder++, createdAt: now, updatedAt: now };
+          return { id: randomUUID(), tableId: state.tableId!, cells, order: nextOrder++, createdAt: now, updatedAt: now };
         });
 
       const rows = [...state.rows, ...newRows];

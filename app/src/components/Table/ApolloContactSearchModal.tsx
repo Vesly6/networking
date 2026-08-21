@@ -15,6 +15,7 @@ import {
 import { cleanCompanyNameForSearch } from '../../utils/companyName';
 import { joinContactFields, parseContacts, contactTextToFields } from '../../utils/contacts';
 import { useToastStore } from '../../store/useToastStore';
+import { randomUUID } from '../../utils/uuid';
 
 interface ApolloContactSearchModalProps {
   /** The row's raw Company-column value — seeds the initial company-name
@@ -124,6 +125,25 @@ export function ApolloContactSearchModal({
   const [peopleError, setPeopleError] = useState('');
   const [peopleSearched, setPeopleSearched] = useState(false);
   const [addingPersonIds, setAddingPersonIds] = useState<Set<string>>(new Set());
+  // Mobile only (see .apollo-search-modal-filters' collapsed state in
+  // App.css) — stacking the filter form above results (instead of the
+  // fixed 320px side-by-side column that never fit a phone width) still
+  // left a real, reported problem of its own: PeopleFilterForm alone runs
+  // to eight-plus collapsible sections, tall enough on a phone to push
+  // every actual result off the bottom of the screen with no way to get
+  // back to a compact view short of scrolling all the way past it again.
+  // Starts expanded for the same reason SearchView's own toggle does —
+  // this is what a first-time visitor to either step needs to see first.
+  const [filtersExpanded, setFiltersExpanded] = useState(true);
+  // Same "auto-collapse once a search actually runs" behavior as
+  // SearchView's own runSearchAndCollapse — on request, manually tapping
+  // "Slėpti filtrus" first wasn't obvious to everyone. Desktop-gated the
+  // same way (matchMedia against the shared 640px breakpoint), since the
+  // side-by-side layout there never needed collapsing at all.
+  const runSearchAndCollapse = async (run: () => Promise<void>) => {
+    await run();
+    if (window.matchMedia('(max-width: 640px)').matches) setFiltersExpanded(false);
+  };
   // A single "phone still being searched" count covering *every* in-flight
   // background poll, not per-person — one always-visible line ("Ieškoma N
   // telefono numerių…") so clicking "+ Pridėti" on several people in a row
@@ -158,8 +178,14 @@ export function ApolloContactSearchModal({
   // "one click and see candidates" convenience the old version had, while
   // everything after this point (confirming/replacing/filtering) is now
   // fully in the user's hands rather than happening silently.
+  //
+  // Routed through runSearchAndCollapse too, not just the explicit
+  // filter-form resubmits — this auto-run *is* the primary flow most
+  // people actually go through (open the modal, see candidates,
+  // pick one), not an edge case, so it needed the exact same "the
+  // filters shouldn't still be covering the results you just got" fix.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { void runCompanySearch(); }, []);
+  useEffect(() => { void runSearchAndCollapse(runCompanySearch); }, []);
 
   const pickCompany = async (company: ApolloCompany) => {
     setSelectedCompany(company);
@@ -185,7 +211,11 @@ export function ApolloContactSearchModal({
       ? { per_page: 100, q_organization_domains_list: [domain] }
       : { per_page: 100, organization_ids: [company.id] };
     setPeopleParams(params);
-    await runPeopleSearchWith(params);
+    // Same reasoning as the company step's own auto-run above — picking a
+    // company and landing on its people results is the primary flow here,
+    // not the manual "resubmit the people filter form" path, so it needs
+    // the same auto-collapse.
+    await runSearchAndCollapse(() => runPeopleSearchWith(params));
   };
 
   const runPeopleSearchWith = async (params: PeopleSearchParams) => {
@@ -209,7 +239,7 @@ export function ApolloContactSearchModal({
   const runPeopleSearch = () => {
     const next = { ...peopleParams, page: 1 };
     setPeopleParams(next);
-    void runPeopleSearchWith(next);
+    return runPeopleSearchWith(next);
   };
   const peoplePerPage = peopleParams.per_page ?? 100;
   const peopleCurrentPage = peopleParams.page ?? 1;
@@ -288,7 +318,7 @@ export function ApolloContactSearchModal({
       const company = selectedCompany?.name ?? '';
       const linkedinUrl = result.person?.linkedin_url || '';
 
-      const id = crypto.randomUUID();
+      const id = randomUUID();
       onAddContactRef.current(
         joinContactFields({
           firstName,
@@ -363,6 +393,13 @@ export function ApolloContactSearchModal({
       <div className="modal apollo-search-modal" onClick={(e) => e.stopPropagation()}>
         <div className="apollo-search-modal-header">
           <h2>🔍 Ieškoti kontaktų (Apollo)</h2>
+          <button
+            type="button"
+            className="apollo-search-modal-filters-toggle"
+            onClick={() => setFiltersExpanded((v) => !v)}
+          >
+            {filtersExpanded ? 'Slėpti filtrus ▲' : 'Filtrai ▼'}
+          </button>
           <button type="button" className="apollo-search-modal-close" onClick={onClose}>
             ✕
           </button>
@@ -370,13 +407,20 @@ export function ApolloContactSearchModal({
 
         {!selectedCompany ? (
           <div className="apollo-search-modal-body">
+            {filtersExpanded && (
             <div className="apollo-search-modal-filters">
               <p className="apollo-search-modal-hint">
                 Patikrinkite arba pakeiskite raktažodžius ir susiraskite tikslią įmonę — kol jos nepasirinksite,
                 žmonių paieška neprasidės.
               </p>
-              <CompanyFilterForm params={companyParams} onChange={setCompanyParams} onSubmit={runCompanySearch} loading={companyLoading} />
+              <CompanyFilterForm
+                params={companyParams}
+                onChange={setCompanyParams}
+                onSubmit={() => void runSearchAndCollapse(runCompanySearch)}
+                loading={companyLoading}
+              />
             </div>
+            )}
             <div className="apollo-search-modal-results">
               {companyError && <div className="search-result-detail-error">{companyError}</div>}
               {!companySearched && !companyLoading && (
@@ -399,6 +443,7 @@ export function ApolloContactSearchModal({
           </div>
         ) : (
           <div className="apollo-search-modal-body">
+            {filtersExpanded && (
             <div className="apollo-search-modal-filters">
               <button
                 type="button"
@@ -415,8 +460,14 @@ export function ApolloContactSearchModal({
                 Pasirinkta įmonė: <strong>{selectedCompany.name}</strong>
                 {selectedCompany.primary_domain && <> · {selectedCompany.primary_domain}</>}
               </p>
-              <PeopleFilterForm params={peopleParams} onChange={setPeopleParams} onSubmit={runPeopleSearch} loading={peopleLoading} />
+              <PeopleFilterForm
+                params={peopleParams}
+                onChange={setPeopleParams}
+                onSubmit={() => void runSearchAndCollapse(runPeopleSearch)}
+                loading={peopleLoading}
+              />
             </div>
+            )}
             <div className="apollo-search-modal-results">
               {peopleError && <div className="search-result-detail-error">{peopleError}</div>}
               {!peopleSearched && !peopleLoading && (

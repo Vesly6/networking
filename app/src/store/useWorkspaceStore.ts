@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { Row, TableMeta } from '../types';
 import { deleteTableDB, getTable, loadRowsForTable, loadTables, saveRows, saveTable, updateTableName } from '../db/db';
+import { randomUUID } from '../utils/uuid';
 
 const LAST_ACTIVE_KEY = 'cold-crm:last-active-table';
 
@@ -43,7 +44,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       if (tables.length === 0) {
         const now = Date.now();
         const table: TableMeta = {
-          id: crypto.randomUUID(),
+          id: randomUUID(),
           name: 'Lentelė 1',
           columns: [],
           createdAt: now,
@@ -68,7 +69,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   createTable: (name) => {
     const now = Date.now();
     const table: TableMeta = {
-      id: crypto.randomUUID(),
+      id: randomUUID(),
       name: name.trim() || `Lentelė ${get().tables.length + 1}`,
       columns: [],
       createdAt: now,
@@ -94,14 +95,14 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
 
     const columnIdMap = new Map<string, string>();
     const columns = source.columns.map((c) => {
-      const newId = crypto.randomUUID();
+      const newId = randomUUID();
       columnIdMap.set(c.id, newId);
       return { ...c, id: newId };
     });
 
     const now = Date.now();
     const newTable: TableMeta = {
-      id: crypto.randomUUID(),
+      id: randomUUID(),
       name: `${source.name} (kopija)`,
       columns,
       createdAt: now,
@@ -123,7 +124,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
           if (newColId) colors[newColId] = color;
         }
       }
-      return { id: crypto.randomUUID(), tableId: newTable.id, cells, colors, order: r.order, height: r.height, createdAt: now, updatedAt: now };
+      return { id: randomUUID(), tableId: newTable.id, cells, colors, order: r.order, height: r.height, createdAt: now, updatedAt: now };
     });
 
     // Both awaited (not the usual fire-and-forget void saveX(...) pattern
