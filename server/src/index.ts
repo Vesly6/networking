@@ -93,7 +93,18 @@ const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
 
 const app = express();
 app.use(cors({ origin: ALLOWED_ORIGINS }));
-app.use(express.json());
+// Express's default body-size limit is 100kb — fine for every other route
+// in this app, but PUT /api/rows (the bulk row-save endpoint, saveRows()
+// on the frontend) sends an entire table's rows as one JSON payload by
+// design (see tableData's own doc comment — one bulk request, not one per
+// row, for drag-reorder/sort/the one-time IndexedDB migration to even be
+// usable on a real ~14,000-row table). A real table that size is several
+// MB of JSON, well past 100kb — body-parser was rejecting it with a
+// PayloadTooLargeError that the error middleware below had no specific
+// case for, so it fell through to a generic, unhelpful 500 "Internal
+// server error" (confirmed live: the one-time migration action failed
+// this exact way against the real production table).
+app.use(express.json({ limit: '50mb' }));
 // Zadarma's webhook deliveries (confirmed against the official PHP
 // client's getWebhookEvent(), which reads $_POST) are form-encoded, not
 // JSON — needed for the SMS webhook receiver below. Registering both
@@ -1174,6 +1185,11 @@ app.delete(
 );
 
 app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+  if (err && typeof err === 'object' && 'type' in err && (err as { type?: string }).type === 'entity.too.large') {
+    console.error('Request body too large:', err);
+    res.status(413).json({ error: 'Request body too large — this payload exceeded the server’s size limit.' });
+    return;
+  }
   if (err instanceof AuthError) {
     console.error('Auth config error:', err.message);
     res.status(500).json({ error: err.message });
