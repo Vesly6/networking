@@ -429,6 +429,7 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
       if (td) {
         openCellEditor(rowId, columnId, td);
         setHighlightContactId(contactId);
+        setFlashRowId(rowId);
         onContactFocusHandled();
         return;
       }

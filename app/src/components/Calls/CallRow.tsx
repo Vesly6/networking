@@ -10,6 +10,18 @@ function formatDuration(seconds: number): string {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
+// Zadarma's PBX statistics endpoint (see CLAUDE.md's "otherParty" section)
+// always hands back otherParty as a bare digit run, whether it came from
+// `destination` (outbound) or was extracted out of `clid` (inbound) — the
+// leading "+" never survives either path. Purely a display/copy concern:
+// phoneMatchKey (used for CRM row/contact matching elsewhere) already
+// compares last-7-digit suffixes, so it doesn't care either way.
+function withLeadingPlus(phone: string): string {
+  const trimmed = phone.trim();
+  if (!trimmed || trimmed.startsWith('+') || !/^\d+$/.test(trimmed)) return trimmed;
+  return `+${trimmed}`;
+}
+
 interface CallRowProps {
   call: CallRecord;
   matchedRow?: { rowId: string; label: string };
@@ -63,8 +75,8 @@ export function CallRow({ call, matchedRow, matchedContact, onJumpToRow, onJumpT
         <td>{call.clid}</td>
         <td>
           <div className="calls-destination">
-            {call.otherParty}
-            <button type="button" className="calls-copy-btn" title="Kopijuoti numerį" onClick={() => void copy(call.otherParty, 'Numeris')}>
+            {withLeadingPlus(call.otherParty)}
+            <button type="button" className="calls-copy-btn" title="Kopijuoti numerį" onClick={() => void copy(withLeadingPlus(call.otherParty), 'Numeris')}>
               📋 Kopijuoti
             </button>
             <button

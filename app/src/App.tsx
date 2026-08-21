@@ -24,7 +24,6 @@ type Tab = 'table' | 'calendar' | 'calls' | 'search' | 'linkedin' | 'email';
 
 function App() {
   const token = useAuthStore((s) => s.token);
-  const logout = useAuthStore((s) => s.logout);
   const loggedInViaRecovery = useAuthStore((s) => s.loggedInViaRecovery);
   const dismissRecoveryNotice = useAuthStore((s) => s.dismissRecoveryNotice);
 
@@ -312,16 +311,6 @@ function App() {
                 }}
               >
                 Laiškai
-              </button>
-              <button
-                type="button"
-                className="logout-btn"
-                onClick={() => {
-                  logout();
-                  setMobileNavOpen(false);
-                }}
-              >
-                Atsijungti
               </button>
             </nav>
           </header>

@@ -175,6 +175,20 @@ function parseTaggedEntry(text: string): TaggedEntry | null {
   if (NOTE_TAG_COLORS[text]) {
     return { color: NOTE_TAG_COLORS[text], tagLabel: text, restText: '', tagPosition: 'whole' };
   }
+  // A NOTE_TAGS entry logged via the contact picker (see noteTagPickerAnchor
+  // above) carries "{tag label} {contact name}" — same prefix shape as the
+  // LinkedIn-request tag below, just with a tag from this list instead of
+  // one fixed phrase. None of the 7 labels is itself a prefix of another
+  // (checked directly), so .find's first match is always the right one.
+  const matchingTag = NOTE_TAGS.find((t) => text.startsWith(`${t.label} `));
+  if (matchingTag) {
+    return {
+      color: matchingTag.color,
+      tagLabel: matchingTag.label,
+      restText: text.slice(matchingTag.label.length + 1),
+      tagPosition: 'prefix',
+    };
+  }
   if (text.endsWith(` ${NEATSILIEPE_SUFFIX}`)) {
     return {
       color: NEATSILIEPE_COLOR,
@@ -223,6 +237,12 @@ export function CellHoverEditor({
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [neatsiliepeAnchor, setNeatsiliepeAnchor] = useState<HTMLElement | null>(null);
   const [linkedinRequestAnchor, setLinkedinRequestAnchor] = useState<HTMLElement | null>(null);
+  // Every plain NOTE_TAGS button (Laiškas, Skambutis, ...) opens the same
+  // kind of contact picker neatsiliepė/LinkedIn already did, on explicit
+  // request — one shared anchor (which tag was clicked + its own color)
+  // rather than 7 separate booleans, since only one can ever be open at a
+  // time anyway.
+  const [noteTagPickerAnchor, setNoteTagPickerAnchor] = useState<{ tag: (typeof NOTE_TAGS)[number]; anchor: HTMLElement } | null>(null);
   const [editDraft, setEditDraft] = useState('');
   const [loadingLastSummary, setLoadingLastSummary] = useState(false);
   const [apolloModalOpen, setApolloModalOpen] = useState(false);
@@ -775,6 +795,7 @@ export function CellHoverEditor({
             e.stopPropagation();
             setNeatsiliepeAnchor(null);
             setLinkedinRequestAnchor(null);
+            setNoteTagPickerAnchor(null);
           }}
         >
           {mode === 'note' ? (
@@ -836,7 +857,17 @@ export function CellHoverEditor({
                     key={tag.label}
                     className="cell-hover-tag"
                     style={{ backgroundColor: tag.color, color: contrastTextColor(tag.color) }}
-                    onClick={() => onAddNoteEntry(tag.label)}
+                    disabled={parseContacts(contactsRaw ?? '').length === 0}
+                    title={
+                      parseContacts(contactsRaw ?? '').length === 0
+                        ? 'Šioje eilutėje dar nėra kontaktų'
+                        : `Pasirinkite, su kuo susijęs „${tag.label}“`
+                    }
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const anchorEl = e.currentTarget;
+                      setNoteTagPickerAnchor((prev) => (prev && prev.tag.label === tag.label ? null : { tag, anchor: anchorEl }));
+                    }}
                   >
                     {tag.label}
                   </button>
@@ -918,6 +949,30 @@ export function CellHoverEditor({
                         onClick={() => {
                           onAddNoteEntry(`${LINKEDIN_REQUEST_PREFIX} ${name}`);
                           setLinkedinRequestAnchor(null);
+                        }}
+                      >
+                        {name}
+                      </button>
+                    );
+                  })}
+                </Popover>
+              )}
+              {noteTagPickerAnchor && (
+                <Popover anchor={noteTagPickerAnchor.anchor} width={220}>
+                  <div className="popover-field">
+                    <span>Su kuo susijęs „{noteTagPickerAnchor.tag.label}“?</span>
+                  </div>
+                  {parseContacts(contactsRaw ?? '').map((c) => {
+                    const { firstName, lastName } = contactTextToFields(c.text);
+                    const name = `${firstName} ${lastName}`.trim() || c.text;
+                    return (
+                      <button
+                        key={c.id}
+                        type="button"
+                        className="date-cell-contact-option"
+                        onClick={() => {
+                          onAddNoteEntry(`${noteTagPickerAnchor.tag.label} ${name}`);
+                          setNoteTagPickerAnchor(null);
                         }}
                       >
                         {name}
