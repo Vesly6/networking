@@ -49,6 +49,39 @@
   text-size-adjust: 100%;
 }
 
+/* Dark theme — on explicit request, an actual manual light/dark toggle
+   (useThemeStore.ts, a sun/moon button in the header), not a
+   prefers-color-scheme auto-switch. Explicitly NOT pure black — the
+   request was specifically "не должны использовать" (shouldn't use) true
+   black, since it reads as illegible against this app's colored cell
+   fills/badges/highlights, most of which were only ever tuned against a
+   white background. Gray family + a purple accent instead, matching the
+   palette of Desktop/Email-Extention (the standalone Chrome extension the
+   Email Generator tab was ported from) at the user's own request — same
+   --primary/--primary-light purple, same warm dark-gray backgrounds.
+   Every component in this app already routes its colors through these
+   root tokens rather than hardcoded hex values, so overriding just this
+   one block is what makes the rest of App.css's ~4700 lines follow along
+   automatically, with no per-component dark-mode CSS needed. */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --bg: #2e2e2c;
+  --bg-alt: #383835;
+  --bg-hover: #454542;
+  --border: #4c4c49;
+  --border-strong: #5c5c59;
+  --text: #ececea;
+  --text-muted: #a3a29d;
+  --accent: #6a61c9;
+  --accent-contrast: #ffffff;
+  --danger: #f28b82;
+  --danger-bg: rgba(242, 139, 130, 0.16);
+  --today-bg: rgba(106, 97, 201, 0.22);
+  --overdue-bg: rgba(242, 139, 130, 0.16);
+  --shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
 * {
   box-sizing: border-box;
 }

@@ -7,6 +7,7 @@ import { migrateLocalDataToServer } from '../../utils/migrateTableData';
 import { confirmDialog } from '../../store/useConfirmStore';
 import { useToastStore } from '../../store/useToastStore';
 import { BrandLogo } from '../BrandLogo';
+import { ThemeToggle } from '../ThemeToggle';
 
 interface WorkspaceViewProps {
   onOpenTable: (id: string) => void;
@@ -75,6 +76,7 @@ export function WorkspaceView({ onOpenTable }: WorkspaceViewProps) {
           <h2>Darbo sritis</h2>
         </div>
         <div className="workspace-header-actions">
+          <ThemeToggle />
           <button type="button" className="primary" onClick={handleCreate}>
             + Nauja lentelė
           </button>

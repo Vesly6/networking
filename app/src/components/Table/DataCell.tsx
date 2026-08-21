@@ -13,6 +13,7 @@ import { useToastStore } from '../../store/useToastStore';
 import { combineDateTime, getDatePart, getTimePart } from '../../utils/date';
 import { getLatestNoteText } from '../../utils/noteHistory';
 import { getContactsSummary, parseContacts, contactTextToFields } from '../../utils/contacts';
+import { contrastTextColor } from '../../utils/color';
 import { Popover } from '../Popover';
 import { ensureProtocol } from '../../utils/link';
 import { highlightMatches } from '../../utils/highlight';
@@ -161,7 +162,16 @@ function DataCellImpl({
   // by those selectors at all, so nothing can ever repaint over its color,
   // regardless of how any particular browser layers table backgrounds.
   const cellClassName = `cell cell-${column.type} ${selected ? 'cell-selected' : ''} ${inRange ? 'cell-in-range' : ''} ${color ? '' : 'cell-row-bg'}`;
-  const cellStyle: CSSProperties | undefined = color ? { backgroundColor: color } : undefined;
+  // color (both here and text: contrastTextColor(color)) is computed once
+  // here rather than per cell-type branch below, since every branch
+  // (text/phone/company input, date cell, note/contact preview, the <td>
+  // wrapper itself) applies the same cellStyle object — the same real bug
+  // the dropdown badge fix above addresses applies identically here: a
+  // custom cell fill (🎨 Color tool, PRESET_COLORS — all light pastels) is
+  // a plain hex value with no relationship to useThemeStore at all, so
+  // once dark mode makes the surrounding `color: var(--text)` light, any
+  // colored cell's own text became light-on-light-pastel and unreadable.
+  const cellStyle: CSSProperties | undefined = color ? { backgroundColor: color, color: contrastTextColor(color) } : undefined;
 
   if (column.type === 'dropdown') {
     const optionColor = storedValue ? column.optionColors?.[storedValue] : undefined;
@@ -180,16 +190,21 @@ function DataCellImpl({
       >
         <select
           value={storedValue}
-          style={selectColor ? { backgroundColor: selectColor } : undefined}
+          style={
+            selectColor ? { backgroundColor: selectColor, color: contrastTextColor(selectColor) } : undefined
+          }
           onFocus={onSelect}
           onChange={(e) => updateCell(row.id, column.id, e.target.value)}
         >
           <option value="">—</option>
-          {(column.options ?? []).map((opt) => (
-            <option key={opt} value={opt} style={column.optionColors?.[opt] ? { backgroundColor: column.optionColors[opt] } : undefined}>
-              {opt}
-            </option>
-          ))}
+          {(column.options ?? []).map((opt) => {
+            const optColor = column.optionColors?.[opt];
+            return (
+              <option key={opt} value={opt} style={optColor ? { backgroundColor: optColor, color: contrastTextColor(optColor) } : undefined}>
+                {opt}
+              </option>
+            );
+          })}
         </select>
       </td>
     );

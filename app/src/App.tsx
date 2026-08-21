@@ -8,9 +8,11 @@ import { WorkspaceView } from './components/Workspace/WorkspaceView';
 import { CallsView } from './components/Calls/CallsView';
 import { SearchView } from './components/Search/SearchView';
 import { LinkedInView } from './components/LinkedIn/LinkedInView';
+import { EmailGeneratorView } from './components/Email/EmailGeneratorView';
 import { Toast } from './components/Toast';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { Softphone } from './components/Softphone';
+import { ThemeToggle } from './components/ThemeToggle';
 import { SheetTabs } from './components/SheetTabs';
 import { LoginScreen } from './components/LoginScreen';
 import { BrandLogo } from './components/BrandLogo';
@@ -18,7 +20,7 @@ import { getNextActionColumn } from './utils/row';
 import { isOverdue, isDueToday } from './utils/date';
 import './App.css';
 
-type Tab = 'table' | 'calendar' | 'calls' | 'search' | 'linkedin';
+type Tab = 'table' | 'calendar' | 'calls' | 'search' | 'linkedin' | 'email';
 
 function App() {
   const token = useAuthStore((s) => s.token);
@@ -231,6 +233,7 @@ function App() {
                 {activeTable.name}
               </h1>
             )}
+            <ThemeToggle />
             <button
               type="button"
               className="mobile-nav-toggle"
@@ -302,6 +305,16 @@ function App() {
               </button>
               <button
                 type="button"
+                className={tab === 'email' ? 'active' : ''}
+                onClick={() => {
+                  setTab('email');
+                  setMobileNavOpen(false);
+                }}
+              >
+                Laiškai
+              </button>
+              <button
+                type="button"
                 className="logout-btn"
                 onClick={() => {
                   logout();
@@ -360,6 +373,11 @@ function App() {
                 key. */}
             <div className={`tab-panel ${tab === 'linkedin' ? 'tab-panel-active' : ''}`}>
               <LinkedInView />
+            </div>
+            {/* Same reasoning as Search/LinkedIn above — not scoped to the
+                active table, so no tableReady gate or activeTableId key. */}
+            <div className={`tab-panel ${tab === 'email' ? 'tab-panel-active' : ''}`}>
+              <EmailGeneratorView />
             </div>
             <div className={`tab-panel ${tab === 'table' ? 'tab-panel-active' : ''}`}>
               {tableReady ? (

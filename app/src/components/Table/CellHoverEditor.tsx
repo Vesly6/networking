@@ -25,6 +25,7 @@ import { requestCallback, sendSms, type SmsLogRecord } from '../../utils/callsAp
 import { insertIntoSoftphone } from '../../utils/softphoneBridge';
 import { phoneMatchKey } from '../../utils/phoneMatch';
 import { randomUUID } from '../../utils/uuid';
+import { contrastTextColor } from '../../utils/color';
 import { useToastStore } from '../../store/useToastStore';
 import { confirmDialog } from '../../store/useConfirmStore';
 import { getAllTranscriptions, saveSmsLogEntry, getAllSmsLog } from '../../db/db';
@@ -140,16 +141,57 @@ const NOTE_TAG_COLORS: Record<string, string> = Object.fromEntries(NOTE_TAGS.map
 const NEATSILIEPE_SUFFIX = 'neatsiliepė';
 const NEATSILIEPE_COLOR = '#e2e2e2';
 
-// Same purpose as NOTE_TAG_COLORS above, extended to also recognize a
-// neatsiliepė entry — those don't have a fixed label (the contact's name is
-// part of the text), so an exact-match lookup alone can't find them; a
-// suffix check is the next best thing without inventing a separate stored
-// "this entry is a neatsiliepė" flag for what's still fundamentally just
-// free text.
-function getHistoryEntryColor(text: string): string | undefined {
-  if (NOTE_TAG_COLORS[text]) return NOTE_TAG_COLORS[text];
-  if (text.endsWith(` ${NEATSILIEPE_SUFFIX}`)) return NEATSILIEPE_COLOR;
-  return undefined;
+// Same shape as neatsiliepė above, but the contact's name goes *after* the
+// tag instead of before ("LinkedIn užklausa Andrius Ivanaitis", not
+// "Andrius Ivanaitis LinkedIn užklausa") — matches how the request itself
+// reads ("sent a LinkedIn request to X"), on explicit request. A distinct
+// LinkedIn-blue-tinted pastel so it doesn't visually blend with "Laiškas"
+// above (#e3ecf7), which is close but not identical.
+const LINKEDIN_REQUEST_PREFIX = 'LinkedIn užklausa';
+const LINKEDIN_REQUEST_COLOR = '#d6e7f7';
+
+interface TaggedEntry {
+  color: string;
+  /** Just the fixed tag word/phrase — never the name/rest of the text. */
+  tagLabel: string;
+  /** Everything besides the tag itself (a contact's name for neatsiliepė/
+   * LinkedIn entries, '' for a plain fixed-label tag like "Skambutis"). */
+  restText: string;
+  tagPosition: 'prefix' | 'suffix' | 'whole';
+}
+
+// On request — a tagged entry used to color its *entire* row's background,
+// which read as "the whole line is shouting one color" for an entry that's
+// mostly a name ("Andrius Ivanaitis neatsiliepė"). Splitting the tag word
+// out from the rest of the text lets the render below show it as a small
+// chip next to plain text instead, closer to how the quick-tag buttons
+// above already look. This is purely a *display* change — entries are
+// still stored as one plain string (parseNoteHistory/addNoteEntry
+// untouched), this just parses that same string differently when
+// rendering; a prefix/suffix check is still the only way to find a
+// neatsiliepė/LinkedIn-request entry, since neither has a fixed stored
+// flag for it — see the original getHistoryEntryColor this replaced.
+function parseTaggedEntry(text: string): TaggedEntry | null {
+  if (NOTE_TAG_COLORS[text]) {
+    return { color: NOTE_TAG_COLORS[text], tagLabel: text, restText: '', tagPosition: 'whole' };
+  }
+  if (text.endsWith(` ${NEATSILIEPE_SUFFIX}`)) {
+    return {
+      color: NEATSILIEPE_COLOR,
+      tagLabel: NEATSILIEPE_SUFFIX,
+      restText: text.slice(0, -(NEATSILIEPE_SUFFIX.length + 1)),
+      tagPosition: 'suffix',
+    };
+  }
+  if (text.startsWith(`${LINKEDIN_REQUEST_PREFIX} `)) {
+    return {
+      color: LINKEDIN_REQUEST_COLOR,
+      tagLabel: LINKEDIN_REQUEST_PREFIX,
+      restText: text.slice(LINKEDIN_REQUEST_PREFIX.length + 1),
+      tagPosition: 'prefix',
+    };
+  }
+  return null;
 }
 
 // Temporarily disabled on explicit request — kept (not deleted) since
@@ -180,6 +222,7 @@ export function CellHoverEditor({
   const [parsingContact, setParsingContact] = useState(false);
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [neatsiliepeAnchor, setNeatsiliepeAnchor] = useState<HTMLElement | null>(null);
+  const [linkedinRequestAnchor, setLinkedinRequestAnchor] = useState<HTMLElement | null>(null);
   const [editDraft, setEditDraft] = useState('');
   const [loadingLastSummary, setLoadingLastSummary] = useState(false);
   const [apolloModalOpen, setApolloModalOpen] = useState(false);
@@ -731,6 +774,7 @@ export function CellHoverEditor({
           onClick={(e) => {
             e.stopPropagation();
             setNeatsiliepeAnchor(null);
+            setLinkedinRequestAnchor(null);
           }}
         >
           {mode === 'note' ? (
@@ -791,7 +835,7 @@ export function CellHoverEditor({
                     type="button"
                     key={tag.label}
                     className="cell-hover-tag"
-                    style={{ backgroundColor: tag.color }}
+                    style={{ backgroundColor: tag.color, color: contrastTextColor(tag.color) }}
                     onClick={() => onAddNoteEntry(tag.label)}
                   >
                     {tag.label}
@@ -800,7 +844,7 @@ export function CellHoverEditor({
                 <button
                   type="button"
                   className="cell-hover-tag"
-                  style={{ backgroundColor: NEATSILIEPE_COLOR }}
+                  style={{ backgroundColor: NEATSILIEPE_COLOR, color: contrastTextColor(NEATSILIEPE_COLOR) }}
                   disabled={parseContacts(contactsRaw ?? '').length === 0}
                   title={
                     parseContacts(contactsRaw ?? '').length === 0
@@ -814,6 +858,24 @@ export function CellHoverEditor({
                   }}
                 >
                   {NEATSILIEPE_SUFFIX}
+                </button>
+                <button
+                  type="button"
+                  className="cell-hover-tag"
+                  style={{ backgroundColor: LINKEDIN_REQUEST_COLOR, color: contrastTextColor(LINKEDIN_REQUEST_COLOR) }}
+                  disabled={parseContacts(contactsRaw ?? '').length === 0}
+                  title={
+                    parseContacts(contactsRaw ?? '').length === 0
+                      ? 'Šioje eilutėje dar nėra kontaktų'
+                      : 'Pasirinkite, kam išsiųsta LinkedIn užklausa'
+                  }
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const anchorEl = e.currentTarget;
+                    setLinkedinRequestAnchor((prev) => (prev ? null : anchorEl));
+                  }}
+                >
+                  {LINKEDIN_REQUEST_PREFIX}
                 </button>
               </div>
               {neatsiliepeAnchor && (
@@ -840,18 +902,36 @@ export function CellHoverEditor({
                   })}
                 </Popover>
               )}
+              {linkedinRequestAnchor && (
+                <Popover anchor={linkedinRequestAnchor} width={220}>
+                  <div className="popover-field">
+                    <span>Kam išsiųsta LinkedIn užklausa?</span>
+                  </div>
+                  {parseContacts(contactsRaw ?? '').map((c) => {
+                    const { firstName, lastName } = contactTextToFields(c.text);
+                    const name = `${firstName} ${lastName}`.trim() || c.text;
+                    return (
+                      <button
+                        key={c.id}
+                        type="button"
+                        className="date-cell-contact-option"
+                        onClick={() => {
+                          onAddNoteEntry(`${LINKEDIN_REQUEST_PREFIX} ${name}`);
+                          setLinkedinRequestAnchor(null);
+                        }}
+                      >
+                        {name}
+                      </button>
+                    );
+                  })}
+                </Popover>
+              )}
               {parseNoteHistory(value).length > 0 && (
                 <div className="cell-hover-history">
-                  {parseNoteHistory(value).map((entry) => (
-                    <div
-                      key={entry.id}
-                      className="cell-hover-history-entry"
-                      style={
-                        getHistoryEntryColor(entry.text)
-                          ? { backgroundColor: getHistoryEntryColor(entry.text), borderRadius: '6px' }
-                          : undefined
-                      }
-                    >
+                  {parseNoteHistory(value).map((entry) => {
+                    const tagged = parseTaggedEntry(entry.text);
+                    return (
+                    <div key={entry.id} className="cell-hover-history-entry">
                       {entry.createdAt > 0 && (
                         <div className="cell-hover-history-time">{formatHistoryTimestamp(entry.createdAt)}</div>
                       )}
@@ -881,7 +961,47 @@ export function CellHoverEditor({
                             className="cell-hover-history-text cell-hover-history-text-button"
                             onClick={() => startEditingNote(entry.id, entry.text)}
                           >
-                            {entry.text}
+                            {/* On request — a tag used to color the whole
+                                entry's background, which read as "the
+                                whole line shouting one color" for an
+                                entry that's mostly a name ("Andrius
+                                Ivanaitis neatsiliepė"). Now only the tag
+                                word itself renders as a small colored
+                                chip (matching the quick-tag buttons
+                                above), with any name/rest of the text
+                                staying plain — the entry itself is never
+                                colored anymore, so it no longer needs its
+                                own contrastTextColor fix either. */}
+                            {!tagged ? (
+                              entry.text
+                            ) : tagged.tagPosition === 'suffix' ? (
+                              <>
+                                {tagged.restText && `${tagged.restText} `}
+                                <span
+                                  className="cell-hover-history-tag-chip"
+                                  style={{ backgroundColor: tagged.color, color: contrastTextColor(tagged.color) }}
+                                >
+                                  {tagged.tagLabel}
+                                </span>
+                              </>
+                            ) : tagged.tagPosition === 'prefix' ? (
+                              <>
+                                <span
+                                  className="cell-hover-history-tag-chip"
+                                  style={{ backgroundColor: tagged.color, color: contrastTextColor(tagged.color) }}
+                                >
+                                  {tagged.tagLabel}
+                                </span>
+                                {tagged.restText && ` ${tagged.restText}`}
+                              </>
+                            ) : (
+                              <span
+                                className="cell-hover-history-tag-chip"
+                                style={{ backgroundColor: tagged.color, color: contrastTextColor(tagged.color) }}
+                              >
+                                {tagged.tagLabel}
+                              </span>
+                            )}
                           </button>
                         )}
                         <button
@@ -896,7 +1016,8 @@ export function CellHoverEditor({
                         </button>
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </>

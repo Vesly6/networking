@@ -24,6 +24,7 @@ import {
   suggestLinkedInReply,
 } from './openai.js';
 import { SerperError, searchSocialProfiles } from './serper.js';
+import { EmailGenerateError, generateEmail } from './anthropic.js';
 import {
   loadTables,
   getTable,
@@ -414,6 +415,49 @@ app.post(
       return;
     }
     const result = await parseContactText(text);
+    res.json(result);
+  }),
+);
+
+// Email Generator tab (EmailGeneratorView.tsx) — ported from a standalone
+// Chrome extension (Desktop/Email-Extention) that called the Anthropic API
+// directly from the browser with a user-supplied key in chrome.storage.
+// See anthropic.ts's own doc comment for why the key now lives here
+// instead, same as every other AI provider this app already talks to.
+app.post(
+  '/api/email/generate',
+  asyncHandler(async (req, res) => {
+    const mode = req.body?.mode;
+    const lang = req.body?.lang;
+    const model = req.body?.model;
+    const instructions = typeof req.body?.instructions === 'string' ? req.body.instructions.trim() : '';
+    if (!['new', 'reply', 'reminder'].includes(mode)) {
+      res.status(400).json({ error: 'Invalid "mode" — must be "new", "reply", or "reminder"' });
+      return;
+    }
+    if (!['lt', 'en'].includes(lang)) {
+      res.status(400).json({ error: 'Invalid "lang" — must be "lt" or "en"' });
+      return;
+    }
+    if (!['claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'].includes(model)) {
+      res.status(400).json({ error: 'Invalid "model"' });
+      return;
+    }
+    if (!instructions) {
+      res.status(400).json({ error: 'Missing "instructions"' });
+      return;
+    }
+    const clientEmail = typeof req.body?.clientEmail === 'string' ? req.body.clientEmail.trim() : '';
+    if (mode === 'reply' && !clientEmail) {
+      res.status(400).json({ error: 'Missing "clientEmail" for reply mode' });
+      return;
+    }
+    const clientHistory = typeof req.body?.clientHistory === 'string' ? req.body.clientHistory.trim() : '';
+    if (mode === 'reminder' && !clientHistory) {
+      res.status(400).json({ error: 'Missing "clientHistory" for reminder mode' });
+      return;
+    }
+    const result = await generateEmail({ mode, lang, model, instructions, clientEmail, clientHistory });
     res.json(result);
   }),
 );
@@ -1222,6 +1266,11 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
   }
   if (err instanceof SerperError) {
     console.error('serper.dev error:', err.message);
+    res.status(502).json({ error: err.message });
+    return;
+  }
+  if (err instanceof EmailGenerateError) {
+    console.error('Anthropic error:', err.message);
     res.status(502).json({ error: err.message });
     return;
   }

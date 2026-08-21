@@ -5,6 +5,7 @@ import { confirmDialog } from '../../store/useConfirmStore';
 import { Popover } from '../Popover';
 import { ColorInput } from '../ColorInput';
 import { TYPE_LABELS } from '../../utils/columnTypeLabels';
+import { contrastTextColor } from '../../utils/color';
 
 interface ColumnMenuProps {
   column: Column;
@@ -58,7 +59,7 @@ export function ColumnMenu({ column, anchor, onClose }: ColumnMenuProps) {
             {options.map((opt) => {
               const color = column.optionColors?.[opt];
               return (
-                <span key={opt} className="chip" style={color ? { backgroundColor: color } : undefined}>
+                <span key={opt} className="chip" style={color ? { backgroundColor: color, color: contrastTextColor(color) } : undefined}>
                   <ColorInput
                     className="chip-color"
                     title="Pasirinkti spalvą"
