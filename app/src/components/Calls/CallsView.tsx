@@ -3,8 +3,7 @@ import { useCallsStore } from '../../store/useCallsStore';
 import { useToastStore } from '../../store/useToastStore';
 import { useTableStore } from '../../store/useTableStore';
 import { phoneMatchKey } from '../../utils/phoneMatch';
-import { getPrimaryLabel, getColumnByType } from '../../utils/row';
-import { parseContacts, extractPhoneNumber, contactTextToFields } from '../../utils/contacts';
+import { buildPhoneIndex } from '../../utils/rowPhoneIndex';
 import { CallRow } from './CallRow';
 import { CallsStatsView } from './CallsStatsView';
 import { SmsInboxView } from './SmsInboxView';
@@ -118,54 +117,13 @@ export function CallsView({ onJumpToRow, onJumpToContact }: CallsViewProps) {
     if (error) showToast(error);
   }, [error, showToast]);
 
-  // Maps a phone-number match key (see utils/phoneMatch.ts) to the row it
-  // came from, built from every `phone`-type column across the active
-  // table — so a call's destination can be linked back to "the" company
-  // row without needing an explicit, user-maintained link anywhere. Carries
-  // the company label alongside the id so CallRow doesn't need its own
-  // useTableStore lookup just to show which company matched.
-  const phoneToRow = useMemo(() => {
-    const map = new Map<string, { rowId: string; label: string }>();
-    const phoneColumns = columns.filter((c) => c.type === 'phone');
-    if (phoneColumns.length === 0) return map;
-    for (const row of rows) {
-      for (const col of phoneColumns) {
-        const key = phoneMatchKey(row.cells[col.id] ?? '');
-        if (key) map.set(key, { rowId: row.id, label: getPrimaryLabel(row, columns) });
-      }
-    }
-    return map;
-  }, [columns, rows]);
-
-  // Same idea as phoneToRow above, but one level more specific: a missed
-  // call's number often belongs to a *person*, not the row's own Phone
-  // column (a company usually has one Phone field but a Contacts column
-  // can hold several people, each with their own number embedded in
-  // freeform text) — added on explicit request ("я хочу быстро найти в
-  // моих контактах, о кого именно я пропустил звонок"). Scans every entry
-  // of the table's one contact-type column (see CLAUDE.md: at most one in
-  // practice), pulling a phone-shaped number out of each entry's freeform
-  // text via extractPhoneNumber() — the same regex the click-to-call
-  // buttons in CellHoverEditor already use for this exact purpose.
-  const phoneToContact = useMemo(() => {
-    const map = new Map<string, { rowId: string; columnId: string; contactId: string; label: string }>();
-    const contactColumn = getColumnByType(columns, 'contact');
-    if (!contactColumn) return map;
-    for (const row of rows) {
-      const raw = row.cells[contactColumn.id];
-      if (!raw) continue;
-      for (const entry of parseContacts(raw)) {
-        const phone = extractPhoneNumber(entry.text);
-        if (!phone) continue;
-        const key = phoneMatchKey(phone);
-        if (!key) continue;
-        const { firstName, lastName } = contactTextToFields(entry.text);
-        const label = [firstName, lastName].filter(Boolean).join(' ') || entry.text;
-        map.set(key, { rowId: row.id, columnId: contactColumn.id, contactId: entry.id, label });
-      }
-    }
-    return map;
-  }, [columns, rows]);
+  // Maps a phone-number match key (see utils/phoneMatch.ts) to the row/
+  // contact it came from — built once here and reused by
+  // IncomingCallBanner.tsx for the live-ringing case, see
+  // utils/rowPhoneIndex.ts's own doc comment for the shared shape/
+  // reasoning (phoneToRow from `phone`-type columns, phoneToContact from
+  // a person embedded in a `contact`-type column's freeform text).
+  const { phoneToRow, phoneToContact } = useMemo(() => buildPhoneIndex(columns, rows), [columns, rows]);
 
   const summary = useMemo(() => {
     if (calls.length === 0) return null;

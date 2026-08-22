@@ -1,6 +1,8 @@
 import { useEffect } from 'react';
 import { fetchWebrtcKey } from '../utils/webrtcApi';
 import { useToastStore } from '../store/useToastStore';
+import { useTableStore } from '../store/useTableStore';
+import { startIncomingCallWatcher } from '../utils/incomingCallBridge';
 
 // Zadarma's widget loader (app/index.html) defines this on `window` — it's
 // a plain classic <script>, not an npm package, so there's no type for it
@@ -105,6 +107,21 @@ export function Softphone() {
     // re-render would re-init the widget (and re-fetch/burn a new key)
     // for no reason.
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Watches for a live incoming call — a separate effect from the widget
+  // init above (own cleanup, doesn't wait on/depend on that one
+  // succeeding) so a slow or failed widget load never blocks this. Reads
+  // useTableStore lazily (getState(), not a subscription) each time a call
+  // actually rings, so a match always runs against whatever table is
+  // currently loaded at that moment, not whatever was active when this
+  // component first mounted.
+  useEffect(() => {
+    if (!SOFTPHONE_ENABLED) return;
+    return startIncomingCallWatcher(() => {
+      const { columns, rows } = useTableStore.getState();
+      return { columns, rows };
+    });
   }, []);
 
   return null;

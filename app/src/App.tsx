@@ -12,6 +12,7 @@ import { LinkedInView } from './components/LinkedIn/LinkedInView';
 import { InstantlyView } from './components/Instantly/InstantlyView';
 import { EmailGeneratorView } from './components/Email/EmailGeneratorView';
 import { LessonsView } from './components/Lessons/LessonsView';
+import { IncomingCallBanner } from './components/IncomingCallBanner';
 import { Toast } from './components/Toast';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { Softphone } from './components/Softphone';
@@ -185,6 +186,7 @@ function App() {
           down and reconnecting the widget (burning a fresh 72h key) every
           time you go back to the workspace list and open a table again. */}
       <Softphone />
+      <IncomingCallBanner onJumpToRow={handleJumpToRow} onJumpToContact={handleJumpToContact} />
       <ConfirmDialog />
       {loggedInViaRecovery && (
         <div className="recovery-banner">

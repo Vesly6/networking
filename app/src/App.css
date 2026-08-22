@@ -56,6 +56,92 @@
   margin-left: auto;
 }
 
+/* Live incoming-call banner (IncomingCallBanner.tsx) — fixed, not inline
+   flow, since it has to be visible instantly regardless of scroll
+   position or which tab is open the moment a real call starts ringing.
+   Deliberately more prominent than a plain Toast (bigger, doesn't
+   auto-dismiss, real border/shadow) — this is time-sensitive, "someone is
+   calling you right now" information, not a routine confirmation. */
+.incoming-call-banner {
+  position: fixed;
+  top: 1rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.7em 0.8em 0.7em 1em;
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  max-width: min(92vw, 480px);
+  animation: incoming-call-banner-in 0.2s ease-out;
+}
+@keyframes incoming-call-banner-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -12px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+.incoming-call-banner-icon {
+  font-size: 1.3rem;
+  flex-shrink: 0;
+}
+.incoming-call-banner-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+.incoming-call-banner-title {
+  font-weight: 700;
+  font-size: 0.92rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.incoming-call-banner-number {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+.incoming-call-banner-jump {
+  flex-shrink: 0;
+  font-size: 0.82rem;
+  padding: 0.4em 0.7em;
+  border-radius: 6px;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  border: none;
+  white-space: nowrap;
+}
+.incoming-call-banner-close {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.95rem;
+  padding: 0.2em 0.3em;
+}
+.incoming-call-banner-close:hover {
+  color: var(--text);
+}
+@media (max-width: 640px) {
+  .incoming-call-banner {
+    top: 0.5rem;
+    max-width: 94vw;
+    padding: 0.6em 0.6em 0.6em 0.8em;
+  }
+  .incoming-call-banner-title {
+    font-size: 0.85rem;
+  }
+}
+
 .recovery-banner {
   display: flex;
   align-items: center;
