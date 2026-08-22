@@ -37,8 +37,8 @@ export function WorkspaceView({ onOpenTable }: WorkspaceViewProps) {
     };
   }, [tables]);
 
-  const handleCreate = () => {
-    const id = createTable(`Lentelė ${tables.length + 1}`);
+  const handleCreate = async () => {
+    const id = await createTable(`Lentelė ${tables.length + 1}`);
     onOpenTable(id);
   };
 

@@ -23,6 +23,7 @@ import { CsvImportMapping } from './CsvImportMapping';
 import { ColumnHeaderMenu } from './ColumnHeaderMenu';
 import { RowHeaderMenu } from './RowHeaderMenu';
 import { HiddenColumnsPopover } from './HiddenColumnsPopover';
+import { HiddenRowsPopover } from './HiddenRowsPopover';
 import { FormulaBar } from '../FormulaBar';
 import { Popover } from '../Popover';
 import { parseCsvFile, exportRowsToCsv, downloadCsv } from '../../utils/csv';
@@ -96,6 +97,26 @@ function computeFillRange(origin: CellPos, current: CellPos): CellPos[] {
   return cells;
 }
 
+/** Binary search over a sorted, contiguous list of [start, end) ranges —
+ * the shape both TanStack Virtual's own VirtualItem[] (rows) and a plain
+ * cumulative column-width list (columns, built below) share — for the
+ * index whose range contains `offset`. Used by the row/column header
+ * drag-select auto-follow effect below to compute "which row/column is
+ * the cursor over" directly from pointer position, rather than from a
+ * per-cell mouseenter (see that effect's own doc comment for why). */
+function indexAtOffset(ranges: { start: number; end: number }[], offset: number, count: number): number {
+  if (count <= 0) return 0;
+  const n = Math.min(count, ranges.length);
+  let lo = 0;
+  let hi = n - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (ranges[mid].end <= offset) lo = mid + 1;
+    else hi = mid;
+  }
+  return Math.min(count - 1, Math.max(0, lo));
+}
+
 // Search text survives a full page reload (not just switching tabs — see
 // App.tsx's tab-panel comment for that half of "my work keeps
 // disappearing"), keyed per table id so a filter left over in one table
@@ -154,6 +175,7 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
   const columns = useTableStore((s) => s.columns);
   const rows = useTableStore((s) => s.rows);
   const hiddenColumns = columns.filter((c) => c.hidden);
+  const hiddenRows = rows.filter((r) => r.hidden);
   // For the next-action-date cell's "who are you calling" picker — computed
   // once per render here rather than per-cell, since it only depends on
   // `columns` (same reasoning as any other columns.find()-derived value).
@@ -240,6 +262,7 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
   const [columnContextMenu, setColumnContextMenu] = useState<{ x: number; y: number; targetIds: string[] } | null>(null);
   const [rowContextMenu, setRowContextMenu] = useState<{ x: number; y: number; targetIds: string[] } | null>(null);
   const [hiddenColumnsAnchor, setHiddenColumnsAnchor] = useState<HTMLElement | null>(null);
+  const [hiddenRowsAnchor, setHiddenRowsAnchor] = useState<HTMLElement | null>(null);
   const [openMenu, setOpenMenu] = useState<{ columnId: string; anchor: HTMLElement } | null>(null);
   const [colorPickerAnchor, setColorPickerAnchor] = useState<HTMLElement | null>(null);
   const [recentColors, setRecentColors] = useState<string[]>(() => loadRecentColors());
@@ -456,7 +479,13 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
   // action, e.g. manual drag), and this memo only needs to apply the
   // search filter.
   const filteredSortedRows = useMemo(() => {
-    if (!search.trim()) return rows;
+    // Hidden rows (RowHeaderMenu's "Slėpti eilutę" — see Row.hidden in
+    // types.ts) are excluded from the rendered/virtualized grid entirely,
+    // same as a search-filtered-out row already was — the data itself is
+    // untouched (still in `rows`, still in CSV export, which reads `rows`
+    // directly rather than this memo).
+    const visible = rows.filter((r) => !r.hidden);
+    if (!search.trim()) return visible;
     const q = search.trim().toLowerCase();
     // Phone numbers get typed/stored in wildly different formats
     // ("+370 640 11013" vs "37064011013" vs a bare "64011013") — a plain
@@ -468,7 +497,7 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
     // cell in the table.
     const qDigits = normalizePhoneDigits(search);
     const phoneSearchActive = qDigits.length >= MIN_PHONE_SEARCH_DIGITS;
-    return rows.filter((row) =>
+    return visible.filter((row) =>
       Object.values(row.cells).some((v) => {
         if (!v) return false;
         if (v.toLowerCase().includes(q)) return true;
@@ -506,6 +535,127 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
     getItemKey: (index) => filteredSortedRows[index]?.id ?? index,
     overscan: 12,
   });
+
+  // Cumulative [start,end) width ranges for every column, in the same
+  // shape rowVirtualizer.measurementsCache already uses for rows — feeds
+  // indexAtOffset() below for column drag-select. Columns aren't
+  // virtualized (there are never thousands of them the way there can be
+  // rows), so this is just plain arithmetic, not a second virtualizer. A
+  // hidden column contributes zero width (visibility: collapse takes no
+  // layout space, matching how it's actually rendered — see the <col>
+  // rendering above), so the drag-follow logic naturally skips over it.
+  const columnOffsets = useMemo(() => {
+    let acc = 0;
+    return columns.map((col) => {
+      const width = col.hidden ? 0 : (col.width ?? DEFAULT_COLUMN_WIDTH);
+      const start = acc;
+      acc += width;
+      return { start, end: acc };
+    });
+  }, [columns]);
+  const columnOffsetsRef = useRef(columnOffsets);
+  columnOffsetsRef.current = columnOffsets;
+
+  // Row/column header drag-select: follows the cursor directly instead of
+  // relying solely on each row/column's own mouseenter. A real, reported
+  // regression: mouseenter only fires for elements actually receiving
+  // pointer events, and the row grid is virtualized (see its own doc
+  // comment above) — dragging a row-number selection past whatever's
+  // currently mounted (as few as ~13 rows on a typical viewport) produced
+  // no further mouseenter events at all, silently capping how far the
+  // drag could reach ("я могу только пометить первые 13 строк"). Columns
+  // have the same symptom for a different reason: they're all in the DOM
+  // (no column virtualization), but dragging past the horizontally-
+  // scrolled-out-of-view edge never auto-scrolled, so an off-screen
+  // column's mouseenter never fires either — content sliding under a
+  // stationary cursor doesn't dispatch mouse events in any browser, so
+  // auto-scroll alone (without this) wouldn't have been enough even for
+  // columns. Both are fixed the same way: track the live cursor position
+  // on every mousemove and, on every animation frame while a header drag
+  // is active, (a) auto-scroll the table when the cursor is near an edge
+  // and (b) recompute the selection directly from cursor position +
+  // current scroll offset via indexAtOffset(), instead of depending on
+  // any specific element receiving a mouse event. The existing mouseenter
+  // handlers (handleRowNumberMouseEnter/handleColLetterMouseEnter) are
+  // left in place — harmless, and they still fire correctly for whatever
+  // is currently rendered.
+  const lastDragClientRef = useRef<{ x: number; y: number } | null>(null);
+  const dragScrollFrameRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    const AUTO_SCROLL_MARGIN = 40;
+    const AUTO_SCROLL_MAX_SPEED = 18;
+
+    const applyDragSelection = () => {
+      const container = tableScrollRef.current;
+      const pos = lastDragClientRef.current;
+      if (!container || !pos) return;
+
+      if (isRowRangeDraggingRef.current) {
+        const tbody = container.querySelector('tbody');
+        if (tbody) {
+          const rect = tbody.getBoundingClientRect();
+          const count = filteredSortedRowsRef.current.length;
+          const index = indexAtOffset(rowVirtualizer.measurementsCache, pos.y - rect.top, count);
+          setRowRangeFocus(index);
+          setRangeFocus({ r: index, c: Math.max(0, columnsRef.current.length - 1) });
+        }
+      } else if (isColRangeDraggingRef.current) {
+        const gutter = container.querySelector('th.gutter-header');
+        if (gutter) {
+          const rect = gutter.getBoundingClientRect();
+          const count = columnsRef.current.length;
+          const index = indexAtOffset(columnOffsetsRef.current, pos.x - rect.right, count);
+          setColRangeFocus(index);
+          setRangeFocus({ r: Math.max(0, filteredSortedRowsRef.current.length - 1), c: index });
+        }
+      }
+    };
+
+    const tick = () => {
+      dragScrollFrameRef.current = null;
+      if (!isRowRangeDraggingRef.current && !isColRangeDraggingRef.current) return;
+      const container = tableScrollRef.current;
+      const pos = lastDragClientRef.current;
+      if (container && pos) {
+        const rect = container.getBoundingClientRect();
+        if (isRowRangeDraggingRef.current) {
+          if (pos.y < rect.top + AUTO_SCROLL_MARGIN) {
+            container.scrollTop -= Math.min(AUTO_SCROLL_MAX_SPEED, rect.top + AUTO_SCROLL_MARGIN - pos.y);
+          } else if (pos.y > rect.bottom - AUTO_SCROLL_MARGIN) {
+            container.scrollTop += Math.min(AUTO_SCROLL_MAX_SPEED, pos.y - (rect.bottom - AUTO_SCROLL_MARGIN));
+          }
+        } else if (isColRangeDraggingRef.current) {
+          if (pos.x < rect.left + AUTO_SCROLL_MARGIN) {
+            container.scrollLeft -= Math.min(AUTO_SCROLL_MAX_SPEED, rect.left + AUTO_SCROLL_MARGIN - pos.x);
+          } else if (pos.x > rect.right - AUTO_SCROLL_MARGIN) {
+            container.scrollLeft += Math.min(AUTO_SCROLL_MAX_SPEED, pos.x - (rect.right - AUTO_SCROLL_MARGIN));
+          }
+        }
+      }
+      applyDragSelection();
+      dragScrollFrameRef.current = requestAnimationFrame(tick);
+    };
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isRowRangeDraggingRef.current && !isColRangeDraggingRef.current) return;
+      lastDragClientRef.current = { x: e.clientX, y: e.clientY };
+      applyDragSelection();
+      if (dragScrollFrameRef.current === null) dragScrollFrameRef.current = requestAnimationFrame(tick);
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      if (dragScrollFrameRef.current !== null) cancelAnimationFrame(dragScrollFrameRef.current);
+    };
+    // Deliberately empty deps — everything read inside is a ref
+    // (filteredSortedRowsRef/columnsRef/columnOffsetsRef, the same
+    // always-current-ref pattern already used elsewhere in this file) or
+    // rowVirtualizer, which is stable across renders. This only needs to
+    // attach once.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /** Used by every "jump to this row" interaction (Calendar → Open in
    * table, the Name Box, newly-added rows) instead of the old
@@ -1738,6 +1888,22 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
         {hiddenColumnsAnchor && (
           <HiddenColumnsPopover anchor={hiddenColumnsAnchor} columns={columns} onClose={() => setHiddenColumnsAnchor(null)} />
         )}
+        {hiddenRows.length > 0 && (
+          <button
+            type="button"
+            title="Rodyti paslėptas eilutes"
+            onClick={(e) => {
+              e.stopPropagation();
+              const anchor = e.currentTarget;
+              setHiddenRowsAnchor((prev) => (prev ? null : anchor));
+            }}
+          >
+            🔒 Paslėpta eilučių: {hiddenRows.length}
+          </button>
+        )}
+        {hiddenRowsAnchor && (
+          <HiddenRowsPopover anchor={hiddenRowsAnchor} rows={rows} columns={columns} onClose={() => setHiddenRowsAnchor(null)} />
+        )}
         <button type="button" onClick={handleImportClick}>
           Importuoti CSV
         </button>
@@ -1898,7 +2064,7 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
                         ⋮
                       </button>
                       {openMenu?.columnId === col.id && (
-                        <ColumnMenu column={col} anchor={openMenu.anchor} onClose={() => setOpenMenu(null)} />
+                        <ColumnMenu column={col} columns={columns} anchor={openMenu.anchor} onClose={() => setOpenMenu(null)} />
                       )}
                     </div>
                   </th>

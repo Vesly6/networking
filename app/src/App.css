@@ -161,6 +161,28 @@
    there (workspace-header-actions vs. the nav/hamburger). Both instances
    read/write the same useThemeStore, so either one toggles the whole
    app's theme identically. */
+/* Persistent, app-wide — visible from any tab, not just while the Apollo
+   search modal/Paieška view happens to be mounted. See
+   usePendingPhoneSearchStore's own doc comment for the real bug this
+   fixes: a phone-reveal poll (Apollo's own docs: "can take several
+   minutes") is deliberately fire-and-poll, surviving the modal that
+   started it being closed — but the *visible* progress indicator used to
+   live in that same modal's local state, so closing it made an
+   actually-still-running search look like it had silently broken. */
+.pending-phone-search-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.25em 0.65em;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  background: var(--bg-alt);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
 .theme-toggle {
   border: 1px solid var(--border);
   background: transparent;
@@ -1670,6 +1692,41 @@ tr.row-drop-end td {
 }
 .cell-hover-new-entry-save:hover {
   background: var(--bg-hover);
+}
+
+/* 🎤 voice-note button, same row as the save button above (see
+   toggleVoiceNote in CellHoverEditor.tsx). Recording state gets a real,
+   hard-to-miss visual (red + a pulse) since this is a live mic — the user
+   needs to be able to tell at a glance whether it's actually listening. */
+.cell-hover-voice-btn {
+  flex: 0 0 auto;
+  border: none;
+  border-left: 1px solid var(--border);
+  background: var(--bg-alt);
+  color: var(--text-muted);
+  font-size: 1rem;
+  padding: 0.45em 0.7em;
+  align-self: stretch;
+}
+.cell-hover-voice-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+.cell-hover-voice-btn:disabled {
+  opacity: 0.6;
+}
+.cell-hover-voice-btn-recording {
+  background: var(--danger-bg);
+  color: var(--danger);
+  animation: cell-hover-voice-pulse 1.4s ease-in-out infinite;
+}
+@keyframes cell-hover-voice-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
 }
 
 /* Quick-log tag buttons under "Add a note…" (CellHoverEditor note mode) —
@@ -4240,6 +4297,1058 @@ tr.row-drop-end td {
   flex: 1;
 }
 
+/* --- Instantly tab (campaigns/leads/mailboxes/Unibox) — deliberately its
+   own class prefix rather than reusing .linkedin-*, even though the visual
+   language (subnav pills, list rows, status badges) is intentionally the
+   same: keeps the two unrelated features' CSS from becoming coupled, same
+   per-feature-prefix convention this app already uses everywhere
+   (.calls-*, .cell-hover-*, .sms-*). */
+.instantly-view {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  padding: 1rem 1.25rem;
+  overflow: auto;
+  /* No max-width cap (removed a 1300px one) — on a wide monitor that cap
+     itself was the real remaining source of empty space on the right,
+     separate from and on top of the bubble-width fix above: even with
+     the detail pane's own content filling that pane correctly, the whole
+     .instantly-view was still stopping short of the actual browser width
+     and leaving a fixed dead margin next to it. The simpler list panels
+     (Campaigns/Leads/Accounts) just get extra breathing room from this
+     too, not broken by it. */
+  width: 100%;
+  /* .tab-panel (App.tsx, the ancestor this sits inside) is absolutely
+     positioned with inset:0 over .app-main, which is itself flex:1 in the
+     app's own full-height shell — so 100% here is a real, bounded height,
+     not an arbitrary guess. Needed so .instantly-unibox-layout below can
+     flex-grow to fill exactly the remaining space and let its own 3
+     columns scroll independently, instead of this whole view scrolling
+     as a second, outer scroll context layered on top of theirs (a real,
+     reported bug: with two nested independent scrolls, a `position:
+     sticky` element pinned to the inner one could still drift within the
+     browser viewport whenever the outer one moved — the Send button in
+     the Unibox reply box going out of view was traced to exactly this). */
+  height: 100%;
+}
+
+.instantly-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.instantly-header h2 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.instantly-subnav {
+  display: flex;
+  gap: 0.4rem;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.6rem;
+}
+.instantly-subnav button {
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: 6px;
+  padding: 0.35em 0.7em;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+.instantly-subnav button.active {
+  background: var(--bg-alt);
+  color: var(--text);
+  border-color: var(--border);
+}
+.instantly-subnav-badge {
+  display: inline-block;
+  min-width: 1.2em;
+  padding: 0.05em 0.4em;
+  margin-left: 0.35em;
+  border-radius: 999px;
+  background: var(--danger);
+  color: var(--accent-contrast);
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.instantly-hint {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin: 0 0 0.5rem;
+}
+
+.instantly-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.instantly-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+.instantly-toolbar select {
+  padding: 0.45em 0.6em;
+  font-size: 0.85rem;
+}
+.instantly-toolbar input[type='search'],
+.instantly-toolbar input[type='text'] {
+  flex: 1;
+  min-width: 180px;
+  padding: 0.5em 0.7em;
+  font-size: 0.85rem;
+}
+
+.instantly-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+/* Scoped to the Unibox context specifically, not the base .instantly-list
+   rule above (shared with Campaigns/Accounts, which have no adjacent
+   detail pane to keep in view) — caps the thread list to the same height
+   as .instantly-unibox-detail-pane so the two columns scroll
+   independently side by side, instead of an unbounded list pushing
+   everything below it (including the detail pane) far down the page. */
+.instantly-unibox-main .instantly-list {
+  /* flex:1 + min-height:0, not a vh-based max-height guess — grows to
+     fill whatever's left in the column after the toolbar/search bar
+     above it (itself sized by .instantly-unibox-layout's real, bounded
+     row height now), and scrolls only its own overflow. */
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 0.2rem;
+}
+
+.instantly-row {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  padding: 0.6em 0.8em;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.instantly-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.instantly-row-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.instantly-row-subtitle {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.instantly-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
+.instantly-pill {
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.2em 0.6em;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.instantly-load-more {
+  align-self: center;
+  margin-top: 0.4rem;
+}
+
+.instantly-table-wrap {
+  overflow-x: auto;
+}
+.instantly-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+.instantly-table th {
+  text-align: left;
+  padding: 0.5em 0.6em;
+  border-bottom: 1px solid var(--border-strong);
+  color: var(--text-muted);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.instantly-table td {
+  padding: 0.5em 0.6em;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+.instantly-table tr:hover td {
+  background: var(--bg-hover);
+}
+
+.instantly-mailbox-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.instantly-mailbox-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.6rem 0.8rem;
+}
+.instantly-mailbox-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+.instantly-mailbox-form input {
+  padding: 0.45em 0.6em;
+  font-size: 0.85rem;
+}
+.instantly-mailbox-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.instantly-thread-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.7rem;
+  padding: 0.6em 0.8em;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  text-align: left;
+  width: 100%;
+}
+.instantly-thread-row.instantly-thread-unread {
+  border-color: var(--accent);
+  background: var(--bg-alt);
+}
+.instantly-thread-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.instantly-thread-subject {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.instantly-thread-preview {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.instantly-thread-meta {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.instantly-thread-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  /* No overflow-y/scroll of its own — a third nested scroll context here
+     (on top of .instantly-unibox-detail-pane's) fought with .instantly-
+     compose's position: sticky bottom:0 below (a sibling of this, not a
+     child), since sticky only holds against its own nearest scrolling
+     ancestor. One scroll for the whole pane — header + subject + these
+     bubbles + the compose box — is what makes "pinned to the bottom of
+     the pane" and "pinned to the bottom of the visible viewport" the
+     same thing. */
+}
+
+.instantly-thread-header-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+  flex: 1;
+}
+
+/* --- Unibox: sidebar (status filters) + tabs (Primary/Others), modeled
+   directly on a screenshot of Instantly's own real Unibox UI, on explicit
+   request ("один в один" — identical). */
+.instantly-unibox-layout {
+  display: flex;
+  /* Explicit, not just relying on flex's own row default — .instantly-panel
+     (also applied on this same root element) sets flex-direction: column,
+     and since both rules share one class's worth of specificity, the
+     cascade doesn't reliably favor this rule by source order alone. Found
+     live: without this, the sidebar/list/detail-pane silently stacked
+     vertically instead of side by side, pushing the detail pane thousands
+     of pixels below the fold once a long thread list rendered above it. */
+  flex-direction: row;
+  gap: 1.25rem;
+  /* stretch (the default), not flex-start — each column now manages its
+     own independent scroll (see .instantly-unibox-sidebar/-main/
+     -detail-pane below), which needs every column to actually take the
+     row's full height, not just its own content's natural height. */
+  align-items: stretch;
+  /* Fills exactly what's left in .instantly-view's own now-bounded
+     height (see .instantly-view's own comment), instead of growing with
+     its content — this, plus each column scrolling independently below,
+     is what removes the outer/inner nested-scroll conflict that made a
+     sticky-positioned element inside the detail pane unreliable. */
+  flex: 1;
+  min-height: 0;
+}
+
+/* Sidebar (filters) + thread list — a shared row layout only, NOT a
+   shared show/hide unit. Each of the two children collapses
+   independently (sidebarCollapsed/threadListCollapsed in
+   UniboxPanel.tsx, own header/caret each — see .instantly-unibox-block-
+   header below) — an earlier version collapsed both together as one
+   block, reverted on explicit request ("я хочу свернуть только статус...
+   хочу свернуть только среднюю" — collapsing one should never affect the
+   other). Fixed-ish width (not a percentage of the 3-column row like the
+   old 15%/16.2% split was) because this column's own width no longer
+   needs to be "whatever's left after the detail pane" — the detail pane
+   just grows to fill whatever this column isn't using (flex: 1 1 auto,
+   see .instantly-unibox-detail-pane below). */
+.instantly-unibox-list-col {
+  display: flex;
+  flex-direction: row;
+  gap: 1.25rem;
+  /* flex-basis: auto (shrink-to-fit its own children), NOT a fixed 440px
+     — a real, reported bug: with a fixed basis, collapsing both children
+     down to their ~32px caret width (see .instantly-unibox-block-
+     collapsed) left list-col itself still reserving 440px, so the detail
+     pane never actually grew into the reclaimed space — just a big dead
+     gap between the two collapsed carets and the detail pane. auto lets
+     this column's own width track its children's real combined width in
+     every state (both expanded, one collapsed, both collapsed), which
+     only works because both children now have their own fixed-ish
+     flex-basis instead of one of them (.instantly-unibox-main) relying on
+     flex-grow to fill an indeterminate parent — see its own rule below.
+     No min-width either, for the same reason: 340px would re-introduce
+     the identical dead-gap bug the moment both children collapse below
+     that. */
+  flex: 0 1 auto;
+  min-height: 0;
+}
+
+/* The small always-visible header/caret each of the two blocks
+   (.instantly-unibox-sidebar, .instantly-unibox-main) has at its own top
+   — clicking it toggles just that one block's own collapsed state,
+   independently of the other. Stays visible even when collapsed, since
+   it's the only way back. */
+.instantly-unibox-block-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  border: none;
+  background: transparent;
+  padding: 0.3em 0.2em;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  width: 100%;
+}
+.instantly-unibox-block-header:hover {
+  color: var(--text);
+}
+.instantly-unibox-block-header-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Collapsed: shrink to just enough width for the header's caret (desktop,
+   row layout) — the whole point being to give the *other* blocks (the
+   sibling column, the detail pane) the reclaimed space, not just hide
+   content while still occupying the same footprint. The label text drops
+   out at this width (see the media-query-free rule below scoping it to
+   collapsed state specifically), leaving just the caret as a compact,
+   still-clickable re-expand target. On mobile (column layout, see the
+   phone media query further down) the same class instead collapses
+   height down to just the header row — width doesn't apply there. */
+.instantly-unibox-sidebar.instantly-unibox-block-collapsed {
+  flex: 0 0 auto;
+  width: 32px;
+  min-width: 32px;
+  padding-right: 0;
+  overflow: hidden;
+}
+.instantly-unibox-main.instantly-unibox-block-collapsed {
+  flex: 0 0 auto;
+  min-width: 32px;
+}
+.instantly-unibox-block-collapsed .instantly-unibox-block-header-label {
+  display: none;
+}
+.instantly-unibox-block-collapsed .instantly-unibox-block-header {
+  justify-content: center;
+}
+
+.instantly-unibox-sidebar {
+  flex: 0 0 160px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  border-right: 1px solid var(--border);
+  padding-right: 1rem;
+  overflow-y: auto;
+}
+.instantly-unibox-sidebar-title {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-top: 0.6rem;
+}
+.instantly-unibox-sidebar-title:first-child {
+  margin-top: 0;
+}
+.instantly-unibox-sidebar select {
+  padding: 0.4em 0.5em;
+  font-size: 0.82rem;
+}
+
+.instantly-status-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+.instantly-status-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4em 0.5em;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  font-size: 0.85rem;
+  color: var(--text);
+  text-align: left;
+}
+.instantly-status-row:hover {
+  background: var(--bg-hover);
+}
+.instantly-status-row.active {
+  background: var(--bg-alt);
+  font-weight: 600;
+}
+.instantly-status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+.instantly-status-count {
+  margin-left: auto;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+.instantly-status-more {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.instantly-expand-caret {
+  display: inline-block;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  transition: transform 0.15s ease;
+  flex-shrink: 0;
+}
+.instantly-expand-caret-open {
+  transform: rotate(90deg);
+}
+
+/* The expanded "Kampanijos" search+list, on explicit request ("я могу
+   развернуть и нажать на какую-то конкретную компанию") — modeled on a
+   screenshot of Instantly's own "All Campaigns" panel. Indented under
+   its own toggle row rather than a separate popover, matching how
+   "Daugiau" (More) below it also expands in place. */
+.instantly-campaign-expand {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding-left: 0.6rem;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.instantly-campaign-expand input[type='search'] {
+  margin: 0.2rem 0 0.3rem;
+  padding: 0.35em 0.5em;
+  font-size: 0.8rem;
+}
+.instantly-campaign-expand .instantly-status-row {
+  font-size: 0.8rem;
+}
+
+.instantly-unibox-main {
+  /* A fixed-ish flex-basis (280px, roughly what this column ended up at
+     under the old fixed-440px list-col + flex-grow combination), NOT
+     flex-grow — a real, reported bug: flex-grow only fills whatever
+     *determinate* space its own parent (.instantly-unibox-list-col) has,
+     but that parent's own width is now itself shrink-to-fit its children
+     (see list-col's own comment on why) — a child that grows to fill an
+     auto-sized parent is a circular sizing problem browsers resolve in a
+     way that defeated the whole point of collapsing (list-col stayed wide
+     even with both children visually collapsed). Giving this column its
+     own concrete basis instead breaks that circularity: list-col's auto
+     width is now a straightforward sum of two independently-sized
+     children, and collapsing either one (down to ~32px, see
+     .instantly-unibox-block-collapsed) now actually shrinks list-col's
+     total width, freeing that space for .instantly-unibox-detail-pane's
+     own flex: 1 1 auto to grow into. */
+  flex: 0 1 280px;
+  min-width: 180px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  /* This column's own children are the toolbar/search bar (fixed height)
+     and .instantly-list (which now scrolls itself, see its own rule) —
+     min-height: 0 is required for that inner flex:1 child to actually be
+     allowed to shrink below its content's natural height instead of
+     forcing this whole column taller than the row. */
+  min-height: 0;
+}
+
+/* The open conversation, always rendered alongside the list (never
+   replacing it — an early explicit correction: "clicking a conversation
+   must NOT navigate away from the list", still true). flex: 1 1 auto (not
+   a fixed percentage) is what lets it actually grow into whatever space
+   the sidebar/thread-list blocks aren't using at the moment — including
+   the row's full width once both of those are collapsed via their own
+   headers (see .instantly-unibox-block-header/-collapsed above and
+   UniboxPanel.tsx's sidebarCollapsed/threadListCollapsed). */
+.instantly-unibox-detail-pane {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  border-left: 1px solid var(--border);
+  padding-left: 1.25rem;
+  /* No max-height: 80vh guess — this column now stretches to the row's
+     real height (see .instantly-unibox-layout's align-items: stretch)
+     and scrolls its own overflow within exactly that, which is also what
+     makes .instantly-compose's position: sticky bottom:0 (see its own
+     rule) land correctly: sticky needs an actual bounded, non-growing
+     scroll container to be meaningful, not one whose height is just
+     "however tall its own content happens to be." */
+  overflow-y: auto;
+}
+
+/* Unibox on a phone: the desktop layout is a 3-column row, each column
+   (sidebar, thread list, detail pane) scrolling *independently* within
+   one fixed-height shell — deliberate on desktop (see
+   .instantly-unibox-detail-pane's own comment on why), but a real,
+   reported source of bugs once flex-direction flips to column here: two
+   nested flex items each trying to auto-size themselves as if they were
+   still independently-scrolling *columns* — one now claiming a fixed
+   "width" as a *height* instead, the other shrink-computing its own
+   height against an ambiguously-auto-sized parent — repeatedly collapsed
+   to near-zero height or overflowed past their own container ("Unibox в
+   телефоне не оптимизирован", then later "выглядит не порядочно" once
+   overlapping text was actually visible in a screenshot). The fix that
+   actually holds: stop trying to fit sidebar + thread-list + detail pane
+   into one screen's worth of height with three nested independent
+   scrollers at all. On a phone, all three are plain content-height
+   blocks (flex: 0 0 auto, no grow, no shrink, nothing computed from a
+   parent's auto/indeterminate size) stacked normally, and .instantly-view
+   itself (which already has overflow: auto — see its own rule) is the
+   *only* scroll context, exactly like an ordinary scrolling web page.
+   Sidebar keeps its own capped-height internal scroll (max-height: 38vh)
+   since its filter list can genuinely run long and 38vh of it is already
+   a deliberate, reasonable cap — everything else just flows. */
+@media (max-width: 640px) {
+  .instantly-unibox-layout {
+    flex-direction: column;
+    gap: 0;
+    min-height: 0;
+    height: auto;
+  }
+  .instantly-unibox-list-col {
+    flex-direction: column;
+    flex: 0 0 auto;
+    width: 100%;
+    min-width: 0;
+    gap: 0.75rem;
+  }
+  .instantly-unibox-sidebar {
+    flex: 0 0 auto;
+    max-height: 38vh;
+    width: 100%;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    padding-right: 0;
+    padding-bottom: 0.75rem;
+  }
+  .instantly-unibox-main {
+    flex: 0 0 auto;
+    min-height: 0;
+    min-width: 0;
+  }
+  /* The thread list's own desktop rule (flex:1 + overflow-y:auto, see its
+     own comment) caps it to "whatever's left in a bounded column" and
+     scrolls internally — meaningless once the column itself isn't
+     height-bounded on mobile, and was part of the same collapse-to-
+     nothing bug above. Plain natural height here; .instantly-view scrolls
+     the whole page instead, same as browsing any ordinary list. */
+  .instantly-unibox-main .instantly-list {
+    flex: 0 0 auto;
+    min-height: 0;
+    max-height: none;
+    overflow-y: visible;
+  }
+  /* Collapsed on mobile means "shrink to just the header row," same as
+     desktop — but width stays 100% here (only height collapses, via no
+     content being rendered), overriding the desktop collapsed rule's
+     32px width which would otherwise win on specificity regardless of
+     viewport. */
+  .instantly-unibox-sidebar.instantly-unibox-block-collapsed,
+  .instantly-unibox-main.instantly-unibox-block-collapsed {
+    width: 100%;
+    min-width: 0;
+    max-height: none;
+  }
+  .instantly-unibox-detail-pane {
+    flex: 0 0 auto;
+    width: 100%;
+    border-left: none;
+    padding-left: 0;
+    overflow-y: visible;
+  }
+  /* The header row (☰ toggle, avatar, name/email, status pill, ✕) doesn't
+     fit on one line at phone width once the status <select> (native
+     chrome, can't shrink below its own text) is in the mix — wrapped, with
+     the select pushed to its own full-width second line via `order` so the
+     identity/close controls that matter most for orientation stay
+     together on the first line. */
+  .instantly-thread-detail-header {
+    flex-wrap: wrap;
+  }
+  .instantly-status-select {
+    order: 5;
+    flex: 1 1 100%;
+    margin-top: 0.3rem;
+  }
+}
+
+.instantly-unibox-tabs {
+  display: flex;
+  gap: 1.2rem;
+  border-bottom: 1px solid var(--border);
+}
+.instantly-unibox-tabs button {
+  border: none;
+  background: transparent;
+  padding: 0.4em 0.1em 0.6em;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+}
+.instantly-unibox-tabs button.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+.instantly-thread-status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  flex-shrink: 0;
+  margin-top: 0.4rem;
+}
+
+/* Stacked, not side-by-side — at the 15%-width list column (a deliberate,
+   large reallocation toward the detail pane, on request), a fixed-format
+   date string sitting next to the name on one row left almost no room
+   for the name itself, truncating real senders down to a single letter
+   ("S…", "J…"). Stacking gives the name the row's full width and puts
+   the date on its own smaller, muted line below instead. */
+.instantly-thread-top-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.05rem;
+}
+.instantly-thread-top-row .instantly-thread-meta {
+  font-size: 0.7rem;
+}
+.instantly-thread-subject-line {
+  font-size: 0.8rem;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.instantly-thread-needs-reply {
+  align-self: flex-start;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #c77a1e;
+}
+
+.instantly-thread-avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  background: var(--bg-alt);
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 0.9rem;
+  flex-shrink: 0;
+}
+
+.instantly-thread-detail-header {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+}
+
+.instantly-status-select {
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  padding: 0.3em 0.7em;
+  font-size: 0.78rem;
+  font-weight: 600;
+  background: var(--bg);
+}
+
+.instantly-thread-subject-heading {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.instantly-bubble-iframe {
+  width: 100%;
+  border: none;
+  /* Always white, never transparent, regardless of the app's own theme —
+     a real, reported bug: a transparent iframe let the dark-mode bubble
+     color show through behind the email's own text, and most real email
+     HTML never sets its own background (authored assuming a plain white
+     page), so its default-black text became black-on-dark-gray and
+     nearly unreadable. This is also just how every real email client
+     renders foreign HTML — always on its own fixed white card, regardless
+     of the surrounding UI's theme, specifically because inverting
+     arbitrary third-party HTML/CSS to match a dark theme is unreliable.
+     A rounded corner + border reads as "this is a distinct white card
+     inside the bubble," not a layout glitch. */
+  background: #fff;
+  border-radius: 6px;
+  display: block;
+}
+
+.instantly-filter-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.instantly-filter-checkbox input {
+  width: auto;
+}
+
+/* Chat-style bubbles, not a flat list of boxes — "ours" (a reply sent
+   from the connected mailbox) aligns right in accent color, "theirs" (the
+   actual client writing in) aligns left in neutral — the single biggest
+   thing that was missing to make this read as a real conversation instead
+   of a generic email log, on explicit request. Direction is derived from
+   isOutgoing() (UniboxPanel.tsx): from_address_email === eaccount. */
+.instantly-bubble-row {
+  display: flex;
+}
+.instantly-bubble-row-out {
+  justify-content: flex-end;
+}
+.instantly-bubble-row-in {
+  justify-content: flex-start;
+}
+.instantly-bubble {
+  /* `width`, not `max-width` — a flex item with no flex-grow shrinks to
+     fit its own content by default, so a plain max-width only sets a
+     ceiling that a short/narrow message body never actually reaches
+     (confirmed live: bubbles sat at ~54% of the pane despite a 96%
+     max-width). An explicit width forces it regardless of content length.
+     Was 75% originally (a plain chat-app convention) — a real, reported
+     problem once the detail pane grew wide: most of the pane sat empty
+     next to a narrow bubble, instead of the actual email content filling
+     the space available for reading/writing it. This is long-form email
+     text, not short chat messages, so filling the pane is more useful
+     here than the usual "leave room to visually distinguish a message"
+     reasoning. .instantly-bubble-row's justify-content: flex-start/
+     flex-end (see below) is still what keeps it flush left/right. */
+  width: 96%;
+  border-radius: 10px;
+  padding: 0.6em 0.8em;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.instantly-bubble-in {
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+}
+.instantly-bubble-out {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+.instantly-bubble-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.8rem;
+  font-size: 0.72rem;
+  opacity: 0.75;
+}
+.instantly-bubble-body {
+  font-size: 0.85rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.instantly-detail-close {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 1rem;
+  padding: 0.2em 0.4em;
+  flex-shrink: 0;
+}
+.instantly-detail-close:hover {
+  color: var(--text);
+}
+
+.instantly-thread-row-active {
+  border-color: var(--accent) !important;
+}
+
+/* Sticky, same as .instantly-compose itself below — on explicit
+   follow-up: fixing the Send button's own visibility inside an already-
+   open compose box wasn't the actual complaint, it was this row (the
+   "↩ Atsakyti" / "↪ Persiųsti" buttons you click *before* that box even
+   opens) — without this, a long thread still made you scroll through
+   every message just to find the trigger. Now it's always visible,
+   pinned to the bottom of .instantly-unibox-detail-pane's one scroll
+   area, exactly like the compose box that replaces it once clicked. */
+.instantly-compose-trigger-row {
+  position: sticky;
+  bottom: 0;
+  flex-shrink: 0;
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  border-top: 1px solid var(--border);
+  padding: 0.8rem 0;
+  background: var(--bg);
+  box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.12);
+}
+
+/* The Reply/Forward compose box — modeled directly on a screenshot of
+   Instantly's own real one, on explicit request ("один в один"). Pinned
+   to the bottom of .instantly-unibox-detail-pane's own scroll viewport
+   (a real, reported bug otherwise: opening it could leave the Send
+   button below the fold, with no reliable scroll-calculation fix — see
+   ComposePanel's own comment in UniboxPanel.tsx for the two approaches
+   tried and abandoned before this one). flex-shrink: 0 keeps its own
+   height fixed regardless of how little room .instantly-thread-detail
+   above it gets squeezed into. */
+.instantly-compose {
+  position: sticky;
+  bottom: 0;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  overflow: hidden;
+  margin-top: 0.5rem;
+  background: var(--bg);
+  box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.12);
+}
+.instantly-compose-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.6em 0.9em;
+  border-bottom: 1px solid var(--border);
+}
+.instantly-compose-header h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+.instantly-compose-close {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 1rem;
+}
+.instantly-compose-close:hover {
+  color: var(--text);
+}
+
+.instantly-compose-field {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.5em 0.9em;
+  border-bottom: 1px solid var(--border);
+}
+.instantly-compose-field > span:first-child {
+  flex: 0 0 55px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.instantly-compose-field input,
+.instantly-compose-field select {
+  flex: 1;
+  border: none;
+  padding: 0.2em 0;
+  font-size: 0.85rem;
+  background: transparent;
+}
+.instantly-compose-field input:focus,
+.instantly-compose-field select:focus {
+  outline: none;
+}
+
+.instantly-compose-to {
+  flex: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+.instantly-compose-to input {
+  flex: 1;
+  min-width: 140px;
+  border: none;
+  padding: 0.2em 0;
+  font-size: 0.85rem;
+  background: transparent;
+}
+.instantly-compose-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.15em 0.4em 0.15em 0.7em;
+  font-size: 0.8rem;
+}
+.instantly-compose-chip button {
+  border: none;
+  background: var(--border);
+  color: var(--text-muted);
+  border-radius: 999px;
+  width: 16px;
+  height: 16px;
+  font-size: 0.6rem;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+.instantly-compose-chip-fixed {
+  padding-right: 0.7em;
+  opacity: 0.85;
+}
+
+.instantly-compose-body {
+  min-height: 120px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 0.8em 0.9em;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+/* The quoted original message (see buildQuoteHtml in UniboxPanel.tsx) —
+   styled like the quote trail every real email client shows, so it
+   visually reads as "the conversation so far," not part of what you're
+   about to type. */
+.instantly-quote {
+  margin-top: 1rem;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+.instantly-quote blockquote {
+  margin: 0.4em 0 0;
+  padding-left: 0.8em;
+  border-left: 2px solid var(--border-strong);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.instantly-compose-body:empty::before {
+  content: attr(data-placeholder);
+  color: var(--text-muted);
+}
+.instantly-compose-body:focus {
+  outline: none;
+}
+
+.instantly-compose-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.5em 0.7em;
+  border-top: 1px solid var(--border);
+}
+.instantly-compose-toolbar button:not(.primary) {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  padding: 0.3em 0.5em;
+  font-size: 0.85rem;
+  min-width: 28px;
+}
+.instantly-compose-toolbar button:not(.primary):hover {
+  background: var(--bg-hover);
+  color: var(--text);
+  border-radius: 6px;
+}
+.instantly-compose-toolbar-spacer {
+  flex: 1;
+}
+
 .linkedin-delete-campaign {
   color: var(--danger);
 }
@@ -4964,5 +6073,303 @@ tr.row-drop-end td {
   .email-model-select {
     flex: 1 1 100%;
     margin-left: 0;
+  }
+}
+
+/* --- Instantly Analitika dashboard — modeled on a screenshot of
+   Instantly's own real Campaign Analytics page (KPI cards + area chart +
+   per-campaign table), on explicit request. */
+.instantly-analytics {
+  max-width: 100%;
+}
+
+.instantly-analytics-kpis {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.8rem;
+}
+.instantly-analytics-kpi {
+  flex: 1 1 160px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.8em 1em;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+}
+.instantly-analytics-kpi-label {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+.instantly-analytics-kpi-value {
+  font-size: 1.4rem;
+  font-weight: 700;
+}
+.instantly-analytics-kpi-extra {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.instantly-analytics-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+.instantly-analytics-chart-legend-note {
+  margin-left: auto;
+  font-style: italic;
+  opacity: 0.75;
+}
+.instantly-analytics-chart-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.instantly-analytics-chart-legend i {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+}
+
+/* Taller than the viewBox's own aspect ratio would naturally suggest —
+   see AnalyticsAreaChart's own comment on why a wide, short chart reads
+   as squashed once preserveAspectRatio="none" stretches a 700-wide
+   viewBox across a 1400px+ container. */
+.instantly-analytics-chart-wrap {
+  position: relative;
+}
+.instantly-analytics-chart {
+  width: 100%;
+  height: 340px;
+  display: block;
+  cursor: crosshair;
+}
+
+/* Plain HTML, not SVG <text> — see AnalyticsAreaChart's own comment on
+   why: text living inside the chart's preserveAspectRatio="none" SVG gets
+   stretched the same non-uniform amount as the lines, which is invisible
+   on a line but reads as visibly warped digits. Positioned by percentage
+   so each label still lines up under its own data point regardless of
+   the chart's actual rendered width. */
+.instantly-analytics-chart-labels {
+  position: relative;
+  height: 16px;
+  margin-top: 2px;
+}
+.instantly-analytics-chart-label {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  font-size: 10px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.instantly-analytics-tooltip {
+  position: absolute;
+  pointer-events: none;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  padding: 0.6em 0.8em;
+  font-size: 0.8rem;
+  white-space: nowrap;
+  z-index: 5;
+}
+.instantly-analytics-tooltip-title {
+  font-weight: 700;
+  margin-bottom: 0.3em;
+}
+.instantly-analytics-tooltip-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--text-muted);
+}
+.instantly-analytics-tooltip-row b {
+  color: var(--text);
+  margin-left: auto;
+  padding-left: 0.8rem;
+}
+.instantly-analytics-tooltip-row i {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.instantly-analytics-range {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.instantly-analytics-range select,
+.instantly-analytics-range input[type='date'] {
+  padding: 0.45em 0.6em;
+  font-size: 0.85rem;
+}
+
+.instantly-analytics-kpi-filter {
+  position: relative;
+  margin-left: auto;
+}
+.instantly-analytics-kpi-filter-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 0.3rem;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  padding: 0.5em;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  z-index: 5;
+  min-width: 200px;
+}
+.instantly-analytics-kpi-filter-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35em 0.5em;
+  font-size: 0.85rem;
+  border-radius: 6px;
+}
+.instantly-analytics-kpi-filter-item:hover {
+  background: var(--bg-hover);
+}
+.instantly-analytics-kpi-filter-item input {
+  width: auto;
+}
+
+.instantly-analytics-table-title {
+  margin: 0.5rem 0 0;
+  font-size: 1rem;
+}
+
+/* --- Pamokos (Lessons) tab — a static in-app how-to-use-the-program
+   reference (LessonsView.tsx, data/lessons.ts). Sidebar + article layout,
+   same shape as Unibox's own thread-list + detail-pane split, since this
+   is the same "browse a list, read the selected item full-width" pattern. */
+.lessons-view {
+  display: flex;
+  flex-direction: row;
+  gap: 1.5rem;
+  height: 100%;
+  padding: 1.25rem;
+  overflow: hidden;
+}
+
+.lessons-sidebar {
+  flex: 0 0 260px;
+  min-width: 200px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  border-right: 1px solid var(--border);
+  padding-right: 1rem;
+}
+.lessons-sidebar-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  margin-bottom: 0.6rem;
+}
+.lessons-sidebar-group-title {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: 0.3em 0.5em;
+}
+.lessons-sidebar-item {
+  text-align: left;
+  padding: 0.5em 0.7em;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 0.88rem;
+  line-height: 1.3;
+}
+.lessons-sidebar-item:hover {
+  background: var(--bg-hover);
+}
+.lessons-sidebar-item.active {
+  background: var(--bg-alt);
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.lessons-article {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  max-width: 760px;
+  padding-right: 0.5rem;
+}
+.lessons-article-title {
+  margin: 0 0 0.3rem;
+  font-size: 1.4rem;
+}
+.lessons-article-summary {
+  margin: 0 0 1.25rem;
+  color: var(--text-muted);
+  font-size: 0.95rem;
+}
+.lessons-article-video {
+  width: 100%;
+  border-radius: 8px;
+  margin-bottom: 1.25rem;
+  background: #000;
+}
+
+.lessons-section {
+  margin-bottom: 1.5rem;
+}
+.lessons-section h3 {
+  font-size: 1.05rem;
+  margin: 0 0 0.5rem;
+}
+.lessons-section p {
+  margin: 0 0 0.75rem;
+  line-height: 1.55;
+  font-size: 0.92rem;
+}
+.lessons-section-image {
+  display: block;
+  max-width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-top: 0.5rem;
+  box-shadow: var(--shadow);
+}
+
+@media (max-width: 640px) {
+  .lessons-view {
+    flex-direction: column;
+    overflow-y: auto;
+    padding: 0.9rem;
+  }
+  .lessons-sidebar {
+    flex: 0 0 auto;
+    max-height: 40vh;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    padding-right: 0;
+    padding-bottom: 0.75rem;
+  }
+  .lessons-article {
+    max-width: none;
   }
 }

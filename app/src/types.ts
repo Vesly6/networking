@@ -51,6 +51,15 @@ export interface Row {
   nextActionNote?: string;
   /** Row height in pixels; falls back to a default when unset. */
   height?: number;
+  /** Hidden from the grid but its data is untouched — still included in
+   * CSV export. Unhidden via the toolbar's hidden-rows indicator, same
+   * pattern as Column.hidden above (RowHeaderMenu's "Hide row" sets this,
+   * HiddenRowsPopover is the way back). Unlike a hidden column (which
+   * still needs a <col> slot for cell/count alignment across every row —
+   * see Column.hidden's own comment), a hidden row is simply excluded
+   * from the rendered/virtualized row list entirely; there's no analogous
+   * alignment concern for rows. */
+  hidden?: boolean;
   createdAt: number;
   updatedAt: number;
 }

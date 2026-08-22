@@ -33,7 +33,7 @@ export function SheetTabs() {
     setEditingName(name);
   };
 
-  const handleNewTable = () => setActiveTable(createTable(`Lentelė ${tables.length + 1}`));
+  const handleNewTable = async () => setActiveTable(await createTable(`Lentelė ${tables.length + 1}`));
 
   const handleContextMenu = (e: ReactMouseEvent, id: string, name: string) => {
     e.preventDefault();
@@ -101,7 +101,7 @@ export function SheetTabs() {
             className="context-menu-item"
             onClick={() => {
               setMenu(null);
-              handleNewTable();
+              void handleNewTable();
             }}
           >
             Nauja lentelė

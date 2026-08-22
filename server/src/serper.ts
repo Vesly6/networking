@@ -41,20 +41,47 @@ interface SerperSearchResponse {
   organic?: SerperOrganicResult[];
 }
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// A real, reported problem: a bare fetch() with no retry meant any
+// transient network blip (a DNS hiccup, a dropped connection — confirmed
+// separately that serper.dev itself and this account's API key both work
+// fine under normal conditions) surfaced immediately as a hard failure,
+// with the technical "Could not reach serper.dev" message shown directly
+// to the user ("это просто писать эрор" — asked for something that
+// doesn't read like the app itself is broken). Two quick retries with a
+// short backoff absorb a one-off blip without meaningfully slowing down
+// the common case where the first attempt just works; the user-facing
+// message on final failure is now a plain, non-technical Lithuanian
+// sentence, with the real cause still logged server-side (index.ts's
+// error-mapping middleware) for actual debugging.
+const MAX_ATTEMPTS = 3;
+
 async function serperSearch(query: string): Promise<SerperOrganicResult[]> {
-  let res: Response;
-  try {
-    res = await fetch('https://google.serper.dev/search', {
-      method: 'POST',
-      headers: { 'X-API-KEY': getApiKey(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ q: query }),
-    });
-  } catch {
-    throw new SerperError('Could not reach serper.dev');
+  let res: Response | undefined;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      res = await fetch('https://google.serper.dev/search', {
+        method: 'POST',
+        headers: { 'X-API-KEY': getApiKey(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ q: query }),
+      });
+      break;
+    } catch (err) {
+      if (attempt >= MAX_ATTEMPTS) {
+        console.error('serper.dev unreachable after retries:', err);
+        throw new SerperError('Nepavyko pasiekti paieškos paslaugos — pabandykite dar kartą');
+      }
+      await sleep(attempt * 500);
+    }
   }
-  const json = (await res.json().catch(() => null)) as (SerperSearchResponse & { message?: string }) | null;
-  if (!res.ok || !json) {
-    throw new SerperError(json?.message ?? `serper.dev request failed (HTTP ${res.status})`);
+  // A non-ok HTTP response (bad key, rate limit, malformed query) is a
+  // real answer from serper.dev, not a transient blip — surfaced
+  // immediately rather than retried, since retrying a permanent failure
+  // three times would only add latency for nothing.
+  const json = (await res!.json().catch(() => null)) as (SerperSearchResponse & { message?: string }) | null;
+  if (!res!.ok || !json) {
+    throw new SerperError(json?.message ?? `serper.dev request failed (HTTP ${res!.status})`);
   }
   return Array.isArray(json.organic) ? json.organic : [];
 }

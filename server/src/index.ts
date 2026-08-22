@@ -12,7 +12,7 @@ import {
   setWebhookHooks,
 } from './zadarma.js';
 import { insertIncomingSms, listIncomingSms } from './smsInbox/db.js';
-import { TranscriptionError, transcribeFromUrl } from './elevenlabs.js';
+import { TranscriptionError, transcribeFromUrl, transcribeFromBuffer } from './elevenlabs.js';
 import {
   ContactParseError,
   parseContactText,
@@ -40,6 +40,35 @@ import {
 } from './tableData/db.js';
 import { AuthError, checkCredentials, issueToken, requireAuth } from './auth.js';
 import { ApolloApiError, searchPeople, searchCompanies, enrichPerson, pollWebhookResult } from './apollo.js';
+import {
+  InstantlyApiError,
+  listCampaigns as listInstantlyCampaigns,
+  getCampaign as getInstantlyCampaign,
+  activateCampaign as activateInstantlyCampaign,
+  pauseCampaign as pauseInstantlyCampaign,
+  getCampaignAnalyticsOverview,
+  getCampaignAnalyticsDaily,
+  getCampaignsAnalyticsList,
+  listLeads as listInstantlyLeads,
+  createLead as createInstantlyLead,
+  updateLead as updateInstantlyLead,
+  deleteLead as deleteInstantlyLead,
+  addToBlockList,
+  listBlockList,
+  removeFromBlockList,
+  listAccounts as listInstantlyAccounts,
+  createAccount as createInstantlyAccount,
+  pauseAccount as pauseInstantlyAccount,
+  resumeAccount as resumeInstantlyAccount,
+  enableWarmup,
+  disableWarmup,
+  listEmails as listInstantlyEmails,
+  replyToEmail as replyToInstantlyEmail,
+  forwardEmail as forwardInstantlyEmail,
+  markThreadRead,
+  getUnreadCount,
+  updateLeadInterestStatus,
+} from './instantly.js';
 import { LinkedInBrowserError } from './linkedin/browser.js';
 import { LinkedInPageError, getLinkedInStatus, sendConnectionRequest, replyInThread, searchLeads } from './linkedin/page.js';
 import { logAction, getRecentActions } from './linkedin/db.js';
@@ -283,6 +312,29 @@ app.post(
       return;
     }
     const result = await transcribeFromUrl(link, lang);
+    res.json(result);
+  }),
+);
+
+// The Notes tab's 🎤 voice-note button (CellHoverEditor.tsx) — records via
+// the browser's own MediaRecorder, base64-encodes the resulting audio, and
+// posts it here (reusing the existing express.json({limit:'50mb'}) parser
+// rather than standing up a separate multipart/raw-body route for what's
+// normally a short clip). Always Lithuanian ('lt'), on explicit request —
+// no language picker, unlike the call-transcription route above, since
+// this one only ever has a single, known intended language. Same
+// synchronous "transcribe and return the text" shape as /transcribe above.
+app.post(
+  '/api/notes/transcribe',
+  asyncHandler(async (req, res) => {
+    const audioBase64 = req.body?.audioBase64;
+    const mimeType = typeof req.body?.mimeType === 'string' ? req.body.mimeType : 'audio/webm';
+    if (typeof audioBase64 !== 'string' || !audioBase64) {
+      res.status(400).json({ error: 'Trūksta įrašyto garso' });
+      return;
+    }
+    const buffer = Buffer.from(audioBase64, 'base64');
+    const result = await transcribeFromBuffer(buffer, mimeType, 'lt');
     res.json(result);
   }),
 );
@@ -545,6 +597,303 @@ app.get(
   '/api/apollo/webhook/:requestId',
   asyncHandler(async (req, res) => {
     const result = await pollWebhookResult(req.params.requestId);
+    res.json(result);
+  }),
+);
+
+// --- Instantly (cold-email campaigns/leads/mailboxes/Unibox) — a plain
+// typed proxy over instantly.ts, same shape as the Apollo routes above:
+// validation stays minimal (single-operator tool), the frontend builds a
+// well-formed request and this just forwards it with the API key attached
+// server-side.
+
+app.get(
+  '/api/instantly/campaigns',
+  asyncHandler(async (req, res) => {
+    const { limit, starting_after, search, status } = req.query;
+    const result = await listInstantlyCampaigns({
+      limit: limit ? Number(limit) : undefined,
+      starting_after: typeof starting_after === 'string' ? starting_after : undefined,
+      search: typeof search === 'string' ? search : undefined,
+      status: status ? Number(status) : undefined,
+    });
+    res.json(result);
+  }),
+);
+
+app.get(
+  '/api/instantly/campaigns/analytics/overview',
+  asyncHandler(async (req, res) => {
+    const { id, start_date, end_date } = req.query;
+    const result = await getCampaignAnalyticsOverview({
+      id: typeof id === 'string' ? id : undefined,
+      start_date: typeof start_date === 'string' ? start_date : undefined,
+      end_date: typeof end_date === 'string' ? end_date : undefined,
+    });
+    res.json(result);
+  }),
+);
+
+app.get(
+  '/api/instantly/campaigns/analytics/daily',
+  asyncHandler(async (req, res) => {
+    const { campaign_id, start_date, end_date } = req.query;
+    const result = await getCampaignAnalyticsDaily({
+      campaign_id: typeof campaign_id === 'string' ? campaign_id : undefined,
+      start_date: typeof start_date === 'string' ? start_date : undefined,
+      end_date: typeof end_date === 'string' ? end_date : undefined,
+    });
+    res.json(result);
+  }),
+);
+
+// Plural /list suffix specifically to avoid colliding with the existing
+// singular-style /campaigns/analytics/overview and .../daily routes above.
+app.get(
+  '/api/instantly/campaigns/analytics/list',
+  asyncHandler(async (req, res) => {
+    const { start_date, end_date } = req.query;
+    const result = await getCampaignsAnalyticsList({
+      start_date: typeof start_date === 'string' ? start_date : undefined,
+      end_date: typeof end_date === 'string' ? end_date : undefined,
+    });
+    res.json(result);
+  }),
+);
+
+app.get(
+  '/api/instantly/campaigns/:id',
+  asyncHandler(async (req, res) => {
+    const result = await getInstantlyCampaign(req.params.id);
+    res.json(result);
+  }),
+);
+
+// Real, live effect on the account's actual sending — the frontend gates
+// this behind an explicit button click, no confirmDialog (pausing/
+// resuming an existing campaign is the same category of action as this
+// app's own toolbar toggles, not a destructive one).
+app.post(
+  '/api/instantly/campaigns/:id/activate',
+  asyncHandler(async (req, res) => {
+    const result = await activateInstantlyCampaign(req.params.id);
+    res.json(result);
+  }),
+);
+
+app.post(
+  '/api/instantly/campaigns/:id/pause',
+  asyncHandler(async (req, res) => {
+    const result = await pauseInstantlyCampaign(req.params.id);
+    res.json(result);
+  }),
+);
+
+app.post(
+  '/api/instantly/leads/list',
+  asyncHandler(async (req, res) => {
+    const result = await listInstantlyLeads(req.body ?? {});
+    res.json(result);
+  }),
+);
+
+app.post(
+  '/api/instantly/leads',
+  asyncHandler(async (req, res) => {
+    const result = await createInstantlyLead(req.body ?? {});
+    res.json(result);
+  }),
+);
+
+app.patch(
+  '/api/instantly/leads/:id',
+  asyncHandler(async (req, res) => {
+    const result = await updateInstantlyLead(req.params.id, req.body ?? {});
+    res.json(result);
+  }),
+);
+
+app.delete(
+  '/api/instantly/leads/:id',
+  asyncHandler(async (req, res) => {
+    const result = await deleteInstantlyLead(req.params.id);
+    res.json(result);
+  }),
+);
+
+// The real "unsubscribe" mechanism — see instantly.ts's own doc comment
+// on why this (not lt_interest_status) is what Instantly's web app itself
+// calls "Unsubscribe". Close to permanent, so the frontend guards this
+// behind confirmDialog() before ever calling it.
+app.post(
+  '/api/instantly/block-list',
+  asyncHandler(async (req, res) => {
+    const { bl_value } = req.body ?? {};
+    if (!bl_value || typeof bl_value !== 'string') {
+      res.status(400).json({ error: 'bl_value (email or domain) is required' });
+      return;
+    }
+    const result = await addToBlockList(bl_value);
+    res.json(result);
+  }),
+);
+
+app.get(
+  '/api/instantly/block-list',
+  asyncHandler(async (req, res) => {
+    const { limit, starting_after, search } = req.query;
+    const result = await listBlockList({
+      limit: limit ? Number(limit) : undefined,
+      starting_after: typeof starting_after === 'string' ? starting_after : undefined,
+      search: typeof search === 'string' ? search : undefined,
+    });
+    res.json(result);
+  }),
+);
+
+app.delete(
+  '/api/instantly/block-list/:id',
+  asyncHandler(async (req, res) => {
+    const result = await removeFromBlockList(req.params.id);
+    res.json(result);
+  }),
+);
+
+app.get(
+  '/api/instantly/accounts',
+  asyncHandler(async (req, res) => {
+    const { limit, starting_after, search, status } = req.query;
+    const result = await listInstantlyAccounts({
+      limit: limit ? Number(limit) : undefined,
+      starting_after: typeof starting_after === 'string' ? starting_after : undefined,
+      search: typeof search === 'string' ? search : undefined,
+      status: status ? Number(status) : undefined,
+    });
+    res.json(result);
+  }),
+);
+
+// Custom SMTP/IMAP only (provider_code 1) — see instantly.ts's own doc
+// comment on CreateAccountBody for why Gmail/Outlook OAuth isn't built
+// here. Misconfigured credentials can disrupt real sending, so the
+// frontend's add-mailbox form is the one place validating every field is
+// present before this is ever called.
+app.post(
+  '/api/instantly/accounts',
+  asyncHandler(async (req, res) => {
+    const result = await createInstantlyAccount(req.body ?? {});
+    res.json(result);
+  }),
+);
+
+app.post(
+  '/api/instantly/accounts/:email/pause',
+  asyncHandler(async (req, res) => {
+    const result = await pauseInstantlyAccount(req.params.email);
+    res.json(result);
+  }),
+);
+
+app.post(
+  '/api/instantly/accounts/:email/resume',
+  asyncHandler(async (req, res) => {
+    const result = await resumeInstantlyAccount(req.params.email);
+    res.json(result);
+  }),
+);
+
+app.post(
+  '/api/instantly/accounts/warmup/enable',
+  asyncHandler(async (req, res) => {
+    const { emails } = req.body ?? {};
+    if (!Array.isArray(emails) || emails.length === 0) {
+      res.status(400).json({ error: 'emails (non-empty array) is required' });
+      return;
+    }
+    const result = await enableWarmup(emails);
+    res.json(result);
+  }),
+);
+
+app.post(
+  '/api/instantly/accounts/warmup/disable',
+  asyncHandler(async (req, res) => {
+    const { emails } = req.body ?? {};
+    if (!Array.isArray(emails) || emails.length === 0) {
+      res.status(400).json({ error: 'emails (non-empty array) is required' });
+      return;
+    }
+    const result = await disableWarmup(emails);
+    res.json(result);
+  }),
+);
+
+app.get(
+  '/api/instantly/emails',
+  asyncHandler(async (req, res) => {
+    const { limit, starting_after, search, campaign_id, is_unread, eaccount, has_reminder, scheduled_only } = req.query;
+    const result = await listInstantlyEmails({
+      limit: limit ? Number(limit) : undefined,
+      starting_after: typeof starting_after === 'string' ? starting_after : undefined,
+      search: typeof search === 'string' ? search : undefined,
+      campaign_id: typeof campaign_id === 'string' ? campaign_id : undefined,
+      is_unread: is_unread === 'true' ? true : is_unread === 'false' ? false : undefined,
+      eaccount: typeof eaccount === 'string' ? eaccount : undefined,
+      has_reminder: has_reminder === 'true' ? true : undefined,
+      scheduled_only: scheduled_only === 'true' ? true : undefined,
+    });
+    res.json(result);
+  }),
+);
+
+app.get(
+  '/api/instantly/emails/unread/count',
+  asyncHandler(async (_req, res) => {
+    const result = await getUnreadCount();
+    res.json(result);
+  }),
+);
+
+// Sends a real email to a real prospect the instant it succeeds — same
+// category as click-to-call/SMS elsewhere in this app. The frontend
+// guards this behind confirmDialog() before ever calling it.
+app.post(
+  '/api/instantly/emails/reply',
+  asyncHandler(async (req, res) => {
+    const result = await replyToInstantlyEmail(req.body ?? {});
+    res.json(result);
+  }),
+);
+
+app.post(
+  '/api/instantly/emails/threads/:threadId/mark-as-read',
+  asyncHandler(async (req, res) => {
+    const result = await markThreadRead(req.params.threadId);
+    res.json(result);
+  }),
+);
+
+// Same real-side-effect caveat as /emails/reply above.
+app.post(
+  '/api/instantly/emails/forward',
+  asyncHandler(async (req, res) => {
+    const result = await forwardInstantlyEmail(req.body ?? {});
+    res.json(result);
+  }),
+);
+
+// The editable status pill (Interested/Meeting Booked/Won/...) shown at
+// the top of an open Unibox conversation — a CRM-style status tag, not
+// the block-list unsubscribe mechanism above.
+app.post(
+  '/api/instantly/leads/interest-status',
+  asyncHandler(async (req, res) => {
+    const { leadEmail, interestValue, campaignId } = req.body ?? {};
+    if (!leadEmail || typeof leadEmail !== 'string') {
+      res.status(400).json({ error: 'leadEmail is required' });
+      return;
+    }
+    const result = await updateLeadInterestStatus({ leadEmail, interestValue: interestValue ?? null, campaignId });
     res.json(result);
   }),
 );
@@ -1261,6 +1610,11 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
   }
   if (err instanceof ApolloApiError) {
     console.error('Apollo API error:', err.message, err.raw);
+    res.status(502).json({ error: err.message });
+    return;
+  }
+  if (err instanceof InstantlyApiError) {
+    console.error('Instantly API error:', err.message, err.raw);
     res.status(502).json({ error: err.message });
     return;
   }

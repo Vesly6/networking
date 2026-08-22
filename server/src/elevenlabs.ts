@@ -31,25 +31,14 @@ function extensionFromUrl(url: string): string {
   return ext && SUPPORTED_EXTENSIONS.includes(ext) ? ext : 'ogg';
 }
 
-/** Downloads the audio from a Zadarma temporary recording link and sends it
- * to ElevenLabs' speech-to-text endpoint. `language` is an ISO-639-1 hint
- * (e.g. 'lt' for Lithuanian) — optional, but skips auto-detection when the
- * language is already known. */
-export async function transcribeFromUrl(recordingUrl: string, language?: string): Promise<{ text: string }> {
-  let audioRes: Response;
-  try {
-    audioRes = await fetch(recordingUrl);
-  } catch {
-    throw new TranscriptionError('Could not download the recording from Zadarma');
-  }
-  if (!audioRes.ok) {
-    throw new TranscriptionError(`Could not download the recording (HTTP ${audioRes.status})`);
-  }
-  const audioBlob = await audioRes.blob();
-  const extension = extensionFromUrl(recordingUrl);
-
+/** The actual ElevenLabs call, shared by transcribeFromUrl (Zadarma
+ * recordings — see below) and transcribeFromBuffer (voice notes) — the
+ * two differ only in *how* the audio bytes are obtained (fetched from a
+ * Zadarma URL vs. uploaded directly from the browser's own microphone
+ * recording), not in how they're sent to ElevenLabs. */
+async function callSpeechToText(audio: Blob, filename: string, language?: string): Promise<{ text: string }> {
   const form = new FormData();
-  form.append('file', audioBlob, `call.${extension}`);
+  form.append('file', audio, filename);
   form.append('model_id', STT_MODEL);
   if (language) form.append('language_code', language);
 
@@ -75,4 +64,38 @@ export async function transcribeFromUrl(recordingUrl: string, language?: string)
     throw new TranscriptionError(message ?? `ElevenLabs transcription failed (HTTP ${res.status})`);
   }
   return { text: json.text ?? '' };
+}
+
+/** Downloads the audio from a Zadarma temporary recording link and sends it
+ * to ElevenLabs' speech-to-text endpoint. `language` is an ISO-639-1 hint
+ * (e.g. 'lt' for Lithuanian) — optional, but skips auto-detection when the
+ * language is already known. */
+export async function transcribeFromUrl(recordingUrl: string, language?: string): Promise<{ text: string }> {
+  let audioRes: Response;
+  try {
+    audioRes = await fetch(recordingUrl);
+  } catch {
+    throw new TranscriptionError('Could not download the recording from Zadarma');
+  }
+  if (!audioRes.ok) {
+    throw new TranscriptionError(`Could not download the recording (HTTP ${audioRes.status})`);
+  }
+  const audioBlob = await audioRes.blob();
+  const extension = extensionFromUrl(recordingUrl);
+  return callSpeechToText(audioBlob, `call.${extension}`, language);
+}
+
+/** Transcribes a raw audio buffer uploaded directly from the browser — the
+ * Notes tab's 🎤 voice-note button (CellHoverEditor.tsx), which records via
+ * MediaRecorder client-side and posts the resulting bytes straight through,
+ * with no Zadarma-style recording URL involved at all. `mimeType` (e.g.
+ * "audio/webm") is what MediaRecorder itself reports, used only to pick a
+ * matching file extension for the multipart upload — ElevenLabs, like the
+ * old OpenAI integration this codebase already learned this lesson from,
+ * infers audio format from the filename's extension, not Content-Type. */
+export async function transcribeFromBuffer(buffer: Buffer, mimeType: string, language?: string): Promise<{ text: string }> {
+  const extension = mimeType.split('/')[1]?.split(';')[0]?.toLowerCase();
+  const safeExtension = extension && SUPPORTED_EXTENSIONS.includes(extension) ? extension : 'webm';
+  const blob = new Blob([buffer], { type: mimeType });
+  return callSpeechToText(blob, `voice-note.${safeExtension}`, language);
 }

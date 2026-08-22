@@ -26,6 +26,7 @@ export function RowHeaderMenu({ x, y, rows, targetIds, insertEnabled, onCopy, on
   const insertRows = useTableStore((s) => s.insertRows);
   const removeRows = useTableStore((s) => s.removeRows);
   const addRow = useTableStore((s) => s.addRow);
+  const setRowsHidden = useTableStore((s) => s.setRowsHidden);
 
   const targetSet = new Set(targetIds);
   const indices = rows.reduce<number[]>((acc, r, i) => (targetSet.has(r.id) ? [...acc, i] : acc), []);
@@ -68,6 +69,10 @@ export function RowHeaderMenu({ x, y, rows, targetIds, insertEnabled, onCopy, on
       </button>
       <button type="button" className="context-menu-item" onClick={() => run(onPaste)}>
         Įklijuoti
+      </button>
+      <div className="context-menu-separator" />
+      <button type="button" className="context-menu-item" onClick={() => run(() => setRowsHidden(targetIds, true))}>
+        Slėpti {count > 1 ? 'eilutes' : 'eilutę'}{suffix}
       </button>
       <div className="context-menu-separator" />
       <button

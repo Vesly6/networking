@@ -36,11 +36,24 @@ function migrate(database: Database.Database): void {
       linked_contact_id TEXT,
       next_action_note TEXT,
       height INTEGER,
+      hidden INTEGER,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS rows_by_table ON rows(table_id);
   `);
+  // Additive migration for databases created before `hidden` existed —
+  // CREATE TABLE IF NOT EXISTS above is a no-op against an already-
+  // existing rows table (this is the durable copy of the user's real
+  // ~14,000-row CRM, so it already exists in production), so a column
+  // added after the fact needs this explicit ALTER TABLE. Guarded by
+  // try/catch since it throws "duplicate column name" on a fresh install,
+  // where the CREATE TABLE above already included the column.
+  try {
+    database.exec(`ALTER TABLE rows ADD COLUMN hidden INTEGER`);
+  } catch {
+    // Column already exists — nothing to do.
+  }
 }
 
 function getDb(): Database.Database {
@@ -148,6 +161,7 @@ export interface Row {
   linkedContactId?: string;
   nextActionNote?: string;
   height?: number;
+  hidden?: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -161,6 +175,7 @@ interface RowRow {
   linked_contact_id: string | null;
   next_action_note: string | null;
   height: number | null;
+  hidden: number | null;
   created_at: number;
   updated_at: number;
 }
@@ -175,6 +190,7 @@ function rowFromRow(r: RowRow): Row {
     linkedContactId: r.linked_contact_id ?? undefined,
     nextActionNote: r.next_action_note ?? undefined,
     height: r.height ?? undefined,
+    hidden: r.hidden === 1 ? true : undefined,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -191,8 +207,8 @@ export function countRowsForTable(tableId: string): number {
 }
 
 const UPSERT_ROW_SQL = `
-  INSERT INTO rows (id, table_id, cells_json, colors_json, order_num, linked_contact_id, next_action_note, height, created_at, updated_at)
-  VALUES (@id, @tableId, @cellsJson, @colorsJson, @order, @linkedContactId, @nextActionNote, @height, @createdAt, @updatedAt)
+  INSERT INTO rows (id, table_id, cells_json, colors_json, order_num, linked_contact_id, next_action_note, height, hidden, created_at, updated_at)
+  VALUES (@id, @tableId, @cellsJson, @colorsJson, @order, @linkedContactId, @nextActionNote, @height, @hidden, @createdAt, @updatedAt)
   ON CONFLICT(id) DO UPDATE SET
     cells_json = excluded.cells_json,
     colors_json = excluded.colors_json,
@@ -200,6 +216,7 @@ const UPSERT_ROW_SQL = `
     linked_contact_id = excluded.linked_contact_id,
     next_action_note = excluded.next_action_note,
     height = excluded.height,
+    hidden = excluded.hidden,
     updated_at = excluded.updated_at
 `;
 
@@ -213,6 +230,7 @@ function rowToParams(row: Row) {
     linkedContactId: row.linkedContactId ?? null,
     nextActionNote: row.nextActionNote ?? null,
     height: row.height ?? null,
+    hidden: row.hidden ? 1 : null,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };

@@ -15,6 +15,7 @@ import {
 import { cleanCompanyNameForSearch } from '../../utils/companyName';
 import { joinContactFields, parseContacts, contactTextToFields } from '../../utils/contacts';
 import { useToastStore } from '../../store/useToastStore';
+import { usePendingPhoneSearchStore } from '../../store/usePendingPhoneSearchStore';
 import { randomUUID } from '../../utils/uuid';
 
 interface ApolloContactSearchModalProps {
@@ -157,7 +158,15 @@ export function ApolloContactSearchModal({
   // assumption that parallelism needed to be triggered explicitly — on
   // request, removed again as unneeded complexity once it was clear plain
   // repeated clicks already do the same thing.
-  const [pendingPhoneCount, setPendingPhoneCount] = useState(0);
+  // Global, not local useState — see usePendingPhoneSearchStore's own doc
+  // comment for why: this component unmounts on modal close, but the poll
+  // loop below (deliberately fire-and-poll, not awaited) keeps running
+  // regardless, so the *visible* "still searching" indicator needs to
+  // live somewhere that survives the unmount too, or closing the modal
+  // makes an actually-still-running search look like it silently broke.
+  const startPhoneSearch = usePendingPhoneSearchStore((s) => s.start);
+  const finishPhoneSearch = usePendingPhoneSearchStore((s) => s.finish);
+  const pendingPhoneCount = usePendingPhoneSearchStore((s) => s.count);
 
   const runCompanySearch = async () => {
     setCompanyLoading(true);
@@ -336,13 +345,42 @@ export function ApolloContactSearchModal({
       setPeopleResults((prev) => prev.filter((p) => p.id !== person.id));
       showToast(`${firstName || 'Kontaktas'} pridėtas`);
 
-      // The TOP-LEVEL request_id is what polling needs — NOT
-      // result.phone_enrichment.request_id, which looks right but is a
-      // different id the polling endpoint always rejects (see
-      // apolloApi.ts's pollPhoneReveal doc comment). Not awaited — the
-      // function returns (and the button unblocks) right after adding.
-      if (result.request_id) {
-        setPendingPhoneCount((n) => n + 1);
+      const applyPhone = (phone: string) => {
+        onUpdateContactRef.current(
+          id,
+          joinContactFields({
+            firstName,
+            lastName,
+            position: person.title ?? '',
+            company,
+            email,
+            phone,
+            linkedinUrl,
+            instagramUrl: '',
+            facebookUrl: '',
+          }),
+        );
+        showToast(`${firstName || 'Kontaktas'}: rastas telefono numeris`);
+      };
+
+      // Apollo can return the phone synchronously, in this SAME response,
+      // when it's already on file from an earlier reveal (this account's
+      // or — per Apollo's own cross-customer caching — someone else's) —
+      // a real, reported bug: this used to unconditionally fall into the
+      // poll loop below regardless, throwing away an answer that had
+      // already arrived and paying the full "can take several minutes"
+      // async cost for no reason. Checked first, before touching
+      // request_id/polling at all.
+      const syncPhone = result.person?.contact?.phone_numbers?.[0]?.sanitized_number;
+      if (syncPhone) {
+        applyPhone(syncPhone);
+      } else if (result.request_id) {
+        // The TOP-LEVEL request_id is what polling needs — NOT
+        // result.phone_enrichment.request_id, which looks right but is a
+        // different id the polling endpoint always rejects (see
+        // apolloApi.ts's pollPhoneReveal doc comment). Not awaited — the
+        // function returns (and the button unblocks) right after adding.
+        startPhoneSearch();
         void (async (requestId: string) => {
           try {
             const deadline = Date.now() + PHONE_POLL_MAX_MS;
@@ -350,30 +388,14 @@ export function ApolloContactSearchModal({
               const poll = await pollPhoneReveal(requestId);
               if (poll.status === 'ready') {
                 const phone = poll.phoneNumbers[0]?.sanitized_number ?? '';
-                if (phone) {
-                  onUpdateContactRef.current(
-                    id,
-                    joinContactFields({
-                      firstName,
-                      lastName,
-                      position: person.title ?? '',
-                      company,
-                      email,
-                      phone,
-                      linkedinUrl,
-                      instagramUrl: '',
-                      facebookUrl: '',
-                    }),
-                  );
-                  showToast(`${firstName || 'Kontaktas'}: rastas telefono numeris`);
-                }
+                if (phone) applyPhone(phone);
                 return;
               }
               if (poll.status === 'error' || Date.now() >= deadline) return;
               await sleep(Math.min(Math.max(poll.retryAfterSeconds, 5), 20) * 1000);
             }
           } finally {
-            setPendingPhoneCount((n) => Math.max(0, n - 1));
+            finishPhoneSearch();
           }
         })(result.request_id);
       }

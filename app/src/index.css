@@ -73,11 +73,18 @@
   --border-strong: #5c5c59;
   --text: #ececea;
   --text-muted: #a3a29d;
-  --accent: #6a61c9;
-  --accent-contrast: #ffffff;
+  /* Was a purple #6a61c9 — changed to this blue (R151 G183 B242) on
+     explicit request. Light enough (YIQ ≈180, over the same 150 threshold
+     utils/color.ts's contrastTextColor() uses everywhere else in this
+     app) that --accent-contrast needs to flip to a dark color here too —
+     white text on top of this accent would fail the exact same
+     readability check this app already applies to every colored table
+     cell/badge, just not automatically for this one CSS variable. */
+  --accent: #97b7f2;
+  --accent-contrast: #1c2128;
   --danger: #f28b82;
   --danger-bg: rgba(242, 139, 130, 0.16);
-  --today-bg: rgba(106, 97, 201, 0.22);
+  --today-bg: rgba(151, 183, 242, 0.22);
   --overdue-bg: rgba(242, 139, 130, 0.16);
   --shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
 }

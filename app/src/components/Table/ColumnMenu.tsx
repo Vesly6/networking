@@ -2,19 +2,28 @@ import { useState } from 'react';
 import type { Column, ColumnType } from '../../types';
 import { useTableStore } from '../../store/useTableStore';
 import { confirmDialog } from '../../store/useConfirmStore';
+import { useToastStore } from '../../store/useToastStore';
 import { Popover } from '../Popover';
 import { ColorInput } from '../ColorInput';
 import { TYPE_LABELS } from '../../utils/columnTypeLabels';
 import { contrastTextColor } from '../../utils/color';
+import { parseTsv } from '../../utils/tsv';
 
 interface ColumnMenuProps {
   column: Column;
+  /** Every column in the table, in display order — needed only for
+   * pasting a whole row of names at once (see the "Pavadinimas" input's
+   * onPaste below), which renames this column plus however many follow
+   * it, the same "starting at the anchor, row-major" convention the main
+   * grid's own cell paste already uses. */
+  columns: Column[];
   anchor: HTMLElement;
   onClose: () => void;
 }
 
-export function ColumnMenu({ column, anchor, onClose }: ColumnMenuProps) {
+export function ColumnMenu({ column, columns, anchor, onClose }: ColumnMenuProps) {
   const renameColumn = useTableStore((s) => s.renameColumn);
+  const showToast = useToastStore((s) => s.show);
   const removeColumn = useTableStore((s) => s.removeColumn);
   const setColumnType = useTableStore((s) => s.setColumnType);
   const setDropdownOptions = useTableStore((s) => s.setDropdownOptions);
@@ -37,6 +46,34 @@ export function ColumnMenu({ column, anchor, onClose }: ColumnMenuProps) {
           onBlur={() => renameColumn(column.id, name)}
           onKeyDown={(e) => {
             if (e.key === 'Enter') e.currentTarget.blur();
+          }}
+          onPaste={(e) => {
+            const text = e.clipboardData.getData('text/plain');
+            // A single value pastes into just this field, normally (the
+            // browser's own default single-input paste) — only a multi-
+            // value clipboard (copied as a row of header cells from
+            // Excel/Sheets) triggers the bulk rename below.
+            const grid = parseTsv(text);
+            const values = grid.flat();
+            if (values.length <= 1) return;
+            e.preventDefault();
+            const startIndex = columns.findIndex((c) => c.id === column.id);
+            if (startIndex === -1) return;
+            let renamed = 0;
+            let skipped = 0;
+            values.forEach((value, i) => {
+              const target = columns[startIndex + i];
+              if (!target) {
+                skipped++;
+                return;
+              }
+              renameColumn(target.id, value);
+              if (target.id === column.id) setName(value);
+              renamed++;
+            });
+            const parts = [`Pervadinta stulpelių: ${renamed}`];
+            if (skipped > 0) parts.push(`praleista (nebeliko stulpelių): ${skipped}`);
+            showToast(parts.join(' · '));
           }}
         />
       </label>

@@ -102,6 +102,9 @@ interface TableState {
   setLinkedContact: (rowId: string, contactId: string | null) => void;
   /** null/empty clears the note. See Row.nextActionNote in types.ts. */
   setNextActionNote: (rowId: string, note: string | null) => void;
+  /** Mirrors setColumnsHidden above, for rows — see Row.hidden in
+   * types.ts. RowHeaderMenu's "Slėpti eilutę"/"Rodyti eilutę" call this. */
+  setRowsHidden: (ids: string[], hidden: boolean) => void;
   updateCell: (rowId: string, columnId: string, value: string) => boolean;
   updateCells: (updates: CellUpdate[]) => number;
   setCellColors: (updates: CellColorUpdate[]) => void;
@@ -479,6 +482,21 @@ export const useTableStore = create<TableState>((set, get) => {
       });
       set({ rows });
       if (updatedRow) void saveRow(updatedRow);
+    },
+
+    setRowsHidden: (ids, hidden) => {
+      if (ids.length === 0) return;
+      snapshot();
+      const idSet = new Set(ids);
+      const changedRows: Row[] = [];
+      const rows = get().rows.map((r) => {
+        if (!idSet.has(r.id)) return r;
+        const updated = { ...r, hidden, updatedAt: Date.now() };
+        changedRows.push(updated);
+        return updated;
+      });
+      set({ rows });
+      void saveRows(changedRows);
     },
 
     updateCell: (rowId, columnId, value) => {

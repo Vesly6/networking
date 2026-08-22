@@ -2,13 +2,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTableStore } from './store/useTableStore';
 import { useWorkspaceStore } from './store/useWorkspaceStore';
 import { useAuthStore } from './store/useAuthStore';
+import { usePendingPhoneSearchStore } from './store/usePendingPhoneSearchStore';
 import { TableView } from './components/Table/TableView';
 import { CalendarView } from './components/Calendar/CalendarView';
 import { WorkspaceView } from './components/Workspace/WorkspaceView';
 import { CallsView } from './components/Calls/CallsView';
 import { SearchView } from './components/Search/SearchView';
 import { LinkedInView } from './components/LinkedIn/LinkedInView';
+import { InstantlyView } from './components/Instantly/InstantlyView';
 import { EmailGeneratorView } from './components/Email/EmailGeneratorView';
+import { LessonsView } from './components/Lessons/LessonsView';
 import { Toast } from './components/Toast';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { Softphone } from './components/Softphone';
@@ -20,7 +23,7 @@ import { getNextActionColumn } from './utils/row';
 import { isOverdue, isDueToday } from './utils/date';
 import './App.css';
 
-type Tab = 'table' | 'calendar' | 'calls' | 'search' | 'linkedin' | 'email';
+type Tab = 'table' | 'calendar' | 'calls' | 'search' | 'linkedin' | 'instantly' | 'email' | 'lessons';
 
 function App() {
   const token = useAuthStore((s) => s.token);
@@ -101,6 +104,7 @@ function App() {
   }, [activeTableId, loadTable, unload]);
 
   const activeTable = useMemo(() => tables.find((t) => t.id === activeTableId) ?? null, [tables, activeTableId]);
+  const pendingPhoneCount = usePendingPhoneSearchStore((s) => s.count);
 
   const dueBadge = useMemo(() => {
     const dateColumn = getNextActionColumn(columns);
@@ -232,6 +236,14 @@ function App() {
                 {activeTable.name}
               </h1>
             )}
+            {pendingPhoneCount > 0 && (
+              <span
+                className="pending-phone-search-badge"
+                title={`Fone ieškoma ${pendingPhoneCount} telefono ${pendingPhoneCount === 1 ? 'numerio' : 'numerių'} (Apollo) — galite tęsti darbą, jums pranešime, kai bus rasta`}
+              >
+                🕐 {pendingPhoneCount}
+              </span>
+            )}
             <ThemeToggle />
             <button
               type="button"
@@ -304,13 +316,33 @@ function App() {
               </button>
               <button
                 type="button"
+                className={tab === 'instantly' ? 'active' : ''}
+                onClick={() => {
+                  setTab('instantly');
+                  setMobileNavOpen(false);
+                }}
+              >
+                Paštas
+              </button>
+              <button
+                type="button"
                 className={tab === 'email' ? 'active' : ''}
                 onClick={() => {
                   setTab('email');
                   setMobileNavOpen(false);
                 }}
               >
-                Laiškai
+                DI
+              </button>
+              <button
+                type="button"
+                className={tab === 'lessons' ? 'active' : ''}
+                onClick={() => {
+                  setTab('lessons');
+                  setMobileNavOpen(false);
+                }}
+              >
+                Pamokos
               </button>
             </nav>
           </header>
@@ -365,8 +397,18 @@ function App() {
             </div>
             {/* Same reasoning as Search/LinkedIn above — not scoped to the
                 active table, so no tableReady gate or activeTableId key. */}
+            <div className={`tab-panel ${tab === 'instantly' ? 'tab-panel-active' : ''}`}>
+              <InstantlyView active={tab === 'instantly'} />
+            </div>
+            {/* Same reasoning as Search/LinkedIn above — not scoped to the
+                active table, so no tableReady gate or activeTableId key. */}
             <div className={`tab-panel ${tab === 'email' ? 'tab-panel-active' : ''}`}>
               <EmailGeneratorView />
+            </div>
+            {/* Same reasoning as Search/LinkedIn/Instantly above — static
+                reference content, not scoped to the active table. */}
+            <div className={`tab-panel ${tab === 'lessons' ? 'tab-panel-active' : ''}`}>
+              <LessonsView />
             </div>
             <div className={`tab-panel ${tab === 'table' ? 'tab-panel-active' : ''}`}>
               {tableReady ? (

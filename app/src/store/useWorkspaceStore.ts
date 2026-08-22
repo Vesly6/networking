@@ -1,9 +1,48 @@
 import { create } from 'zustand';
-import type { Row, TableMeta } from '../types';
+import type { Column, Row, TableMeta } from '../types';
 import { deleteTableDB, getTable, loadRowsForTable, loadTables, saveRows, saveTable, updateTableName } from '../db/db';
 import { randomUUID } from '../utils/uuid';
 
 const LAST_ACTIVE_KEY = 'cold-crm:last-active-table';
+
+// Every newly created table — the very first one on a fresh install, "+
+// Nauja lentelė", and SheetTabs' own "+" — starts pre-populated with this
+// many blank columns/rows, on explicit request. A deliberate reversal of
+// this app's earlier "new tables start with zero columns, no default seed
+// schema" design (see CLAUDE.md's own section on this). The concrete
+// problem that prompted it: copying a large block of rows out of an
+// existing table and pasting them into a brand-new one failed outright,
+// because the new table had no columns/rows yet to paste into — forcing a
+// detour through manually inventing column names first before the actual
+// paste could even be attempted. Explicitly not meant to be a fixed
+// schema ("это не приговор" — "this isn't a life sentence"): every seeded
+// column is a plain, freely renamable/retypable/deletable `text` column,
+// same as one added by hand, and an unused blank row behaves exactly like
+// any other blank row already does everywhere else in this app (CSV
+// export, search, copy/paste) — nothing about blank rows or generically-
+// named columns needed special-casing to make this safe.
+const DEFAULT_SEED_ROW_COUNT = 1000;
+const DEFAULT_SEED_COLUMN_COUNT = 50;
+
+function buildSeedColumns(): Column[] {
+  return Array.from({ length: DEFAULT_SEED_COLUMN_COUNT }, (_, i) => ({
+    id: randomUUID(),
+    name: `Stulpelis ${i + 1}`,
+    type: 'text' as const,
+  }));
+}
+
+function buildSeedRows(tableId: string): Row[] {
+  const now = Date.now();
+  return Array.from({ length: DEFAULT_SEED_ROW_COUNT }, (_, i) => ({
+    id: randomUUID(),
+    tableId,
+    cells: {},
+    order: i,
+    createdAt: now,
+    updatedAt: now,
+  }));
+}
 
 interface WorkspaceState {
   tables: TableMeta[];
@@ -19,7 +58,13 @@ interface WorkspaceState {
    * at `false` forever with no user-facing signal at all. */
   initError: string | null;
   init: () => Promise<void>;
-  createTable: (name: string) => string;
+  /** Async, not a synchronous id return — awaits both the table record
+   * and its seed rows actually landing server-side before resolving, for
+   * the identical reason duplicateTable below does: a caller that
+   * switches to viewing the new table immediately (both real callers do)
+   * would otherwise race a still-in-flight bulk row write and could
+   * render the freshly-seeded table as empty. */
+  createTable: (name: string) => Promise<string>;
   /** Clones a table's columns and every row (fresh ids throughout, cell
    * keys remapped to the new column ids) into a brand-new table — used by
    * SheetTabs' right-click "Duplicate". Async because it has to read the
@@ -46,11 +91,12 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         const table: TableMeta = {
           id: randomUUID(),
           name: 'Lentelė 1',
-          columns: [],
+          columns: buildSeedColumns(),
           createdAt: now,
           updatedAt: now,
         };
         await saveTable(table);
+        await saveRows(buildSeedRows(table.id));
         tables = [table];
       }
       tables = [...tables].sort((a, b) => a.createdAt - b.createdAt);
@@ -66,17 +112,18 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     }
   },
 
-  createTable: (name) => {
+  createTable: async (name) => {
     const now = Date.now();
     const table: TableMeta = {
       id: randomUUID(),
       name: name.trim() || `Lentelė ${get().tables.length + 1}`,
-      columns: [],
+      columns: buildSeedColumns(),
       createdAt: now,
       updatedAt: now,
     };
     set({ tables: [...get().tables, table] });
-    void saveTable(table);
+    await saveTable(table);
+    await saveRows(buildSeedRows(table.id));
     return table.id;
   },
 

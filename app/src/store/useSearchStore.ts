@@ -11,6 +11,7 @@ import {
   type ApolloCompany,
   type ApolloEnrichedPerson,
 } from '../utils/apolloApi';
+import { usePendingPhoneSearchStore } from './usePendingPhoneSearchStore';
 
 type SearchMode = 'people' | 'companies';
 
@@ -172,6 +173,19 @@ export const useSearchStore = create<SearchState>((set, get) => ({
       // of a second billed lookup.
       if (result.person) set((s) => ({ enrichedById: { ...s.enrichedById, [id]: result.person! } }));
 
+      // Apollo can return the phone synchronously, in this SAME response,
+      // when it's already on file from an earlier reveal — a real,
+      // reported bug: this used to unconditionally require request_id and
+      // poll (or, worse, throw an error when request_id was absent
+      // *because* the phone had already come back synchronously), paying
+      // the full "can take several minutes" async cost — or failing
+      // outright — for an answer that had already arrived. Checked first.
+      const syncPhone = result.person?.contact?.phone_numbers;
+      if (syncPhone && syncPhone.length > 0) {
+        set((s) => ({ phoneNumbersById: { ...s.phoneNumbersById, [id]: syncPhone } }));
+        return;
+      }
+
       // The TOP-LEVEL request_id is the one to poll with — NOT
       // result.phone_enrichment.request_id, which looks like it should be
       // it but is a different id the polling endpoint always rejects. See
@@ -181,20 +195,32 @@ export const useSearchStore = create<SearchState>((set, get) => ({
         throw new Error(result.phone_enrichment?.message ?? 'Apollo nepradėjo šio žmogaus telefono paieškos');
       }
       const requestId = result.request_id;
-      const deadline = Date.now() + PHONE_POLL_MAX_MS;
-      for (;;) {
-        const poll = await apiPollPhoneReveal(requestId);
-        if (poll.status === 'ready') {
-          set((s) => ({ phoneNumbersById: { ...s.phoneNumbersById, [id]: poll.phoneNumbers } }));
-          return;
+      // Global, not local to this store's own phonePendingIds (which
+      // already survives navigating away, since it's a Zustand store, not
+      // component state) — this feeds a persistent indicator (App.tsx)
+      // visible from *any* tab, not just while the Paieška view happens
+      // to be mounted, for the identical reason
+      // ApolloContactSearchModal.tsx's own poll loop needed this same fix
+      // — see usePendingPhoneSearchStore's own doc comment.
+      usePendingPhoneSearchStore.getState().start();
+      try {
+        const deadline = Date.now() + PHONE_POLL_MAX_MS;
+        for (;;) {
+          const poll = await apiPollPhoneReveal(requestId);
+          if (poll.status === 'ready') {
+            set((s) => ({ phoneNumbersById: { ...s.phoneNumbersById, [id]: poll.phoneNumbers } }));
+            return;
+          }
+          if (poll.status === 'error') {
+            throw new Error(poll.message);
+          }
+          if (Date.now() >= deadline) {
+            throw new Error('Apollo dar negrąžino telefono numerio — bandykite dar kartą po kelių minučių');
+          }
+          await sleep(Math.min(Math.max(poll.retryAfterSeconds, 5), 20) * 1000);
         }
-        if (poll.status === 'error') {
-          throw new Error(poll.message);
-        }
-        if (Date.now() >= deadline) {
-          throw new Error('Apollo dar negrąžino telefono numerio — bandykite dar kartą po kelių minučių');
-        }
-        await sleep(Math.min(Math.max(poll.retryAfterSeconds, 5), 20) * 1000);
+      } finally {
+        usePendingPhoneSearchStore.getState().finish();
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Nepavyko atskleisti telefono numerio';

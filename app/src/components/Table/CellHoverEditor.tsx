@@ -23,6 +23,7 @@ import { formatHistoryTimestamp } from '../../utils/date';
 import { parseContactText } from '../../utils/contactsApi';
 import { requestCallback, sendSms, type SmsLogRecord } from '../../utils/callsApi';
 import { insertIntoSoftphone } from '../../utils/softphoneBridge';
+import { transcribeVoiceNote } from '../../utils/voiceNote';
 import { phoneMatchKey } from '../../utils/phoneMatch';
 import { randomUUID } from '../../utils/uuid';
 import { contrastTextColor } from '../../utils/color';
@@ -245,6 +246,29 @@ export function CellHoverEditor({
   const [noteTagPickerAnchor, setNoteTagPickerAnchor] = useState<{ tag: (typeof NOTE_TAGS)[number]; anchor: HTMLElement } | null>(null);
   const [editDraft, setEditDraft] = useState('');
   const [loadingLastSummary, setLoadingLastSummary] = useState(false);
+  // Voice-note recording state (see the 🎤 button below) — 'idle' →
+  // 'recording' (mic live, MediaRecorder collecting chunks) →
+  // 'transcribing' (stopped, waiting on ElevenLabs) → back to 'idle'.
+  // Never 'error' as its own state — a failure just toasts and returns to
+  // idle, since there's nothing left to show once the recording itself is
+  // gone (this feature doesn't keep the raw audio anywhere, only ever the
+  // resulting text — see recordVoiceNote's own doc comment).
+  const [voiceNoteState, setVoiceNoteState] = useState<'idle' | 'recording' | 'transcribing'>('idle');
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const voiceNoteChunksRef = useRef<Blob[]>([]);
+  const voiceNoteStreamRef = useRef<MediaStream | null>(null);
+
+  // Releases a live mic if this editor closes (click elsewhere, a
+  // different cell selected) mid-recording — without this, the browser's
+  // own "mic in use" indicator would stay lit indefinitely with no way
+  // left to stop it, since the record/stop button that would normally do
+  // that no longer exists once this component is gone.
+  useEffect(() => {
+    return () => {
+      mediaRecorderRef.current?.stop();
+      voiceNoteStreamRef.current?.getTracks().forEach((t) => t.stop());
+    };
+  }, []);
   const [apolloModalOpen, setApolloModalOpen] = useState(false);
   // Collapsed by default (rarely used — most contacts get added through
   // the Apollo search instead). Local state rather than reusing
@@ -529,6 +553,67 @@ export function CellHoverEditor({
       onAddNoteEntry(newEntryDraft);
       setNewEntryDraft('');
     }
+  };
+
+  // 🎤 voice note: records via MediaRecorder, transcribes on stop
+  // (ElevenLabs Scribe, always Lithuanian — same STT already used for call
+  // recordings, see server/src/elevenlabs.ts), and drops the resulting
+  // text into the same draft textarea a typed comment would use — never
+  // auto-committed straight to the note history. This is deliberate,
+  // matching every other "AI drafts, human reviews" flow already
+  // established in this codebase (contact-paste cleanup, LinkedIn message
+  // personalization, call summaries): a transcript can be wrong, and a
+  // permanently timestamped log entry is exactly the wrong place to find
+  // that out after the fact. The raw audio itself is never kept anywhere,
+  // client or server — only ever the transcribed text, discarded the
+  // instant transcription finishes (or fails).
+  const toggleVoiceNote = async () => {
+    if (voiceNoteState === 'recording') {
+      mediaRecorderRef.current?.stop();
+      return;
+    }
+    if (voiceNoteState !== 'idle') return;
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch {
+      showToast('Nepavyko pasiekti mikrofono — patikrinkite naršyklės leidimus');
+      return;
+    }
+    voiceNoteStreamRef.current = stream;
+    voiceNoteChunksRef.current = [];
+    const recorder = new MediaRecorder(stream);
+    mediaRecorderRef.current = recorder;
+    recorder.ondataavailable = (e) => {
+      if (e.data.size > 0) voiceNoteChunksRef.current.push(e.data);
+    };
+    recorder.onstop = () => {
+      // Always release the mic the moment recording stops, regardless of
+      // what happens to the transcription afterward — holding it open
+      // through the async transcribe call would leave the browser's own
+      // "mic in use" indicator lit for no reason.
+      stream.getTracks().forEach((t) => t.stop());
+      voiceNoteStreamRef.current = null;
+      const blob = new Blob(voiceNoteChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
+      voiceNoteChunksRef.current = [];
+      if (blob.size === 0) {
+        setVoiceNoteState('idle');
+        return;
+      }
+      setVoiceNoteState('transcribing');
+      transcribeVoiceNote(blob)
+        .then((text) => {
+          if (!text.trim()) {
+            showToast('Nepavyko atpažinti kalbos — pabandykite dar kartą');
+            return;
+          }
+          setNewEntryDraft((prev) => (prev.trim() ? `${prev.trim()} ${text.trim()}` : text.trim()));
+        })
+        .catch((err) => showToast(err instanceof Error ? err.message : 'Nepavyko atpažinti balso įrašo'))
+        .finally(() => setVoiceNoteState('idle'));
+    };
+    recorder.start();
+    setVoiceNoteState('recording');
   };
 
   // "Last summary" — the described workflow is Call -> transcription ->
@@ -840,6 +925,26 @@ export function CellHoverEditor({
                   onClick={() => commitNewEntry()}
                 >
                   ✓
+                </button>
+                <button
+                  type="button"
+                  className={`cell-hover-voice-btn ${voiceNoteState === 'recording' ? 'cell-hover-voice-btn-recording' : ''}`}
+                  title={
+                    voiceNoteState === 'recording'
+                      ? 'Stabdyti įrašymą'
+                      : voiceNoteState === 'transcribing'
+                        ? 'Atpažįstama…'
+                        : 'Įrašyti balso žinutę (lietuviškai)'
+                  }
+                  disabled={voiceNoteState === 'transcribing'}
+                  // Keeps focus on the textarea (so clicking this doesn't
+                  // trigger its onBlur commit mid-typing) — the standard
+                  // mousedown-preventDefault trick for a button that
+                  // shouldn't steal focus from whatever's currently active.
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => void toggleVoiceNote()}
+                >
+                  {voiceNoteState === 'recording' ? '⏹' : voiceNoteState === 'transcribing' ? '⏳' : '🎤'}
                 </button>
               </div>
               <div className="cell-hover-tags">
