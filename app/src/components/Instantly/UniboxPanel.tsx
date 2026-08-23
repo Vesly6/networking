@@ -3,6 +3,7 @@ import { useInstantlyInboxStore, type UniboxThread, type UniboxViewMode } from '
 import { useInstantlyAccountsStore } from '../../store/useInstantlyAccountsStore';
 import { useInstantlyCampaignsStore } from '../../store/useInstantlyCampaignsStore';
 import { useToastStore } from '../../store/useToastStore';
+import { syncInstantlyRepliesToTable } from '../../utils/instantlyReplySync';
 import {
   INTEREST_STATUS_LABELS,
   INTEREST_STATUS_COLORS,
@@ -482,6 +483,7 @@ export function UniboxPanel() {
   const [campaignsOpen, setCampaignsOpen] = useState(false);
   const [campaignSearch, setCampaignSearch] = useState('');
   const [moreOpen, setMoreOpen] = useState(false);
+  const [syncingReplies, setSyncingReplies] = useState(false);
   // Two INDEPENDENT collapse toggles — not one combined listVisible flag
   // like an earlier version of this had. That version auto-collapsed the
   // whole filters+list column the instant a thread opened, on the
@@ -684,6 +686,35 @@ export function UniboxPanel() {
                   ))}
                   {filteredCampaigns.length === 0 && <p className="instantly-hint">Kampanijų nerasta.</p>}
                 </div>
+              )}
+              {/* Pulls every reply (not our own sends) for the filtered
+               * campaign into a plain CRM table — on explicit request. One
+               * campaign at a time (matches the filter above), manually
+               * triggered; see instantlyReplySync.ts's own doc comment for
+               * why this isn't a background job yet. Re-running it is
+               * safe — already-pulled replies are skipped, not
+               * duplicated. */}
+              {filterCampaignId && (
+                <button
+                  type="button"
+                  className="instantly-status-row"
+                  disabled={syncingReplies}
+                  onClick={async () => {
+                    setSyncingReplies(true);
+                    try {
+                      const result = await syncInstantlyRepliesToTable(filterCampaignId, 'Visi atsakymai');
+                      showToast(
+                        `„${result.tableName}": pridėta ${result.created} atsakymų (rasta ${result.repliesFound}, praleista pasikartojančių: ${result.skippedDuplicate})`,
+                      );
+                    } catch (err) {
+                      showToast(err instanceof Error ? err.message : 'Nepavyko sinchronizuoti atsakymų');
+                    } finally {
+                      setSyncingReplies(false);
+                    }
+                  }}
+                >
+                  {syncingReplies ? 'Sinchronizuojama…' : '📥 Eksportuoti atsakymus į lentelę'}
+                </button>
               )}
             </div>
 

@@ -1177,6 +1177,44 @@ tr.row-flash td.cell-row-bg {
   color: var(--text);
 }
 
+/* Excel-style inline reveal for hidden rows (TableView.tsx's
+   hiddenRunInfo) — a thin clickable strip right at the seam between two
+   adjacent visible rows, on explicit request with a real Excel
+   screenshot attached to match the exact interaction: click to unhide
+   the run in place, instead of only being reachable from the separate
+   toolbar popover far away at the top of the page. Half-overlapping the
+   row's own edge (like .row-resize-handle below, same technique) so it
+   visually sits right on the boundary line rather than fully inside or
+   outside either row. */
+.row-hidden-indicator {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: 3px;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-size: 0.5rem;
+  line-height: 1;
+  cursor: pointer;
+  z-index: 3;
+  opacity: 0.85;
+}
+.row-hidden-indicator:hover {
+  opacity: 1;
+}
+.row-hidden-indicator-above {
+  top: -5px;
+}
+.row-hidden-indicator-below {
+  bottom: -5px;
+}
+
 .row-resize-handle {
   position: absolute;
   left: 0;

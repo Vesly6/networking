@@ -34,6 +34,12 @@ interface DataCellProps {
   // union covers both. onExtend is only ever onMouseEnter.
   onSelect: (e: ReactMouseEvent | ReactFocusEvent) => void;
   onExtend: (e: ReactMouseEvent) => void;
+  /** Right-click — opens CellContextMenu (TableView.tsx). Not wired onto
+   * the `editable` branch's live `<input>` below: right-clicking while
+   * actively mid-edit shows the browser's own native text context menu
+   * (cut/copy/paste/spellcheck), which is more useful there than a sheet-
+   * management menu, matching real Excel/Sheets behavior. */
+  onContextMenu: (e: ReactMouseEvent) => void;
   /** note/contact only — opens CellHoverEditor for this cell. Named for
    * what it does, not how it's triggered; see the click handler below. */
   onOpenEditor: (anchor: HTMLElement) => void;
@@ -63,6 +69,7 @@ function DataCellImpl({
   inRange,
   onSelect,
   onExtend,
+  onContextMenu,
   onOpenEditor,
   highlightQuery,
   contactsRaw,
@@ -187,6 +194,7 @@ function DataCellImpl({
         style={cellStyle}
         onMouseDown={onSelect}
         onMouseEnter={onExtend}
+        onContextMenu={onContextMenu}
       >
         <select
           value={storedValue}
@@ -228,6 +236,7 @@ function DataCellImpl({
         style={cellStyle}
         onMouseDown={onSelect}
         onMouseEnter={onExtend}
+        onContextMenu={onContextMenu}
       >
         <div className="date-cell">
           <input
@@ -434,6 +443,7 @@ function DataCellImpl({
         data-column-id={column.id}
         onMouseDown={onSelect}
         onMouseEnter={onExtend}
+        onContextMenu={onContextMenu}
         onClick={(e) => {
           e.stopPropagation();
           onOpenEditor(e.currentTarget);
@@ -502,7 +512,7 @@ function DataCellImpl({
   if (column.type === 'link') {
     const href = storedValue ? ensureProtocol(storedValue) : null;
     return (
-      <td className={cellClassName} style={cellStyle} onMouseDown={onSelect} onMouseEnter={onExtend}>
+      <td className={cellClassName} style={cellStyle} onMouseDown={onSelect} onMouseEnter={onExtend} onContextMenu={onContextMenu}>
         <div className="cell-link-inner">
           <button type="button" className={`cell-preview cell-link-text ${color ? '' : 'cell-preview-hoverable'}`} tabIndex={-1}>
             {storedValue ? (
@@ -530,7 +540,7 @@ function DataCellImpl({
   }
 
   return (
-    <td className={cellClassName} style={cellStyle} onMouseDown={onSelect} onMouseEnter={onExtend}>
+    <td className={cellClassName} style={cellStyle} onMouseDown={onSelect} onMouseEnter={onExtend} onContextMenu={onContextMenu}>
       <button type="button" className={`cell-preview ${color ? '' : 'cell-preview-hoverable'}`} tabIndex={-1}>
         {highlightQuery ? highlightMatches(storedValue, highlightQuery) : storedValue}
       </button>

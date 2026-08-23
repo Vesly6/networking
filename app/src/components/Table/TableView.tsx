@@ -22,6 +22,7 @@ import { AddColumnPopover } from './AddColumnPopover';
 import { CsvImportMapping } from './CsvImportMapping';
 import { ColumnHeaderMenu } from './ColumnHeaderMenu';
 import { RowHeaderMenu } from './RowHeaderMenu';
+import { CellContextMenu } from './CellContextMenu';
 import { HiddenColumnsPopover } from './HiddenColumnsPopover';
 import { HiddenRowsPopover } from './HiddenRowsPopover';
 import { FormulaBar } from '../FormulaBar';
@@ -182,6 +183,7 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
   const contactColumn = useMemo(() => getColumnByType(columns, 'contact'), [columns]);
   const addRow = useTableStore((s) => s.addRow);
   const removeRows = useTableStore((s) => s.removeRows);
+  const setRowsHidden = useTableStore((s) => s.setRowsHidden);
   const importCsvRows = useTableStore((s) => s.importCsvRows);
   const updateCell = useTableStore((s) => s.updateCell);
   const updateCells = useTableStore((s) => s.updateCells);
@@ -261,6 +263,9 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
   const [pendingImport, setPendingImport] = useState<{ headers: string[]; dataRows: string[][] } | null>(null);
   const [columnContextMenu, setColumnContextMenu] = useState<{ x: number; y: number; targetIds: string[] } | null>(null);
   const [rowContextMenu, setRowContextMenu] = useState<{ x: number; y: number; targetIds: string[] } | null>(null);
+  const [cellContextMenu, setCellContextMenu] = useState<{ x: number; y: number; rowTargetIds: string[]; columnTargetIds: string[] } | null>(
+    null,
+  );
   const [hiddenColumnsAnchor, setHiddenColumnsAnchor] = useState<HTMLElement | null>(null);
   const [hiddenRowsAnchor, setHiddenRowsAnchor] = useState<HTMLElement | null>(null);
   const [openMenu, setOpenMenu] = useState<{ columnId: string; anchor: HTMLElement } | null>(null);
@@ -297,6 +302,18 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
   isRangeDraggingRef.current = isRangeDragging;
   const rangeAnchorRef = useRef(rangeAnchor);
   rangeAnchorRef.current = rangeAnchor;
+  // Same reasoning as rangeAnchorRef, but for rangeFocus — needed by
+  // handleCellContextMenu below, which hit exactly this staleness in
+  // practice: right-clicking a data cell within a freshly row-drag-
+  // selected range (e.g. 3 rows) could show "(2)" instead of "(3)" in the
+  // hide/delete menu, because the specific <td> that was right-clicked
+  // hadn't re-rendered since partway through the drag (its own
+  // "am I in range" prop stayed true the whole time, so DataCell's memo
+  // legitimately skipped it) — its bound onContextMenu closure was still
+  // the one from that earlier point, capturing rangeFocus as it was mid-
+  // drag rather than where the drag actually ended.
+  const rangeFocusRef = useRef(rangeFocus);
+  rangeFocusRef.current = rangeFocus;
   // Pixel position of the mousedown that started the current drag — lets
   // handleCellMouseEnter tell a genuine drag apart from the few pixels of
   // essentially unavoidable hand jitter between mousedown and mouseup on an
@@ -514,6 +531,56 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
   // from whichever render scheduled them.
   const filteredSortedRowsRef = useRef(filteredSortedRows);
   filteredSortedRowsRef.current = filteredSortedRows;
+
+  // Excel-style inline reveal for hidden rows — on explicit request, with
+  // a real Excel screenshot attached to make sure the exact interaction
+  // landed right: a ▲/▼ indicator sits right at the seam between two
+  // adjacent *visible* rows whenever there's a hidden run between them in
+  // the table's real stored order, and clicking it unhides just that run,
+  // in place. Replaces "the row vanishes, and the only way back is a
+  // separate toolbar popover" (🔒 Paslėpta eilučių, still kept below for
+  // bulk/whole-table visibility — this is additive, not a replacement)
+  // with something that appears exactly where the row disappeared from.
+  // Computed once per `rows` change (not per visible row, and not
+  // filtered-list-relative) so a 14,000-row table doesn't re-walk its
+  // full order on every render.
+  //
+  // Every hidden run borders TWO visible rows (the one right before it
+  // and the one right after it) — an earlier version rendered an
+  // indicator on *both* (a "below" ▼ on the row before, an "above" ▲ on
+  // the row after). When no search/sort hides the gap between them,
+  // those two rows land immediately adjacent in the rendered table (the
+  // hidden rows between them contribute zero height), so their two
+  // absolutely-positioned indicators end up on the exact same seam
+  // pixels and fight over pointer-event hit-testing — confirmed live via
+  // Playwright: the ▲ button was silently intercepting every click meant
+  // for the ▼ button underneath it. Fixed by only ever emitting ONE
+  // indicator per hidden run: the ▲ "before" one, on the row
+  // immediately after the run. The sole exception is a run with no
+  // bordering row *after* it at all (hidden rows trailing at the very
+  // end of the table) — that one has nowhere to hang a ▲ on, so it gets
+  // a ▼ "after" indicator on the last visible row instead. The two
+  // cases are mutually exclusive per boundary, so they can never
+  // collide with each other.
+  const hiddenRunInfo = useMemo(() => {
+    const before = new Map<string, string[]>();
+    const sorted = [...rows].sort((a, b) => a.order - b.order);
+    let pending: string[] = [];
+    let lastVisibleId: string | null = null;
+    for (const row of sorted) {
+      if (row.hidden) {
+        pending.push(row.id);
+        continue;
+      }
+      if (pending.length > 0) {
+        before.set(row.id, pending);
+        pending = [];
+      }
+      lastVisibleId = row.id;
+    }
+    const trailingHidden = pending.length > 0 ? pending : null;
+    return { before, trailingHidden, lastVisibleId };
+  }, [rows]);
 
   // Renders only the rows actually near the viewport instead of the whole
   // table — without this, importing a realistic CSV (tested with a real
@@ -956,6 +1023,17 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
   };
 
   const handleCellMouseDown = (r: number, c: number, extend: boolean, e: ReactMouseEvent | ReactFocusEvent) => {
+    // A real, reproduced bug, the same class already documented for the
+    // row-number/col-letter gutters (see their own onMouseDown handlers):
+    // a right-click's mousedown fires here too (it's wired to DataCell's
+    // onMouseDown), and reaching this unconditionally collapsed any
+    // existing multi-cell range to just the single right-clicked cell
+    // *before* the resulting contextmenu event (handleCellContextMenu)
+    // ever got to see the original range — so right-clicking inside an
+    // existing selection could never act on more than one cell. `'button'
+    // in e` guards against FocusEvent (this handler is also used for
+    // keyboard/tab-driven focus, which has no `.button` at all).
+    if ('button' in e && e.button !== 0) return;
     // Clicking into the grid means "I'm done with that row/column reorder
     // selection" — clear it rather than leaving it stuck highlighted.
     setRowRangeAnchor(null);
@@ -1222,6 +1300,57 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
     applyPastedGrid(parseTsv(text), { r: 0, c: firstIndex }, { r: 0, c: firstIndex });
   };
 
+  // CellContextMenu's Copy/Paste/Clear — operate on the row+column target
+  // ids handleCellContextMenu already resolved (a single cell, or the
+  // whole range it was part of), not live rangeBounds — same "the menu's
+  // own closure captures what was actually right-clicked" reasoning as
+  // copyRowsToClipboard/pasteAtRows above, kept consistent even though
+  // handleCellContextMenu (unlike the row/column ones) does update
+  // rangeAnchor/rangeFocus itself, so reading rangeBounds here would
+  // likely agree anyway.
+  const copyCellRangeToClipboard = async (rowTargetIds: string[], columnTargetIds: string[]) => {
+    const rowSet = new Set(rowTargetIds);
+    const colSet = new Set(columnTargetIds);
+    const rowList = filteredSortedRows.filter((r) => rowSet.has(r.id));
+    const colList = columns.filter((c) => colSet.has(c.id));
+    const { tsv, cellCount } = buildGridTsv(rowList, colList);
+    try {
+      await navigator.clipboard.writeText(tsv);
+      showToast(`Nukopijuota langelių: ${cellCount}`);
+    } catch {
+      showToast('Nepavyko nukopijuoti — iškarpinės prieiga užblokuota');
+    }
+  };
+  const pasteAtCellRange = async (rowTargetIds: string[], columnTargetIds: string[]) => {
+    let text: string;
+    try {
+      text = await navigator.clipboard.readText();
+    } catch {
+      showToast('Nepavyko nuskaityti iškarpinės — patikrinkite naršyklės iškarpinės leidimą');
+      return;
+    }
+    if (!text) return;
+    const rowIndex = filteredSortedRows.findIndex((r) => r.id === rowTargetIds[0]);
+    const colIndex = columns.findIndex((c) => c.id === columnTargetIds[0]);
+    if (rowIndex < 0 || colIndex < 0) return;
+    applyPastedGrid(parseTsv(text), { r: rowIndex, c: colIndex }, { r: rowIndex, c: colIndex });
+  };
+  const clearCellRange = (rowTargetIds: string[], columnTargetIds: string[]) => {
+    const rowSet = new Set(rowTargetIds);
+    const colSet = new Set(columnTargetIds);
+    const updates: CellUpdate[] = [];
+    for (const row of filteredSortedRows) {
+      if (!rowSet.has(row.id)) continue;
+      for (const col of columns) {
+        if (!colSet.has(col.id)) continue;
+        updates.push({ rowId: row.id, columnId: col.id, value: '' });
+      }
+    }
+    if (updates.length === 0) return;
+    updateCells(updates);
+    showToast(`Išvalyta langelių: ${updates.length}`);
+  };
+
   useEffect(() => {
     const handleCopy = (e: ClipboardEvent) => {
       if (!withinTableFocus() || !rangeBounds || hasActiveTextSelection()) return;
@@ -1399,6 +1528,65 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
       targetIds = [row.id];
     }
     setRowContextMenu({ x: e.clientX, y: e.clientY, targetIds });
+  };
+
+  // Right-click on any plain data cell — not just the row-number/column-
+  // letter gutters (handleRowContextMenu/handleColumnContextMenu above) —
+  // on explicit request ("когда я нажимаю на любую ячейку правой кнопкой
+  // мыши... все как в Экселе"). Unlike those two, this collapses (or
+  // keeps) the *cell range* (rangeAnchor/rangeFocus), not the row/column
+  // range — right-clicking inside an existing multi-cell selection acts on
+  // the whole thing, matching Excel; right-clicking outside it collapses
+  // to just the clicked cell first, same "collapse-or-keep" rule the other
+  // two context menus already established.
+  const handleCellContextMenu = (e: ReactMouseEvent, rowIndex: number, colIndex: number) => {
+    e.preventDefault();
+    setColumnContextMenu(null);
+    setRowContextMenu(null);
+    // Read the *ref* mirrors, not the closed-over rangeAnchor/rangeFocus/
+    // rangeBounds — this handler is DataCell's onContextMenu prop, and
+    // DataCell's memo comparator deliberately doesn't re-render just
+    // because onContextMenu's closure identity changed (same as
+    // onSelect/onExtend/onOpenEditor). That's fine for those, since they
+    // only ever report *this* cell's own fixed row/col — but this closure
+    // also captures the live range selection, which very much does change
+    // turn to turn, so a cell that happens not to re-render for its own
+    // reasons (e.g. its "am I in range" prop stayed true across the whole
+    // drag) can be left holding a closure from partway through a drag
+    // instead of where it actually ended. Refs are one shared mutable box
+    // rather than a per-render snapshot, so even a stale-bound closure
+    // reads the current value at call time. (Reproduced live: right-
+    // clicking a cell inside a freshly 3-row drag-selection showed "Slėpti
+    // eilutes (2)" instead of (3).)
+    const liveAnchor = rangeAnchorRef.current;
+    const liveFocus = rangeFocusRef.current;
+    const liveBounds =
+      liveAnchor && liveFocus
+        ? {
+            minR: Math.min(liveAnchor.r, liveFocus.r),
+            maxR: Math.max(liveAnchor.r, liveFocus.r),
+            minC: Math.min(liveAnchor.c, liveFocus.c),
+            maxC: Math.max(liveAnchor.c, liveFocus.c),
+          }
+        : null;
+    const withinRange =
+      !!liveBounds &&
+      rowIndex >= liveBounds.minR &&
+      rowIndex <= liveBounds.maxR &&
+      colIndex >= liveBounds.minC &&
+      colIndex <= liveBounds.maxC;
+    let rowTargetIds: string[];
+    let columnTargetIds: string[];
+    if (withinRange && liveBounds) {
+      rowTargetIds = filteredSortedRows.slice(liveBounds.minR, liveBounds.maxR + 1).map((r) => r.id);
+      columnTargetIds = columns.slice(liveBounds.minC, liveBounds.maxC + 1).map((c) => c.id);
+    } else {
+      setRangeAnchor({ r: rowIndex, c: colIndex });
+      setRangeFocus({ r: rowIndex, c: colIndex });
+      rowTargetIds = [filteredSortedRows[rowIndex].id];
+      columnTargetIds = [columns[colIndex].id];
+    }
+    setCellContextMenu({ x: e.clientX, y: e.clientY, rowTargetIds, columnTargetIds });
   };
 
   // moveRows/moveColumns reorder the underlying data, but rowRangeAnchor/
@@ -1752,7 +1940,15 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
     setHighlightContactId(null);
     setColumnContextMenu(null);
     setRowContextMenu(null);
+    // A real, reported bug: CellContextMenu (unlike the row/column ones,
+    // both already listed here) was never included, so it had no way to
+    // close at all short of Escape/reload — ContextMenu.tsx itself has no
+    // dismiss logic of its own, it relies entirely on this list (see its
+    // own doc comment). setHiddenRowsAnchor was missing for the identical
+    // reason, alongside its already-present column counterpart.
+    setCellContextMenu(null);
     setHiddenColumnsAnchor(null);
+    setHiddenRowsAnchor(null);
     setDateCellPopover(null);
     if (!justFinishedHeaderDragRef.current) {
       setRowRangeAnchor(null);
@@ -1944,6 +2140,21 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
             onClose={() => setRowContextMenu(null)}
           />
         )}
+        {cellContextMenu && (
+          <CellContextMenu
+            x={cellContextMenu.x}
+            y={cellContextMenu.y}
+            rows={filteredSortedRows}
+            columns={columns}
+            rowTargetIds={cellContextMenu.rowTargetIds}
+            columnTargetIds={cellContextMenu.columnTargetIds}
+            rowInsertEnabled={rowInsertEnabled}
+            onCopy={() => copyCellRangeToClipboard(cellContextMenu.rowTargetIds, cellContextMenu.columnTargetIds)}
+            onPaste={() => pasteAtCellRange(cellContextMenu.rowTargetIds, cellContextMenu.columnTargetIds)}
+            onClear={() => clearCellRange(cellContextMenu.rowTargetIds, cellContextMenu.columnTargetIds)}
+            onClose={() => setCellContextMenu(null)}
+          />
+        )}
       </div>
 
       <FormulaBar selection={selection} columns={columns} rows={rows} />
@@ -2089,6 +2300,11 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
                 const row = filteredSortedRows[virtualRow.index];
                 if (!row) return null;
                 const index = virtualRow.index;
+                const hiddenBefore = hiddenRunInfo.before.get(row.id);
+                const hiddenAfter =
+                  hiddenRunInfo.trailingHidden && row.id === hiddenRunInfo.lastVisibleId
+                    ? hiddenRunInfo.trailingHidden
+                    : undefined;
                 return (
                   <tr
                     key={row.id}
@@ -2110,6 +2326,19 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
                       onContextMenu={(e) => handleRowContextMenu(e, row, index)}
                     >
                       <div className="row-gutter-inner">
+                        {hiddenBefore && (
+                          <button
+                            type="button"
+                            className="row-hidden-indicator row-hidden-indicator-above"
+                            title={`Rodyti paslėptas eilutes (${hiddenBefore.length})`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setRowsHidden(hiddenBefore, false);
+                            }}
+                          >
+                            ▲
+                          </button>
+                        )}
                         <span
                           className="row-grip"
                           draggable={rowDragEnabled}
@@ -2146,6 +2375,19 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
                         >
                           {index + 1}
                         </span>
+                        {hiddenAfter && (
+                          <button
+                            type="button"
+                            className="row-hidden-indicator row-hidden-indicator-below"
+                            title={`Rodyti paslėptas eilutes (${hiddenAfter.length})`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setRowsHidden(hiddenAfter, false);
+                            }}
+                          >
+                            ▼
+                          </button>
+                        )}
                       </div>
                       <div className="row-resize-handle" onMouseDown={(e) => startRowResize(e, row)} />
                     </td>
@@ -2171,6 +2413,7 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
                         }
                         onSelect={(e) => handleCellMouseDown(index, colIndex, false, e)}
                         onExtend={(e) => handleCellMouseEnter(index, colIndex, e)}
+                        onContextMenu={(e) => handleCellContextMenu(e, index, colIndex)}
                         onOpenEditor={(anchor) => openCellEditor(row.id, col.id, anchor)}
                         highlightQuery={search.trim() || undefined}
                         contactsRaw={contactColumn ? row.cells[contactColumn.id] : undefined}
