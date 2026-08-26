@@ -4,6 +4,7 @@ import { useWorkspaceStore } from './store/useWorkspaceStore';
 import { useAuthStore } from './store/useAuthStore';
 import { usePendingPhoneSearchStore } from './store/usePendingPhoneSearchStore';
 import { useToastStore } from './store/useToastStore';
+import { useReminderStore } from './store/useReminderStore';
 import { TableView } from './components/Table/TableView';
 import { CalendarView } from './components/Calendar/CalendarView';
 import { WorkspaceView } from './components/Workspace/WorkspaceView';
@@ -144,6 +145,27 @@ function App() {
   useEffect(() => {
     if (workspaceActionError) showToast(workspaceActionError);
   }, [workspaceActionError, showToast]);
+
+  // The "it's time to call" reminder — on explicit request, this has to
+  // work globally (any table, or even sitting on the Workspace screen —
+  // even in a *different* Chrome window entirely, as long as this tab is
+  // still open somewhere) rather than only while a specific table happens
+  // to be open, so it's polled here at the top of App.tsx (always
+  // mounted) rather than inside TableView/CalendarView. 60s, not
+  // shorter — this is a "did a scheduled call time arrive" check, not
+  // something that needs sub-minute precision, and Chrome throttles
+  // background-tab timers to roughly this cadence anyway once the tab
+  // isn't focused, so a tighter interval wouldn't reliably fire any
+  // faster there regardless. Runs only while actually logged in.
+  const reminderPoll = useReminderStore((s) => s.poll);
+  const reminderPermission = useReminderStore((s) => s.permission);
+  const requestReminderPermission = useReminderStore((s) => s.requestPermission);
+  useEffect(() => {
+    if (!token) return;
+    void reminderPoll();
+    const interval = setInterval(() => void reminderPoll(), 60_000);
+    return () => clearInterval(interval);
+  }, [token, reminderPoll]);
 
   // Only the id drives loading — the table's name/columns are always fetched
   // fresh from IndexedDB inside loadTable(), never trusted from this cached
@@ -435,6 +457,24 @@ function App() {
                 title={`Fone ieškoma ${pendingPhoneCount} telefono ${pendingPhoneCount === 1 ? 'numerio' : 'numerių'} — galite tęsti darbą, jums pranešime, kai bus rasta`}
               >
                 🕐 {pendingPhoneCount}
+              </span>
+            )}
+            {reminderPermission === 'default' && (
+              <button
+                type="button"
+                className="reminder-permission-btn"
+                title="Įjungti pranešimus, kai ateina laikas skambinti (skaičiuojama pagal langelio laiką, jei jis nustatytas)"
+                onClick={() => void requestReminderPermission()}
+              >
+                🔔 Įjungti priminimus
+              </button>
+            )}
+            {reminderPermission === 'denied' && (
+              <span
+                className="reminder-permission-blocked"
+                title="Pranešimai užblokuoti naršyklės nustatymuose — įjunkite juos svetainės nustatymuose, jei norite gauti garso priminimą"
+              >
+                🔕
               </span>
             )}
             <ThemeToggle />

@@ -269,6 +269,26 @@
   white-space: nowrap;
 }
 
+.reminder-permission-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.25em 0.65em;
+  font-size: 0.78rem;
+  background: var(--bg-alt);
+  flex-shrink: 0;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.reminder-permission-blocked {
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  cursor: default;
+}
+
 .theme-toggle {
   border: 1px solid var(--border);
   background: transparent;

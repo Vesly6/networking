@@ -60,6 +60,7 @@ import {
   allTablesBelongToCompany,
   backfillCompanyId,
   listWorkerActions,
+  findTimedNextActionRows,
   type WorkerRowRestriction,
 } from './tableData/db.js';
 import { AuthError, checkCredentials, issueToken, requireAuth, requirePermission } from './auth.js';
@@ -402,6 +403,13 @@ app.post('/api/apollo/webhook', (_req, res) => {
 // Public for the same reason as every other webhook route in this file —
 // Zadarma calls this directly, it can't carry our session token.
 app.get('/api/zadarma/sms-webhook', (req, res) => {
+  // Logged deliberately — this route previously had zero logging at all,
+  // which meant a real, reported "SMS never showed up" incident had
+  // nothing to check in Render's logs either way, even though Zadarma's
+  // own dashboard says the webhook is registered. This at least confirms
+  // whether Zadarma is contacting this URL at all (this GET verification
+  // step, or the POST below).
+  console.log('[sms-webhook] GET verification hit', { query: req.query, ip: req.ip });
   const echo = req.query.zd_echo;
   if (typeof echo === 'string') {
     res.status(200).send(echo);
@@ -439,6 +447,18 @@ app.get('/api/zadarma/sms-webhook', (req, res) => {
 // saved alongside the payload for later reference.
 app.post('/api/zadarma/sms-webhook', (req, res) => {
   const body = (req.body ?? {}) as Record<string, unknown>;
+  // Logged deliberately — see the GET handler's own comment above for
+  // why: this route had no logging at all before, so a real "the SMS
+  // never showed up" report had nothing to check in Render's logs even
+  // to confirm whether Zadarma tried at all. content-type is logged
+  // specifically because this receiver depends on express.json()/
+  // express.urlencoded() correctly recognizing the body's real
+  // Content-Type — an unexpected one would leave `body` empty even if
+  // Zadarma's request otherwise arrived fine.
+  console.log('[sms-webhook] POST received', {
+    contentType: req.headers['content-type'],
+    body,
+  });
   const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : null);
   // Best-effort field extraction — Zadarma's known webhook events name the
   // caller/callee caller_id/called_did (see NotifyStart in the official
@@ -455,6 +475,7 @@ app.post('/api/zadarma/sms-webhook', (req, res) => {
     rawPayload: JSON.stringify(body),
     signature: str(req.headers['signature']),
   });
+  console.log('[sms-webhook] saved to incoming_sms', { fromNumber, toNumber, message });
   res.status(200).json({ ok: true });
 });
 
@@ -2122,6 +2143,20 @@ app.get(
   '/api/tables/:id/rows/count',
   asyncHandler(async (req, res) => {
     res.json({ count: countRowsForTable(req.params.id, req.auth!.companyId) });
+  }),
+);
+
+// Powers the global "time to call" browser notification — polled every
+// ~60s by the client regardless of which tab/table is open (see
+// useReminderStore.ts). Deliberately not scoped to any one table (see
+// findTimedNextActionRows' own doc comment for why this has to read
+// straight from the DB rather than an in-memory table's rows) and
+// deliberately returns every match with no due-time filtering — that
+// comparison has to happen client-side in the user's own timezone.
+app.get(
+  '/api/reminders/timed',
+  asyncHandler(async (req, res) => {
+    res.json({ groups: findTimedNextActionRows(req.auth!.companyId) });
   }),
 );
 

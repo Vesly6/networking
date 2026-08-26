@@ -581,6 +581,58 @@ export function countRowsForTable(tableId: string, companyId: string): number {
   return row.n;
 }
 
+export interface TimedReminderGroup {
+  tableId: string;
+  tableName: string;
+  columns: unknown[]; // Column[] — opaque here, same as TableMeta.columns; the
+  // caller (index.ts) resolves a display label client-side.
+  rows: { id: string; cells: Record<string, string> }[];
+}
+
+/** Powers the global "it's time to call" notification — on explicit
+ * request, this has to work regardless of which table (if any) the user
+ * currently has open, so it can't just read useTableStore's in-memory
+ * rows the way the calendar/task-list views do; it has to go back to the
+ * DB across every one of the company's tables. Scoped to exactly the
+ * rows that could possibly matter (a next-action-date column value with
+ * an opt-in time component — see types.ts/CLAUDE.md's "Optional time"
+ * section, `yyyy-MM-ddTHH:mm` vs a bare `yyyy-MM-dd`) via a SQL-level
+ * pre-filter (LENGTH(json_extract(...)) > 10, mirroring the client's own
+ * hasTime() in utils/date.ts exactly) rather than loading and
+ * JSON-parsing every row in every table — most rows never opt into a
+ * time at all, so this keeps the common case cheap even against a
+ * ~14,000-row table, which matters given this runs on a client polling
+ * interval, not a one-off page load. Deliberately returns every match
+ * with no "is it actually due yet" filtering here — that comparison has
+ * to happen client-side, in the user's own browser-local timezone
+ * (`yyyy-MM-ddTHH:mm` has no timezone suffix, and this server's own
+ * clock — Render, normally UTC — has no reliable way to know what
+ * timezone the user actually meant when they typed that time). */
+export function findTimedNextActionRows(companyId: string): TimedReminderGroup[] {
+  const database = getDb();
+  const tables = loadTables(companyId);
+  const groups: TimedReminderGroup[] = [];
+  for (const table of tables) {
+    const dateColumn = (table.columns as Array<{ id: string; type?: string; isNextActionDate?: boolean }>).find(
+      (c) => c.type === 'date' && c.isNextActionDate,
+    );
+    if (!dateColumn) continue;
+    const candidates = database
+      .prepare(
+        `SELECT id, cells_json FROM rows WHERE table_id = ? AND company_id = ? AND LENGTH(json_extract(cells_json, ?)) > 10`,
+      )
+      .all(table.id, companyId, `$."${dateColumn.id}"`) as Array<{ id: string; cells_json: string }>;
+    if (candidates.length === 0) continue;
+    groups.push({
+      tableId: table.id,
+      tableName: table.name,
+      columns: table.columns,
+      rows: candidates.map((r) => ({ id: r.id, cells: JSON.parse(r.cells_json) })),
+    });
+  }
+  return groups;
+}
+
 /** True only if every id in `tableIds` is a table that belongs to
  * `companyId` — the route handler for PUT /api/rows calls this (with the
  * distinct tableIds present in the incoming batch) before saveRows(),
