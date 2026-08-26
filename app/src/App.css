@@ -502,6 +502,30 @@
   flex: 1;
 }
 
+.import-progress {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.import-progress-bar {
+  width: 110px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+.import-progress-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.15s ease-out;
+}
+.import-progress-label {
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
 .search-input {
   min-width: 240px;
   flex: 0 1 320px;
@@ -730,6 +754,16 @@ thead tr:nth-child(2) th {
 }
 .th-name:hover {
   background: var(--bg-hover);
+}
+.th-numeric-filter-badge {
+  display: inline-flex;
+  margin-left: 0.3em;
+  font-size: 0.75em;
+  opacity: 0.85;
+  cursor: pointer;
+}
+.th-numeric-filter-badge:hover {
+  opacity: 1;
 }
 
 .th-menu-btn {
@@ -1433,6 +1467,13 @@ tr.row-drop-end td {
   color: var(--text-muted);
 }
 
+.popover-field-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 0.4rem;
+}
+
 .popover-field input,
 .popover-field select {
   width: 100%;
@@ -1611,6 +1652,22 @@ tr.row-drop-end td {
   margin: 0;
   font-size: 0.9rem;
   white-space: pre-line;
+}
+
+.type-to-confirm-required {
+  margin: 0;
+  font-size: 0.9rem;
+}
+.type-to-confirm-required code {
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.1rem 0.4rem;
+  font-weight: 600;
+  user-select: all;
+}
+.type-to-confirm-input {
+  width: 100%;
 }
 
 .csv-import-mapping-hint {
@@ -1940,6 +1997,10 @@ tr.row-drop-end td {
   font-size: 0.7rem;
   color: var(--text-muted);
   margin-bottom: 0.15em;
+}
+.cell-hover-history-author {
+  font-weight: 600;
+  color: var(--text);
 }
 
 .cell-hover-history-row {
@@ -3210,11 +3271,11 @@ tr.row-drop-end td {
 }
 .calls-table th:nth-child(2),
 .calls-table td:nth-child(2) {
-  width: 19%;
+  width: 17%;
 }
 .calls-table th:nth-child(3),
 .calls-table td:nth-child(3) {
-  width: 24%;
+  width: 22%;
 }
 .calls-table th:nth-child(4),
 .calls-table td:nth-child(4) {
@@ -3222,11 +3283,15 @@ tr.row-drop-end td {
 }
 .calls-table th:nth-child(5),
 .calls-table td:nth-child(5) {
-  width: 9%;
+  width: 8%;
 }
 .calls-table th:nth-child(6),
 .calls-table td:nth-child(6) {
-  width: 31%;
+  width: 8%;
+}
+.calls-table th:nth-child(7),
+.calls-table td:nth-child(7) {
+  width: 28%;
 }
 
 .calls-table th,
@@ -3403,8 +3468,14 @@ tr.row-drop-end td {
    actual relationship to each other besides looking alike. */
 .calls-mode-switch {
   display: flex;
+  align-items: center;
   gap: 0.4rem;
   margin-bottom: 1rem;
+}
+.calls-balance {
+  margin-left: auto;
+  font-weight: 600;
+  color: var(--text);
 }
 .calls-mode-switch button.active {
   background: var(--accent);
@@ -3618,6 +3689,14 @@ tr.row-drop-end td {
   color: var(--text-muted);
   font-size: 0.8rem;
   margin-left: auto;
+}
+
+.calls-stats-load-costs {
+  margin-left: auto;
+}
+.calls-stats-load-costs:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 .calls-stats-cards {
@@ -3851,12 +3930,19 @@ tr.row-drop-end td {
   display: inline-flex;
   align-items: center;
   gap: 0.3em;
+  max-width: 100%;
+  box-sizing: border-box;
   border: 1px solid var(--border-strong);
   background: var(--accent);
   color: var(--accent-contrast);
   border-radius: 999px;
   padding: 0.15em 0.3em 0.15em 0.65em;
   font-size: 0.74rem;
+}
+.combobox-chip-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 .combobox-chip-remove {
@@ -6158,6 +6244,31 @@ tr.row-drop-end td {
   outline-offset: 1px;
 }
 
+.email-generator-form .mic-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.email-generator-form .mic-lang-select {
+  display: flex;
+  gap: 0.3rem;
+}
+.email-generator-form .mic-lang-select button {
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 0.25em 0.5em;
+  font-size: 0.76rem;
+  background: var(--bg);
+  color: var(--text);
+}
+.email-generator-form .mic-lang-select button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+}
+.email-generator-form .mic-lang-select button:disabled {
+  opacity: 0.6;
+}
 .email-generator-form .icon-btn {
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -6496,4 +6607,207 @@ tr.row-drop-end td {
   .lessons-article {
     max-width: none;
   }
+}
+
+/* Workers management (WorkersView.tsx) — super-admin/owner only. */
+.workers-view {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 1.5rem 1rem;
+}
+.workers-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+}
+.worker-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1rem;
+  margin-bottom: 0.8rem;
+  background: var(--bg-alt);
+}
+.worker-card-new {
+  border-color: var(--accent);
+}
+.worker-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+.worker-card-username {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  margin-left: 0.5rem;
+}
+.worker-card-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+.worker-card-summary {
+  margin-top: 0.5rem;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+.worker-activity-panel {
+  margin-top: 0.8rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.6rem;
+}
+.worker-activity-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.worker-activity-entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.5rem 0.7rem;
+}
+.worker-activity-entry-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+.worker-activity-entry-type {
+  font-weight: 600;
+  font-size: 0.82rem;
+}
+.worker-activity-entry-detail {
+  font-size: 0.82rem;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.worker-activity-entry-meta {
+  font-size: 0.74rem;
+  color: var(--text-muted);
+}
+.worker-activity-jump {
+  flex-shrink: 0;
+}
+.worker-form-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.6rem;
+  margin-bottom: 0.8rem;
+}
+.worker-form-permissions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+  margin-top: 0.6rem;
+}
+.worker-form-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.worker-form-section-label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.worker-form-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.worker-form-permission-list {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.4rem;
+}
+.worker-form-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+.worker-form-always-restricted {
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.6rem 0.8rem;
+}
+.worker-form-always-restricted ul {
+  margin: 0.3rem 0 0;
+  padding-left: 1.1rem;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+.worker-form-always-restricted li {
+  margin-bottom: 0.2rem;
+}
+
+.worker-password-form {
+  margin-top: 0.6rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--border);
+  max-width: 280px;
+}
+.worker-password-form .worker-form-actions {
+  margin-top: 0.5rem;
+}
+
+.integrations-view {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 1.5rem 1rem;
+}
+.integrations-intro {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  margin: 0 0 1rem;
+}
+.integrations-group {
+  margin-bottom: 0.8rem;
+}
+.integrations-hint {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  margin: 0.3rem 0 0.6rem;
+}
+.integrations-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin-top: 0.6rem;
+}
+.integrations-field-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.6rem;
+}
+.integrations-field-row .popover-field {
+  flex: 1;
+  min-width: 0;
+}
+.integrations-field-status {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+.integrations-badge-set {
+  color: #1b7a3d;
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+.integrations-badge-unset {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  white-space: nowrap;
 }

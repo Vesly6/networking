@@ -6,9 +6,11 @@ import {
   fetchLinkedInSafety,
   updateLinkedInSafetySettings,
   setLinkedInPaused,
+  runLinkedInScheduler,
   type LinkedInStatus,
   type LinkedInActionLogEntry,
   type LinkedInSafetySnapshot,
+  type SchedulerRunResult,
 } from '../utils/linkedinApi';
 
 // Phase 0 proved the CDP/Playwright connection; this store still only
@@ -42,6 +44,17 @@ interface LinkedInState {
   saveSafetySettings: (patch: Record<string, string | number | boolean>) => Promise<boolean>;
   /** The always-visible "⏸ Stop everything" control. */
   togglePause: () => Promise<void>;
+
+  runningScheduler: boolean;
+  runSchedulerError: string | null;
+  /** "▶ Vykdyti dabar" — the scheduler tick no longer runs on its own
+   * background timer at all (see server/src/index.ts's doc comment on
+   * why), so this is now the only way it ever runs. Refreshes
+   * actions/safety afterward, same as sendTestConnect above, since a run
+   * can change either (an autonomous send logs an action and consumes a
+   * cap) even though most of the time — manual review on — it only
+   * recomputes what's pending. */
+  runScheduler: () => Promise<SchedulerRunResult | null>;
 }
 
 export const useLinkedInStore = create<LinkedInState>((set, get) => ({
@@ -121,6 +134,22 @@ export const useLinkedInStore = create<LinkedInState>((set, get) => ({
       set({ safety });
     } catch (err) {
       set({ saveSettingsError: err instanceof Error ? err.message : 'Could not update pause state' });
+    }
+  },
+
+  runningScheduler: false,
+  runSchedulerError: null,
+  runScheduler: async () => {
+    set({ runningScheduler: true, runSchedulerError: null });
+    try {
+      const result = await runLinkedInScheduler();
+      set({ runningScheduler: false });
+      void get().refreshActions();
+      void get().refreshSafety();
+      return result;
+    } catch (err) {
+      set({ runningScheduler: false, runSchedulerError: err instanceof Error ? err.message : 'Could not run scheduler' });
+      return null;
     }
   },
 }));

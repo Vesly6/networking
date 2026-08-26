@@ -5,6 +5,12 @@ export interface NoteEntry {
   text: string;
   /** Epoch ms; 0 for a legacy plain-text value migrated with no known time. */
   createdAt: number;
+  /** Who added this entry — "First Last" from useAuthStore at the moment
+   * addNoteEntry() was called (see its own doc comment). Undefined for
+   * every entry logged before this shipped and for the single-string
+   * legacy fallback below; CellHoverEditor's rendering just omits the
+   * author line in that case rather than showing a placeholder. */
+  authorName?: string;
 }
 
 /** A note cell's stored value is a JSON array of dated entries (newest
@@ -21,6 +27,7 @@ export function parseNoteHistory(raw: string): NoteEntry[] {
         id: typeof e.id === 'string' ? e.id : randomUUID(),
         text: e.text,
         createdAt: typeof e.createdAt === 'number' ? e.createdAt : 0,
+        authorName: typeof e.authorName === 'string' ? e.authorName : undefined,
       }));
     }
   } catch {
@@ -33,12 +40,18 @@ export function serializeNoteHistory(entries: NoteEntry[]): string {
   return JSON.stringify(entries);
 }
 
-/** Prepends a new dated entry (newest first) and re-serializes. */
-export function addNoteEntry(raw: string, text: string): string {
+/** Prepends a new dated entry (newest first) and re-serializes.
+ * `authorName` is the currently logged-in user's "First Last" (passed by
+ * the caller — this module has no store access of its own, matching its
+ * existing "just JSON in, JSON out" shape) — undefined when there's no
+ * multi-user context to attribute (shouldn't normally happen post-login,
+ * but kept optional rather than required so this function doesn't need
+ * to know anything about auth state itself). */
+export function addNoteEntry(raw: string, text: string, authorName?: string): string {
   const trimmed = text.trim();
   if (!trimmed) return raw;
   const existing = parseNoteHistory(raw);
-  const entry: NoteEntry = { id: randomUUID(), text: trimmed, createdAt: Date.now() };
+  const entry: NoteEntry = { id: randomUUID(), text: trimmed, createdAt: Date.now(), authorName };
   return serializeNoteHistory([entry, ...existing]);
 }
 

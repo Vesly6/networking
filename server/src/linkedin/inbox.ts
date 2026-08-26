@@ -8,7 +8,12 @@ export interface InboxSyncResult {
   leadsMarkedReplied: number;
 }
 
-/** Periodically (see index.ts's background interval) re-scrapes the
+/** Called from InboxPanel.tsx's "↻ Sinchronizuoti dabar" (POST
+ * /api/linkedin/inbox/sync) — index.ts used to also run this on its own
+ * background setInterval every 10 minutes regardless of any user action;
+ * removed on explicit request (real Playwright page navigations against
+ * the user's actual Chrome window, unprompted, were surfacing as "the
+ * LinkedIn window keeps turning itself back on"). Re-scrapes the
  * conversation list and each thread's messages, and does two things
  * nothing else in this codebase can: (1) promotes a 'pending' lead to
  * 'connected' the moment a real conversation with them exists — LinkedIn

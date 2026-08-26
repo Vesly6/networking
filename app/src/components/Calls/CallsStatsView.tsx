@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useCallsStore } from '../../store/useCallsStore';
-import { getAllCallStats } from '../../db/db';
+import { useToastStore } from '../../store/useToastStore';
+import { getAllCallStats, saveCallStats } from '../../db/db';
+import { fetchCallCosts } from '../../utils/callsApi';
 import {
   addDays,
   addMonths,
@@ -43,10 +45,12 @@ function rangeTitle(start: string, end: string, period: Period): string {
 export function CallsStatsView() {
   const historySyncing = useCallsStore((s) => s.historySyncing);
   const historySyncProgress = useCallsStore((s) => s.historySyncProgress);
+  const showToast = useToastStore((s) => s.show);
 
   const [records, setRecords] = useState<CallStatRecord[] | null>(null);
   const [period, setPeriod] = useState<Period>('week');
   const [anchorDate, setAnchorDate] = useState(() => todayDateString());
+  const [costsLoading, setCostsLoading] = useState(false);
 
   useEffect(() => {
     void getAllCallStats().then(setRecords);
@@ -68,6 +72,40 @@ export function CallsStatsView() {
   }, [records, start, end]);
 
   const summary = useMemo(() => summarize(periodRecords), [periodRecords]);
+
+  // Reuses the exact same /api/calls/costs endpoint (and its nearest-
+  // timestamp correlation — see server/src/zadarma.ts's getCallCosts) the
+  // live Calls list's "Įkelti skambučius" now also fetches, just pointed
+  // at this period's *locally persisted* records (db.ts's `callStats`
+  // store) instead of the live list. Results are written straight back
+  // onto those same records via saveCallStats — an ordinary field update
+  // by call_id, the same upsert every other write to this store already
+  // does — so once run for a period, its cost stays known on every future
+  // visit without needing to be re-fetched, matching the "local,
+  // permanent copy" reasoning this whole feature exists for. Deliberately
+  // a separate, explicit action (not automatic on period change) — same
+  // "don't multiply an already rate-limited request" caution as the live
+  // list's own cost fetch.
+  const loadCosts = async () => {
+    if (costsLoading || periodRecords.length === 0) return;
+    setCostsLoading(true);
+    try {
+      const costs = await fetchCallCosts(
+        `${start} 00:00:00`,
+        `${end} 23:59:59`,
+        periodRecords.map((r) => ({ call_id: r.call_id, callstart: r.callstart })),
+      );
+      const updated = periodRecords.map((r) => (costs[r.call_id] ? { ...r, ...costs[r.call_id] } : r));
+      await saveCallStats(updated);
+      const updatedById = new Map(updated.map((r) => [r.call_id, r]));
+      setRecords((prev) => (prev ? prev.map((r) => updatedById.get(r.call_id) ?? r) : prev));
+    } catch (err) {
+      const raw = err instanceof Error ? err.message : 'Nepavyko įkelti išlaidų';
+      showToast(/rate limit/i.test(raw) ? 'Skambučių paslauga riboja užklausas — palaukite ir bandykite dar kartą.' : raw);
+    } finally {
+      setCostsLoading(false);
+    }
+  };
 
   // The background sync stops at the first chunk that fails (rate limit,
   // network blip) rather than skipping ahead — skipping would let a
@@ -134,10 +172,18 @@ export function CallsStatsView() {
           </span>
         )}
         {catchingUp && (
-          <span className="calls-stats-syncing" title="Zadarma riboja, kaip greitai galime atsisiųsti istoriją — tai automatiškai pasivys per kelis kitus apsilankymus šiame skirtuke.">
+          <span className="calls-stats-syncing" title="Skambučių paslauga riboja, kaip greitai galime atsisiųsti istoriją — tai automatiškai pasivys per kelis kitus apsilankymus šiame skirtuke.">
             Lokali istorija sinchronizuota iki {latestSyncedDate} — dar vejamasi
           </span>
         )}
+        <button
+          type="button"
+          className="calls-stats-load-costs"
+          onClick={() => void loadCosts()}
+          disabled={costsLoading || periodRecords.length === 0}
+        >
+          {costsLoading ? 'Kraunama išlaidas…' : 'Rodyti išlaidas'}
+        </button>
       </div>
 
       <div className="calls-stats-cards">
@@ -156,6 +202,20 @@ export function CallsStatsView() {
         <div className="calls-stats-card">
           <div className="calls-stats-card-value">{formatDuration(summary.totalSeconds)}</div>
           <div className="calls-stats-card-label">Pokalbio trukmė</div>
+        </div>
+        <div className="calls-stats-card">
+          <div className="calls-stats-card-value">
+            {summary.totalCost === null ? '—' : `${summary.totalCost.toFixed(2)} ${summary.currency}`}
+          </div>
+          <div className="calls-stats-card-label">
+            Išlaidos
+            {summary.totalCost !== null && summary.callsWithoutCost > 0 && (
+              <span title="Dalis šio laikotarpio skambučių dar neturi žinomos kainos (nepavyko susieti su Zadarma sąskaitos duomenimis).">
+                {' '}
+                (dar {summary.callsWithoutCost} be kainos)
+              </span>
+            )}
+          </div>
         </div>
       </div>
 

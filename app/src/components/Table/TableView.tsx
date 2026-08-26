@@ -12,6 +12,7 @@ import {
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { Column, Row } from '../../types';
 import { useTableStore, type CellColorUpdate, type CellUpdate, type ImportColumnMapping } from '../../store/useTableStore';
+import { useAuthStore } from '../../store/useAuthStore';
 import { useToastStore } from '../../store/useToastStore';
 import { confirmDialog } from '../../store/useConfirmStore';
 import { DataCell } from './DataCell';
@@ -25,6 +26,7 @@ import { RowHeaderMenu } from './RowHeaderMenu';
 import { CellContextMenu } from './CellContextMenu';
 import { HiddenColumnsPopover } from './HiddenColumnsPopover';
 import { HiddenRowsPopover } from './HiddenRowsPopover';
+import { NumericRangeFilterPopover } from './NumericRangeFilterPopover';
 import { FormulaBar } from '../FormulaBar';
 import { Popover } from '../Popover';
 import { parseCsvFile, exportRowsToCsv, downloadCsv } from '../../utils/csv';
@@ -34,6 +36,8 @@ import { addContact, updateContact, removeContact, markSocialLookupNotFound } fr
 import { columnLetter, formatCellRef, parseRangeRef } from '../../utils/spreadsheet';
 import { getColumnByType } from '../../utils/row';
 import { normalizePhoneDigits } from '../../utils/phoneMatch';
+import { matchesNumericRange, parseNumericCellValue, type NumericRangeFilter } from '../../utils/numericFilter';
+import { isCellLockedForWorker } from '../../utils/workerCellLock';
 import {
   ADD_COLUMN_WIDTH,
   DEFAULT_COLUMN_WIDTH,
@@ -131,23 +135,35 @@ function indexAtOffset(ranges: { start: number; end: number }[], offset: number,
 // potentially against rows that no longer exist, is a fair bit more
 // machinery for less payoff than what's actually reported as "resetting
 // to some default."
-function loadPersistedViewState(tableId: string | null): { search: string } {
-  if (!tableId) return { search: '' };
+function loadPersistedViewState(tableId: string | null): { search: string; numericFilters: Record<string, NumericRangeFilter> } {
+  if (!tableId) return { search: '', numericFilters: {} };
   try {
     const raw = localStorage.getItem(`${TABLE_VIEW_STATE_KEY_PREFIX}${tableId}`);
-    if (!raw) return { search: '' };
-    const parsed = JSON.parse(raw) as { search?: unknown };
+    if (!raw) return { search: '', numericFilters: {} };
+    const parsed = JSON.parse(raw) as { search?: unknown; numericFilters?: unknown };
     const search = typeof parsed.search === 'string' ? parsed.search : '';
-    return { search };
+    // Added after numericFilters (the per-column range-filter popover)
+    // shipped — a real, reported gap: the search box already survived a
+    // reload, but a column's numeric filter silently reset to "no filter"
+    // on every reload/return, which is exactly the kind of "I filtered,
+    // came back later, and it was gone" report this whole function exists
+    // to prevent. Same lenient-parse convention as `search` above: a
+    // corrupted/outdated localStorage value just falls back to "no
+    // filters" rather than throwing.
+    const numericFilters =
+      parsed.numericFilters && typeof parsed.numericFilters === 'object' && !Array.isArray(parsed.numericFilters)
+        ? (parsed.numericFilters as Record<string, NumericRangeFilter>)
+        : {};
+    return { search, numericFilters };
   } catch {
-    return { search: '' };
+    return { search: '', numericFilters: {} };
   }
 }
 
-function saveViewState(tableId: string | null, search: string) {
+function saveViewState(tableId: string | null, search: string, numericFilters: Record<string, NumericRangeFilter>) {
   if (!tableId) return;
   try {
-    localStorage.setItem(`${TABLE_VIEW_STATE_KEY_PREFIX}${tableId}`, JSON.stringify({ search }));
+    localStorage.setItem(`${TABLE_VIEW_STATE_KEY_PREFIX}${tableId}`, JSON.stringify({ search, numericFilters }));
   } catch {
     // localStorage can throw (quota exceeded, private-browsing
     // restrictions) — persistence here is a nice-to-have, not required
@@ -181,10 +197,33 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
   // once per render here rather than per-cell, since it only depends on
   // `columns` (same reasoning as any other columns.find()-derived value).
   const contactColumn = useMemo(() => getColumnByType(columns, 'contact'), [columns]);
+  // Stamped onto every new note entry (see noteHistory.ts's addNoteEntry)
+  // so multi-worker note history shows who logged what — real, reported
+  // need once a company has more than one person working the same rows.
+  const currentUser = useAuthStore((s) => s.user);
+  const currentUserName = currentUser ? `${currentUser.firstName} ${currentUser.lastName}`.trim() : undefined;
+  // Gates the toolbar's own "Ištrinti pasirinktas (N)" bulk-delete button
+  // below — a real, reported bug: every *other* delete entry point (the
+  // row/column right-click menus) already checked this, but this one
+  // toolbar button never did, so a fully-restricted worker still saw and
+  // could click it. Same permission, same `role !== 'worker' ||` pattern
+  // as RowHeaderMenu/ColumnHeaderMenu's own canDelete.
+  const canDeleteSelectedRows = currentUser?.role !== 'worker' || currentUser.permissions.canDeleteRows;
+  // The (⋮) column menu (ColumnMenu.tsx) is a hard block for every worker,
+  // not gated per-field — on explicit request ("nenoriu, kad jis isvis
+  // turėtų galimybę užeiti į (⋮)"). ColumnMenu itself already disables the
+  // Type select and hides the delete button for a worker (defense in
+  // depth, in case this trigger is ever reached some other way later),
+  // but the actual boundary is just never rendering the "⋮" button or the
+  // menu it opens at all for a worker — rename and dropdown-options/color
+  // editing inside it were never individually gated, so hiding the one
+  // entry point is simpler and safer than trying to lock down every field.
+  const canOpenColumnMenu = currentUser?.role !== 'worker';
   const addRow = useTableStore((s) => s.addRow);
   const removeRows = useTableStore((s) => s.removeRows);
   const setRowsHidden = useTableStore((s) => s.setRowsHidden);
   const importCsvRows = useTableStore((s) => s.importCsvRows);
+  const importProgress = useTableStore((s) => s.importProgress);
   const updateCell = useTableStore((s) => s.updateCell);
   const updateCells = useTableStore((s) => s.updateCells);
   const setCellColors = useTableStore((s) => s.setCellColors);
@@ -212,9 +251,12 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
   }, [lastCellSaveError, showToast]);
 
   const [search, setSearch] = useState(() => loadPersistedViewState(tableId).search);
+  const [numericFilters, setNumericFilters] = useState<Record<string, NumericRangeFilter>>(
+    () => loadPersistedViewState(tableId).numericFilters,
+  );
   useEffect(() => {
-    saveViewState(tableId, search);
-  }, [tableId, search]);
+    saveViewState(tableId, search, numericFilters);
+  }, [tableId, search, numericFilters]);
   // Memory for "which direction did the last click on this same column
   // use" — purely so a second click on the same header flips asc -> desc,
   // same as before. Deliberately a ref, not state: nothing should
@@ -262,6 +304,20 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
   // handleFileChange/handleConfirmImport below.
   const [pendingImport, setPendingImport] = useState<{ headers: string[]; dataRows: string[][] } | null>(null);
   const [columnContextMenu, setColumnContextMenu] = useState<{ x: number; y: number; targetIds: string[] } | null>(null);
+  // Additive alongside sort (see NumericRangeFilterPopover's own doc
+  // comment) — a map so several columns can each have their own active
+  // "from–to" range at once, matching a real spreadsheet. Keyed by
+  // column id; a column absent from this map has no filter applied.
+  // Declared above, alongside `search`, since both feed the same
+  // persisted-view-state effect.
+  const [numericFilterColumnId, setNumericFilterColumnId] = useState<string | null>(null);
+  // The popover's anchor can't be the ColumnHeaderMenu button that opened
+  // it — that button unmounts in the same batch as the menu closing (see
+  // ColumnHeaderMenu's own onFilterRange doc comment), and Popover
+  // requires a still-`isConnected` anchor. This tracks each column's own
+  // persistent .th-name header button instead, which outlives any context
+  // menu opened on top of it.
+  const columnHeaderRefs = useRef(new Map<string, HTMLButtonElement>());
   const [rowContextMenu, setRowContextMenu] = useState<{ x: number; y: number; targetIds: string[] } | null>(null);
   const [cellContextMenu, setCellContextMenu] = useState<{ x: number; y: number; rowTargetIds: string[]; columnTargetIds: string[] } | null>(
     null,
@@ -494,36 +550,48 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
   // top of `rows`. So there's nothing sort-related left to do here: `rows`
   // already arrives in the right order (same as any other row-reorder
   // action, e.g. manual drag), and this memo only needs to apply the
-  // search filter.
+  // search filter and any active per-column numeric range filters.
   const filteredSortedRows = useMemo(() => {
     // Hidden rows (RowHeaderMenu's "Slėpti eilutę" — see Row.hidden in
     // types.ts) are excluded from the rendered/virtualized grid entirely,
     // same as a search-filtered-out row already was — the data itself is
     // untouched (still in `rows`, still in CSV export, which reads `rows`
     // directly rather than this memo).
-    const visible = rows.filter((r) => !r.hidden);
-    if (!search.trim()) return visible;
-    const q = search.trim().toLowerCase();
-    // Phone numbers get typed/stored in wildly different formats
-    // ("+370 640 11013" vs "37064011013" vs a bare "64011013") — a plain
-    // substring match on the raw text misses all but an exact match.
-    // Comparing digits-only (in addition to, not instead of, the normal
-    // text match) lets any of those find the same cell. Gated to queries
-    // with at least a handful of digits so short numeric searches (a
-    // year, a single digit) don't start matching every phone-containing
-    // cell in the table.
-    const qDigits = normalizePhoneDigits(search);
-    const phoneSearchActive = qDigits.length >= MIN_PHONE_SEARCH_DIGITS;
-    return visible.filter((row) =>
-      Object.values(row.cells).some((v) => {
-        if (!v) return false;
-        if (v.toLowerCase().includes(q)) return true;
-        if (!phoneSearchActive) return false;
-        const vDigits = normalizePhoneDigits(v);
-        return vDigits.length > 0 && vDigits.includes(qDigits);
-      }),
-    );
-  }, [rows, search]);
+    let visible = rows.filter((r) => !r.hidden);
+    if (search.trim()) {
+      const q = search.trim().toLowerCase();
+      // Phone numbers get typed/stored in wildly different formats
+      // ("+370 640 11013" vs "37064011013" vs a bare "64011013") — a plain
+      // substring match on the raw text misses all but an exact match.
+      // Comparing digits-only (in addition to, not instead of, the normal
+      // text match) lets any of those find the same cell. Gated to queries
+      // with at least a handful of digits so short numeric searches (a
+      // year, a single digit) don't start matching every phone-containing
+      // cell in the table.
+      const qDigits = normalizePhoneDigits(search);
+      const phoneSearchActive = qDigits.length >= MIN_PHONE_SEARCH_DIGITS;
+      visible = visible.filter((row) =>
+        Object.values(row.cells).some((v) => {
+          if (!v) return false;
+          if (v.toLowerCase().includes(q)) return true;
+          if (!phoneSearchActive) return false;
+          const vDigits = normalizePhoneDigits(v);
+          return vDigits.length > 0 && vDigits.includes(qDigits);
+        }),
+      );
+    }
+    // Additive alongside search/sort, not a replacement for either — see
+    // NumericRangeFilterPopover's own doc comment for why this exists
+    // (A→Z/Z→A on a numeric-looking column like "Darbuotojai"/"Apyvarta"
+    // sorts as plain text, giving "1, 10, 100, 1000, 11, 12..."; this is a
+    // genuinely different operation, hiding rows outside a chosen
+    // from–to range rather than reordering them).
+    const activeFilterEntries = Object.entries(numericFilters);
+    if (activeFilterEntries.length > 0) {
+      visible = visible.filter((row) => activeFilterEntries.every(([columnId, filter]) => matchesNumericRange(row.cells[columnId] ?? '', filter)));
+    }
+    return visible;
+  }, [rows, search, numericFilters]);
 
   // Kept in sync on every render (not just inside effects) so rAF/timeout
   // callbacks elsewhere in this file (handleAddRow, the focusRowId effect)
@@ -1193,6 +1261,18 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
 
     const updates: CellUpdate[] = [];
     let skippedColumns = false;
+    let skippedLocked = 0;
+    // A row index beyond the current table doesn't exist yet — rowIdAt
+    // will create it via addRow(), and a brand-new row's cells are always
+    // empty, so there's nothing to lock there; only an *existing* row's
+    // *existing* value can ever trigger isCellLockedForWorker. Same rule
+    // (and the same real bypass this closes) as the Delete/Backspace
+    // handler and clearCellRange above — pasting over a filled append-
+    // only cell went through updateCells exactly the same unguarded way.
+    const lockedFor = (r: number, column: Column): boolean => {
+      if (r >= filteredSortedRows.length) return false;
+      return isCellLockedForWorker(column, filteredSortedRows[r].cells[column.id] ?? '', currentUser);
+    };
 
     if (singleValue !== null && spansMultiple) {
       const maxR = Math.max(anchor.r, focus.r);
@@ -1204,16 +1284,25 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
             skippedColumns = true;
             continue;
           }
+          if (lockedFor(r, columns[c])) {
+            skippedLocked++;
+            continue;
+          }
           updates.push({ rowId, columnId: columns[c].id, value: singleValue });
         }
       }
     } else {
       grid.forEach((rowValues, i) => {
-        const rowId = rowIdAt(minR + i);
+        const r = minR + i;
+        const rowId = rowIdAt(r);
         rowValues.forEach((value, j) => {
           const c = minC + j;
           if (c >= columns.length) {
             skippedColumns = true;
+            return;
+          }
+          if (lockedFor(r, columns[c])) {
+            skippedLocked++;
             return;
           }
           updates.push({ rowId, columnId: columns[c].id, value });
@@ -1241,6 +1330,7 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
     const parts = [`Įklijuota langelių: ${updates.length}`];
     if (truncatedCells > 0) parts.push(`apkarpyta pagal Excel ribą: ${truncatedCells}`);
     if (skippedColumns) parts.push('papildomi stulpeliai, nesantys lentelėje, praleisti');
+    if (skippedLocked > 0) parts.push(`negalima keisti: ${skippedLocked}`);
     showToast(parts.join(' · '));
   };
 
@@ -1335,20 +1425,35 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
     if (rowIndex < 0 || colIndex < 0) return;
     applyPastedGrid(parseTsv(text), { r: rowIndex, c: colIndex }, { r: rowIndex, c: colIndex });
   };
+  // Same isCellLockedForWorker check as the Delete/Backspace handler above
+  // — this is CellContextMenu's "Išvalyti turinį" item, which is only
+  // itself hidden by canClearContent (see that menu's own doc comment on
+  // why that flag is a client-side convenience gate, not the real
+  // boundary): a worker granted canClearContent can still open this menu
+  // and click it, and that must not override the append-only/note-contact
+  // rules on cells this permission was never meant to touch.
   const clearCellRange = (rowTargetIds: string[], columnTargetIds: string[]) => {
     const rowSet = new Set(rowTargetIds);
     const colSet = new Set(columnTargetIds);
     const updates: CellUpdate[] = [];
+    let skipped = 0;
     for (const row of filteredSortedRows) {
       if (!rowSet.has(row.id)) continue;
       for (const col of columns) {
         if (!colSet.has(col.id)) continue;
+        if (isCellLockedForWorker(col, row.cells[col.id] ?? '', currentUser)) {
+          skipped++;
+          continue;
+        }
         updates.push({ rowId: row.id, columnId: col.id, value: '' });
       }
     }
-    if (updates.length === 0) return;
-    updateCells(updates);
-    showToast(`Išvalyta langelių: ${updates.length}`);
+    if (updates.length > 0) {
+      updateCells(updates);
+      showToast(`Išvalyta langelių: ${updates.length}`);
+    } else if (skipped > 0) {
+      showToast('Šio turinio negalima ištrinti');
+    }
   };
 
   useEffect(() => {
@@ -1393,6 +1498,18 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
   // immediately — no need to double-click in, select-all, then delete
   // character by character. Only fires when nothing is actively being typed
   // into (a focused <textarea>/<input> handles its own Delete/Backspace).
+  //
+  // A real, reported bypass of the append-only worker restriction: this
+  // handler called updateCells directly for every cell in the selection,
+  // never checking isCellLockedForWorker the way DataCell.tsx's click-to-
+  // edit path already does — so a worker could select a protected cell and
+  // press Delete, watch it go visibly blank, and have no idea the server
+  // was silently reverting it on the next save (see workerCellLock.ts's
+  // own doc comment for the exact same failure mode). Locked cells are now
+  // just skipped from the update batch entirely — an unlocked cell in the
+  // same selection still clears normally, matching the "reject the
+  // specific violation, not the whole action" pattern used everywhere else
+  // this restriction is enforced.
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key !== 'Delete' && e.key !== 'Backspace') return;
@@ -1402,18 +1519,28 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
       e.preventDefault();
       const { minR, maxR, minC, maxC } = rangeBounds;
       const updates: CellUpdate[] = [];
+      let skipped = 0;
       for (let r = minR; r <= Math.min(maxR, filteredSortedRows.length - 1); r++) {
         for (let c = minC; c <= Math.min(maxC, columns.length - 1); c++) {
-          updates.push({ rowId: filteredSortedRows[r].id, columnId: columns[c].id, value: '' });
+          const row = filteredSortedRows[r];
+          const column = columns[c];
+          if (isCellLockedForWorker(column, row.cells[column.id] ?? '', currentUser)) {
+            skipped++;
+            continue;
+          }
+          updates.push({ rowId: row.id, columnId: column.id, value: '' });
         }
       }
-      if (updates.length === 0) return;
-      updateCells(updates);
-      showToast(`Išvalyta langelių: ${updates.length}`);
+      if (updates.length > 0) {
+        updateCells(updates);
+        showToast(`Išvalyta langelių: ${updates.length}`);
+      } else if (skipped > 0) {
+        showToast('Šio turinio negalima ištrinti');
+      }
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [rangeBounds, filteredSortedRows, columns, updateCells, showToast]);
+  }, [rangeBounds, filteredSortedRows, columns, updateCells, showToast, currentUser]);
 
   // Ctrl/Cmd+Z to undo, Ctrl/Cmd+Shift+Z (or Ctrl+Y) to redo.
   useEffect(() => {
@@ -1481,10 +1608,43 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
   // a second click on the same header still flips asc -> desc rather than
   // sorting ascending every time; it drives no rendering.
   const commitSort = (columnId: string, direction: SortDirection) => {
+    // A real, reported problem: plain text comparison (localeCompare) on a
+    // numeric-looking column like "Apyvarta (2024)"/"Darbuotojų" produces
+    // "1, 10, 100, 1000, 11, 12..." instead of actual size order, since
+    // different-length numbers don't compare the way their values would
+    // suggest as strings. Detected by sampling this column's own non-empty
+    // values (up to 30) rather than trusting the column's declared type —
+    // there's no dedicated "number" column type in this app (see
+    // types.ts), a column like this is really just `text` whose values
+    // happen to be numeric. A column counts as numeric when at least 80%
+    // of the sample parses as one, so a handful of genuinely non-numeric
+    // stray entries doesn't fall back to plain text sort for the whole
+    // column. Same parseNumericCellValue this reuses from the "from–to"
+    // range filter (NumericRangeFilterPopover) — one shared definition of
+    // "does this cell look like a number," not two.
+    const nonEmptyValues = rows.map((r) => r.cells[columnId]).filter((v): v is string => !!v && v.trim() !== '');
+    const sample = nonEmptyValues.slice(0, 30);
+    const numericSample = sample.filter((v) => parseNumericCellValue(v) !== null);
+    const isNumericColumn = sample.length > 0 && numericSample.length / sample.length >= 0.8;
+
     const order = [...rows]
       .sort((a, b) => {
         const av = a.cells[columnId] ?? '';
         const bv = b.cells[columnId] ?? '';
+        if (isNumericColumn) {
+          const an = parseNumericCellValue(av);
+          const bn = parseNumericCellValue(bv);
+          // A blank/non-numeric cell always sorts to the end, regardless
+          // of direction — matches Excel's own convention (picking
+          // descending never moves blanks to the top just because the
+          // rest of the order flipped), so this is deliberately outside
+          // the asc/desc flip below, not run through it.
+          if (an === null && bn === null) return 0;
+          if (an === null) return 1;
+          if (bn === null) return -1;
+          const cmp = an - bn;
+          return direction === 'asc' ? cmp : -cmp;
+        }
         const cmp = av.localeCompare(bv, 'en');
         return direction === 'asc' ? cmp : -cmp;
       })
@@ -1895,11 +2055,16 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
     }
   };
 
-  const handleConfirmImport = (mapping: Record<string, ImportColumnMapping>) => {
+  const handleConfirmImport = async (mapping: Record<string, ImportColumnMapping>) => {
     if (!pendingImport) return;
     const { headers, dataRows } = pendingImport;
     setPendingImport(null);
-    const result = importCsvRows(headers, dataRows, mapping);
+    // importCsvRows now streams rows in on-screen batches (see its own doc
+    // comment in useTableStore.ts) — the first rows are visible almost
+    // immediately, with the toolbar's progress bar (next to "🎨 Spalva")
+    // tracking the rest. This toast is the *final* summary, shown once
+    // every batch has landed, not a "please wait" message.
+    const result = await importCsvRows(headers, dataRows, mapping);
     const parts = [`Importuota eilučių: ${result.createdRows}`];
     if (result.createdColumns > 0) parts.push(`naujų stulpelių: ${result.createdColumns}`);
     if (result.truncatedCells > 0) parts.push(`apkarpytų langelių: ${result.truncatedCells}`);
@@ -1950,6 +2115,7 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
     setHiddenColumnsAnchor(null);
     setHiddenRowsAnchor(null);
     setDateCellPopover(null);
+    setNumericFilterColumnId(null);
     if (!justFinishedHeaderDragRef.current) {
       setRowRangeAnchor(null);
       setRowRangeFocus(null);
@@ -2031,7 +2197,23 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
           ↷
         </button>
         <div className="toolbar-spacer" />
-        {selectedRowIds.size > 0 && (
+        {importProgress && (
+          <div
+            className="import-progress"
+            title={`Importuojama: ${importProgress.imported} / ${importProgress.total}`}
+          >
+            <div className="import-progress-bar">
+              <div
+                className="import-progress-fill"
+                style={{ width: `${Math.round((importProgress.imported / importProgress.total) * 100)}%` }}
+              />
+            </div>
+            <span className="import-progress-label">
+              {importProgress.imported} / {importProgress.total}
+            </span>
+          </div>
+        )}
+        {selectedRowIds.size > 0 && canDeleteSelectedRows && (
           <button type="button" className="danger" onClick={handleDeleteSelected}>
             Ištrinti pasirinktas ({selectedRowIds.size})
           </button>
@@ -2045,7 +2227,7 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
             setColorPickerAnchor((prev) => (prev ? null : anchor));
           }}
         >
-          🎨 Spalva
+          Spalva
         </button>
         {colorPickerAnchor && (
           <Popover anchor={colorPickerAnchor} width={200}>
@@ -2100,13 +2282,17 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
         {hiddenRowsAnchor && (
           <HiddenRowsPopover anchor={hiddenRowsAnchor} rows={rows} columns={columns} onClose={() => setHiddenRowsAnchor(null)} />
         )}
-        <button type="button" onClick={handleImportClick}>
-          Importuoti CSV
-        </button>
-        <input ref={fileInputRef} type="file" accept=".csv,text/csv" hidden onChange={handleFileChange} />
-        <button type="button" onClick={handleExport}>
-          Eksportuoti CSV
-        </button>
+        {(currentUser?.role !== 'worker' || currentUser.permissions.canExportImport) && (
+          <>
+            <button type="button" onClick={handleImportClick}>
+              Importuoti CSV
+            </button>
+            <input ref={fileInputRef} type="file" accept=".csv,text/csv" hidden onChange={handleFileChange} />
+            <button type="button" onClick={handleExport}>
+              Eksportuoti CSV
+            </button>
+          </>
+        )}
         {pendingImport && (
           <CsvImportMapping
             headers={pendingImport.headers}
@@ -2123,11 +2309,34 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
             columns={columns}
             targetIds={columnContextMenu.targetIds}
             onSort={(direction) => commitSort(columnContextMenu.targetIds[0], direction)}
+            onFilterRange={() => setNumericFilterColumnId(columnContextMenu.targetIds[0])}
             onCopy={() => copyColumnsToClipboard(columnContextMenu.targetIds)}
             onPaste={() => pasteAtColumns(columnContextMenu.targetIds)}
             onClose={() => setColumnContextMenu(null)}
           />
         )}
+        {numericFilterColumnId &&
+          (() => {
+            const anchor = columnHeaderRefs.current.get(numericFilterColumnId);
+            const column = columns.find((c) => c.id === numericFilterColumnId);
+            if (!anchor || !column) return null;
+            return (
+              <NumericRangeFilterPopover
+                anchor={anchor}
+                columnName={column.name}
+                current={numericFilters[numericFilterColumnId]}
+                onApply={(filter) => setNumericFilters((prev) => ({ ...prev, [numericFilterColumnId]: filter }))}
+                onClear={() =>
+                  setNumericFilters((prev) => {
+                    const next = { ...prev };
+                    delete next[numericFilterColumnId];
+                    return next;
+                  })
+                }
+                onClose={() => setNumericFilterColumnId(null)}
+              />
+            );
+          })()}
         {rowContextMenu && (
           <RowHeaderMenu
             x={rowContextMenu.x}
@@ -2260,21 +2469,43 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
                 {columns.map((col) => (
                   <th key={col.id} onContextMenu={(e) => handleColumnContextMenu(e, col, columns.indexOf(col))}>
                     <div className="th-content">
-                      <button type="button" className="th-name" onClick={() => toggleSort(col.id)}>
-                        {col.name}
-                      </button>
                       <button
                         type="button"
-                        className="th-menu-btn"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          const anchor = e.currentTarget;
-                          setOpenMenu((prev) => (prev?.columnId === col.id ? null : { columnId: col.id, anchor }));
+                        className="th-name"
+                        ref={(el) => {
+                          if (el) columnHeaderRefs.current.set(col.id, el);
+                          else columnHeaderRefs.current.delete(col.id);
                         }}
+                        onClick={() => toggleSort(col.id)}
                       >
-                        ⋮
+                        {col.name}
+                        {numericFilters[col.id] && (
+                          <span
+                            className="th-numeric-filter-badge"
+                            title="Taikomas skaičių filtras — spustelėkite, kad pakeistumėte"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setNumericFilterColumnId(col.id);
+                            }}
+                          >
+                            🔢
+                          </span>
+                        )}
                       </button>
-                      {openMenu?.columnId === col.id && (
+                      {canOpenColumnMenu && (
+                        <button
+                          type="button"
+                          className="th-menu-btn"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const anchor = e.currentTarget;
+                            setOpenMenu((prev) => (prev?.columnId === col.id ? null : { columnId: col.id, anchor }));
+                          }}
+                        >
+                          ⋮
+                        </button>
+                      )}
+                      {canOpenColumnMenu && openMenu?.columnId === col.id && (
                         <ColumnMenu column={col} columns={columns} anchor={openMenu.anchor} onClose={() => setOpenMenu(null)} />
                       )}
                     </div>
@@ -2486,6 +2717,7 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
           const rowCompanyName = rowCompanyColumn ? row.cells[rowCompanyColumn.id] : undefined;
           const rowContactColumn = getColumnByType(columns, 'contact');
           const rowContactsRaw = rowContactColumn ? row.cells[rowContactColumn.id] : undefined;
+          const statusColumn = columns.find((c) => c.isStatusColumn);
           return (
             <CellHoverEditor
               anchor={expandedCell.anchor}
@@ -2493,8 +2725,9 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
               value={rawValue}
               companyName={rowCompanyName}
               contactsRaw={rowContactsRaw}
+              statusOptionColors={statusColumn?.optionColors}
               highlightEntryId={highlightContactId}
-              onAddNoteEntry={(text) => updateCell(row.id, column.id, addNoteEntry(rawValue, text))}
+              onAddNoteEntry={(text) => updateCell(row.id, column.id, addNoteEntry(rawValue, text, currentUserName))}
               onUpdateNoteEntry={(id, text) => updateCell(row.id, column.id, updateNoteEntry(rawValue, id, text))}
               onRemoveNoteEntry={(id) => updateCell(row.id, column.id, removeNoteEntry(rawValue, id))}
               onAddContact={(text, id) => updateCell(row.id, column.id, addContact(rawValue, text, id))}

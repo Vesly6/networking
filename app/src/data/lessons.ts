@@ -117,7 +117,7 @@ export const LESSONS: Lesson[] = [
         body: [
           '„Kontaktas" tipo langelyje galima laikyti kelis žmones vienoje eilutėje (pvz., kelis skirtingus įmonės kontaktinius asmenis). Kiekvienas turi vardą, pareigas, el. paštą, telefoną.',
           'Prie telefono/el. pašto yra kopijavimo mygtukai, o prie telefono — mygtukas paskambinti tiesiai iš skambučio žadinimo (jei ši funkcija įjungta).',
-          'Galite tiesiog įklijuoti nutvarkytą (net kelių eilučių) tekstą iš Apollo ar LinkedIn — programa pati per AI išvalys ir atskirs vardą/pareigas/el. paštą/telefoną.',
+          'Galite tiesiog įklijuoti nutvarkytą (net kelių eilučių) tekstą iš kitos sistemos ar LinkedIn — programa pati per DI išvalys ir atskirs vardą/pareigas/el. paštą/telefoną.',
         ],
       },
     ],
@@ -181,13 +181,13 @@ export const LESSONS: Lesson[] = [
   },
   {
     id: 'calls',
-    title: 'Skambučiai (Zadarma)',
+    title: 'Skambučiai',
     category: 'Skambučiai',
     summary: 'Skambučių sąrašas, įrašai, atpažinimas į tekstą ir statistika.',
     sections: [
       {
         body: [
-          '„Skambučiai" skiltis rodo šios dienos skambučių sąrašą tiesiai iš Zadarma (spauskite „Load calls", kad įkeltumėte).',
+          '„Skambučiai" skiltis rodo šios dienos skambučių sąrašą (spauskite „Load calls", kad įkeltumėte).',
           'Jei skambutis buvo įrašytas, prie jo matote 📝 „Transcribe" mygtuką — jį paspaudus, įrašas automatiškai atpažįstamas į tekstą (lietuviškai).',
           'Po atpažinimo atsiranda ir 🤖 „Summary" mygtukas — trumpa 3–5 sakinių santrauka, kas per pokalbį buvo aptarta.',
         ],
@@ -196,14 +196,14 @@ export const LESSONS: Lesson[] = [
       {
         heading: 'Statistika',
         body: [
-          'Antra pastraipa toje pačioje skiltyje rodo bendrą statistiką (kiek skambučių, kiek atsiliepta, pokalbio trukmė) savaitės/mėnesio pjūviu — ši istorija saugoma vietoje, tad nedings, net jei Zadarma savo pusėje ją ištrintų po tam tikro laiko.',
+          'Antra pastraipa toje pačioje skiltyje rodo bendrą statistiką (kiek skambučių, kiek atsiliepta, pokalbio trukmė) savaitės/mėnesio pjūviu — ši istorija saugoma vietoje, tad nedings, net jei skambučių paslauga savo pusėje ją ištrintų po tam tikro laiko.',
         ],
       },
     ],
   },
   {
     id: 'apollo-search',
-    title: 'Kontaktų paieška (Apollo)',
+    title: 'Kontaktų paieška',
     category: 'Paieška',
     summary: 'Kaip ieškoti įmonių/žmonių ir pridėti juos su telefonu/el. paštu tiesiai į lentelę.',
     sections: [

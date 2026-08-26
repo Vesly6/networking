@@ -9,6 +9,7 @@ import {
 } from 'react';
 import type { Column, Row } from '../../types';
 import { useTableStore } from '../../store/useTableStore';
+import { useAuthStore } from '../../store/useAuthStore';
 import { useToastStore } from '../../store/useToastStore';
 import { combineDateTime, getDatePart, getTimePart } from '../../utils/date';
 import { getLatestNoteText } from '../../utils/noteHistory';
@@ -17,6 +18,7 @@ import { contrastTextColor } from '../../utils/color';
 import { Popover } from '../Popover';
 import { ensureProtocol } from '../../utils/link';
 import { highlightMatches } from '../../utils/highlight';
+import { isCellLockedForWorker } from '../../utils/workerCellLock';
 import { EXCEL_CELL_LIMIT } from '../../constants';
 
 interface DataCellProps {
@@ -80,8 +82,22 @@ function DataCellImpl({
   const setLinkedContact = useTableStore((s) => s.setLinkedContact);
   const setNextActionNote = useTableStore((s) => s.setNextActionNote);
   const showToast = useToastStore((s) => s.show);
+  const currentUser = useAuthStore((s) => s.user);
   const storedValue = row.cells[column.id] ?? '';
   const color = row.colors?.[column.id];
+  // text/phone/company/link cells are append-only for a worker — this is
+  // the client-side half of the rule (server/src/tableData/db.ts's
+  // sanitizeRowForWorker is the real, unconditional enforcement; without
+  // this, a worker could still type into and "save" a filled cell, only to
+  // have it silently revert on the next reload with no explanation, which
+  // is exactly the confusing failure mode this guard exists to avoid). A
+  // brand-new, still-empty cell stays freely fillable regardless of role —
+  // only *overwriting* an existing value is ever blocked. Shared with
+  // TableView.tsx's Delete/Backspace handler via workerCellLock.ts, so the
+  // same rule applies everywhere a cell's value could change, not just
+  // this one click-to-edit path — see that file's own doc comment for why
+  // that sharing turned out to matter (a real, reported Delete-key bypass).
+  const isAppendOnlyLocked = isCellLockedForWorker(column, storedValue, currentUser);
   // Declared unconditionally (not just inside the branches that use them)
   // so the hook order stays stable even if this column's type changes.
   const [timeExpanded, setTimeExpanded] = useState(false);
@@ -473,7 +489,7 @@ function DataCellImpl({
   // of permanently-live inputs captured trackpad horizontal-scroll deltas
   // as their own internal text scrolling instead of letting it bubble to
   // the table's scroll container.
-  if (editable) {
+  if (editable && !isAppendOnlyLocked) {
     return (
       <td className={cellClassName} style={cellStyle}>
         <input
@@ -514,7 +530,12 @@ function DataCellImpl({
     return (
       <td className={cellClassName} style={cellStyle} onMouseDown={onSelect} onMouseEnter={onExtend} onContextMenu={onContextMenu}>
         <div className="cell-link-inner">
-          <button type="button" className={`cell-preview cell-link-text ${color ? '' : 'cell-preview-hoverable'}`} tabIndex={-1}>
+          <button
+            type="button"
+            className={`cell-preview cell-link-text ${color ? '' : 'cell-preview-hoverable'}`}
+            tabIndex={-1}
+            title={isAppendOnlyLocked ? 'Jau turi reikšmę — darbuotojas negali jos perrašyti' : undefined}
+          >
             {storedValue ? (
               highlightQuery ? highlightMatches(storedValue, highlightQuery) : storedValue
             ) : (
@@ -541,7 +562,12 @@ function DataCellImpl({
 
   return (
     <td className={cellClassName} style={cellStyle} onMouseDown={onSelect} onMouseEnter={onExtend} onContextMenu={onContextMenu}>
-      <button type="button" className={`cell-preview ${color ? '' : 'cell-preview-hoverable'}`} tabIndex={-1}>
+      <button
+        type="button"
+        className={`cell-preview ${color ? '' : 'cell-preview-hoverable'}`}
+        tabIndex={-1}
+        title={isAppendOnlyLocked ? 'Jau turi reikšmę — darbuotojas negali jos perrašyti' : undefined}
+      >
         {highlightQuery ? highlightMatches(storedValue, highlightQuery) : storedValue}
       </button>
     </td>

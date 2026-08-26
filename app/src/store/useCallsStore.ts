@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import {
   fetchCalls as apiFetchCalls,
+  fetchBalance as apiFetchBalance,
+  fetchCallCosts as apiFetchCallCosts,
   fetchRecording as apiFetchRecording,
   transcribeCall as apiTranscribeCall,
   summarizeCall as apiSummarizeCall,
@@ -15,6 +17,23 @@ interface CallsState {
   ready: boolean;
   error: string | null;
   fetchCalls: (start: string, end: string) => Promise<void>;
+
+  balance: { amount: string; currency: string } | null;
+  balanceError: string | null;
+  /** Not a statistics-endpoint call (see server/src/zadarma.ts's
+   * getBalance) — safe to call freely, no cooldown needed unlike
+   * fetchCalls/fetchCosts. */
+  fetchBalance: () => Promise<void>;
+
+  /** Keyed by `${callstart}|${sip}` — see callsApi.ts's fetchCallCosts.
+   * A separate, explicit action (CallsView's "Rodyti kainas" button)
+   * rather than something fetchCalls triggers automatically, since it's a
+   * second real hit against the same 10-req/minute Zadarma statistics
+   * budget for whatever date range is currently loaded. */
+  costs: Record<string, { billcost: string; currency: string }>;
+  costsLoading: boolean;
+  costsError: string | null;
+  fetchCosts: (start: string, end: string) => Promise<void>;
 
   recordingLinks: Record<string, string>;
   recordingErrors: Record<string, string>;
@@ -111,9 +130,38 @@ export const useCallsStore = create<CallsState>((set, get) => ({
       // Limits") is accurate but easy to misread as a real failure —
       // reframe it as the transient, waitable thing it actually is.
       const message = /rate limit/i.test(raw)
-        ? 'Zadarma limits statistics requests to 10/minute — wait a moment and try again.'
+        ? 'The calls service limits statistics requests to 10/minute — wait a moment and try again.'
         : raw;
       set({ error: message, ready: true });
+    }
+  },
+
+  balance: null,
+  balanceError: null,
+  fetchBalance: async () => {
+    try {
+      const { balance, currency } = await apiFetchBalance();
+      set({ balance: { amount: balance, currency }, balanceError: null });
+    } catch (err) {
+      set({ balanceError: err instanceof Error ? err.message : 'Could not load balance' });
+    }
+  },
+
+  costs: {},
+  costsLoading: false,
+  costsError: null,
+  fetchCosts: async (start, end) => {
+    set({ costsLoading: true, costsError: null });
+    try {
+      const callList = get().calls.map((c) => ({ call_id: c.call_id, callstart: c.callstart }));
+      const costs = await apiFetchCallCosts(start, end, callList);
+      set((s) => ({ costs: { ...s.costs, ...costs }, costsLoading: false }));
+    } catch (err) {
+      const raw = err instanceof Error ? err.message : 'Could not load call costs';
+      const message = /rate limit/i.test(raw)
+        ? 'The calls service limits statistics requests to 10/minute — wait a moment and try again.'
+        : raw;
+      set({ costsError: message, costsLoading: false });
     }
   },
 

@@ -76,7 +76,7 @@ export function Softphone() {
           if (window.zadarmaWidgetFn) {
             resolve();
           } else if (Date.now() - start > READY_TIMEOUT_MS) {
-            reject(new Error('Zadarma widget script did not load'));
+            reject(new Error('Softphone widget script did not load'));
           } else {
             setTimeout(check, READY_POLL_MS);
           }

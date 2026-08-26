@@ -9,14 +9,6 @@
 
 export class EmailGenerateError extends Error {}
 
-function getApiKey(): string {
-  const key = process.env.ANTHROPIC_API_KEY;
-  if (!key) {
-    throw new EmailGenerateError('ANTHROPIC_API_KEY is not set — check server/.env');
-  }
-  return key;
-}
-
 export type EmailMode = 'new' | 'reply' | 'reminder';
 export type EmailLang = 'lt' | 'en';
 export type EmailModel = 'claude-opus-5' | 'claude-sonnet-5' | 'claude-haiku-4-5-20251001';
@@ -79,16 +71,7 @@ function buildUserPrompt(params: GenerateEmailParams): string {
   return lines.join('\n');
 }
 
-export async function generateEmail(params: GenerateEmailParams): Promise<{ text: string }> {
-  // Deliberately called before the try/catch below — that catch exists to
-  // turn a real fetch() network failure into a clear message, but with
-  // getApiKey() called *inside* it (the original shape of this code), a
-  // missing ANTHROPIC_API_KEY threw from inside the same try and got
-  // caught by the same generic handler, surfacing as the misleading
-  // "Could not reach the Anthropic API" instead of the actual, much more
-  // actionable "ANTHROPIC_API_KEY is not set" — confirmed live testing
-  // this route with no key configured yet.
-  const apiKey = getApiKey();
+export async function generateEmail(params: GenerateEmailParams, apiKey: string): Promise<{ text: string }> {
   let res: Response;
   try {
     res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -106,19 +89,19 @@ export async function generateEmail(params: GenerateEmailParams): Promise<{ text
       }),
     });
   } catch {
-    throw new EmailGenerateError('Could not reach the Anthropic API');
+    throw new EmailGenerateError('Could not reach the AI service');
   }
 
   const json: any = await res.json().catch(() => null);
   if (!res.ok || !json) {
     const apiMessage = json?.error?.message;
     if (res.status === 401) throw new EmailGenerateError('Invalid Anthropic API key — check ANTHROPIC_API_KEY in server/.env');
-    if (res.status === 429) throw new EmailGenerateError('Anthropic API rate limit exceeded — wait and try again');
-    throw new EmailGenerateError(apiMessage ?? `Anthropic API request failed (HTTP ${res.status})`);
+    if (res.status === 429) throw new EmailGenerateError('AI service rate limit exceeded — wait and try again');
+    throw new EmailGenerateError(apiMessage ?? `AI service request failed (HTTP ${res.status})`);
   }
 
   const textBlock = (json.content ?? []).find((b: any) => b.type === 'text');
   const text = textBlock?.text?.trim();
-  if (!text) throw new EmailGenerateError('Anthropic returned no email text — try again');
+  if (!text) throw new EmailGenerateError('AI service returned no email text — try again');
   return { text };
 }

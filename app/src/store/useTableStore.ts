@@ -1,8 +1,10 @@
 import { create } from 'zustand';
 import type { Column, ColumnType, Row } from '../types';
 import { clampToLimit } from '../utils/cellLimit';
-import { deleteRowDB, getTable, loadRowsForTable, saveRow, saveRows, updateTableColumns } from '../db/db';
+import { deleteRowDB, getTable, importRows, loadRowsForTable, saveRow, saveRows, updateTableColumns } from '../db/db';
 import { randomUUID } from '../utils/uuid';
+import { addNoteEntry } from '../utils/noteHistory';
+import { useAuthStore } from './useAuthStore';
 
 export interface ImportResult {
   createdRows: number;
@@ -48,23 +50,45 @@ interface TableState {
   ready: boolean;
   undoStack: HistorySnapshot[];
   redoStack: HistorySnapshot[];
-  /** Set when the most recent updateCell() write to the server failed —
-   * null otherwise (including on success). Every row/cell write in this
-   * store is fire-and-forget (`void saveRow(...)`, no retry, no offline
-   * queue — a deliberate, documented scope cut from the table-data
+  /** Set when the most recent write to the server failed — null otherwise
+   * (including on success). Every row/column write in this store is
+   * fire-and-forget (persistRow/persistRows/persistColumns/persistDeletes,
+   * defined inside this store's own closure below — no retry, no offline
+   * queue, a deliberate, documented scope cut from the table-data
    * migration), which was a fine tradeoff when the only realistic failure
    * was a local IndexedDB write, but a real, reported bug once writes
-   * started going over a phone's wifi to this Mac's local server instead:
-   * the local UI state updates immediately regardless (optimistic), so a
-   * failed write was completely silent — the note/contact looked saved
-   * right up until the next reload or tab switch, when it would just be
-   * gone, with zero indication anything had gone wrong. This doesn't add
-   * retry/queueing (a genuinely bigger project — see CLAUDE.md), just
-   * turns a silent failure into a visible one. Follows this codebase's
+   * started going over a phone's wifi (or a slow/sleeping backend) to this
+   * Mac's local server instead: the local UI state updates immediately
+   * regardless (optimistic), so a failed write was completely silent — an
+   * edit looked saved right up until the next reload, when it would just
+   * be gone (or a deleted row would silently reappear), with zero
+   * indication anything had gone wrong. Originally only updateCell had
+   * this — every other write (paste, row add/delete, drag-reorder, sort,
+   * color-fill, column edits, note/contact-linked fields) stayed silent,
+   * which was itself a real, reported gap, fixed by routing every write in
+   * this store through the same small set of persist* helpers rather than
+   * a bare `void saveX(...)`. Doesn't add retry/queueing (a genuinely
+   * bigger project — see CLAUDE.md), just turns a silent failure into a
+   * visible one, everywhere a write can happen. Follows this codebase's
    * "stores own data, components own side effects" convention (see
    * useCallsStore's own `error` field) — TableView watches this and
    * toasts, the store itself never calls showToast directly. */
   lastCellSaveError: string | null;
+  /** Set when the most recent loadTable() call itself failed (server
+   * unreachable, timed out, 401, etc.) — null otherwise. Before this
+   * existed, loadTable() had no try/catch at all: a throw left `ready`
+   * stuck at `false` forever with zero indication anything was wrong,
+   * since `set({ ready: false })` runs *before* the awaited fetch and
+   * nothing ever set it back. App.tsx's own `!tableReady` branch has no
+   * timeout, so this reproduced as exactly what got reported — opening (or
+   * returning to, or switching into) a table that happened to coincide
+   * with a slow/failed request left the user staring at "Kraunama…"
+   * indefinitely, with a full page reload being the only way out (which
+   * "worked" only because it started a fresh request that, by then, often
+   * landed against a server that had finished waking up). Mirrors
+   * useWorkspaceStore's own `initError` field/fix exactly — same class of
+   * bug, same shape of fix, just never applied here too at the time. */
+  loadError: string | null;
   /** Always re-fetches the table fresh from IndexedDB rather than trusting a
    * cached copy from useWorkspaceStore — see CLAUDE.md for why. */
   loadTable: (tableId: string) => Promise<void>;
@@ -87,6 +111,8 @@ interface TableState {
   setColumnWidth: (id: string, width: number) => void;
   setNextActionDateColumn: (id: string) => void;
   clearNextActionDateColumn: () => void;
+  setStatusColumn: (id: string) => void;
+  clearStatusColumn: () => void;
   reorderColumns: (draggedId: string, targetId: string) => void;
   moveColumns: (draggedIds: string[], targetColumnId: string | null) => void;
   addRow: () => string;
@@ -118,12 +144,15 @@ interface TableState {
    * off later. Rows not present in `sortedIds` (shouldn't normally happen —
    * TableView always passes every row's id) are left untouched. */
   applySortOrder: (sortedIds: string[]) => void;
-  importCsvRows: (headers: string[], dataRows: string[][], mapping: Record<string, ImportColumnMapping>) => ImportResult;
-}
-
-function persistColumns(tableId: string | null, columns: Column[]) {
-  if (!tableId) return;
-  void updateTableColumns(tableId, columns);
+  /** Set while importCsvRows() is running, null otherwise — TableView's
+   * toolbar renders a progress bar next to "🎨 Spalva" while this is set.
+   * See importCsvRows's own doc comment for why this exists. */
+  importProgress: { imported: number; total: number } | null;
+  importCsvRows: (
+    headers: string[],
+    dataRows: string[][],
+    mapping: Record<string, ImportColumnMapping>,
+  ) => Promise<ImportResult>;
 }
 
 /** "Stulpelis N" for a freshly inserted blank column — mirrors Excel's own
@@ -134,6 +163,39 @@ function nextColumnName(existing: Column[]): string {
   let n = existing.length + 1;
   while (names.has(`Stulpelis ${n}`)) n++;
   return `Stulpelis ${n}`;
+}
+
+/** On explicit request: a table's designated "Status" dropdown column
+ * (Column.isStatusColumn — set via ColumnMenu's "Naudoti kaip Status"
+ * checkbox, at most one per table, same one-at-a-time rule as
+ * isNextActionDate) auto-logs every value change into the table's own
+ * note column, so a status transition ("Rejected" → "Accepted") leaves a
+ * permanent, in-context record without a separate audit UI. Applies to
+ * every user (not worker-specific — this is a general feature), called
+ * from both updateCell and updateCells so no write path misses it. A
+ * no-op when: the changed column isn't the status column, the value
+ * didn't actually change, the new value is empty (clearing a status isn't
+ * itself a status worth logging), or the table has no note column to
+ * write into. Reads the acting user directly off useAuthStore's current
+ * state (not a hook — this runs inside a store action, not a component)
+ * purely for the note entry's author attribution, same as every other
+ * addNoteEntry call site in this app. */
+function logStatusChangeIfNeeded(
+  cells: Record<string, string>,
+  columnId: string,
+  oldValue: string,
+  newValue: string,
+  columns: Column[],
+): Record<string, string> {
+  if (oldValue === newValue || !newValue) return cells;
+  const column = columns.find((c) => c.id === columnId);
+  if (!column?.isStatusColumn) return cells;
+  const noteColumn = columns.find((c) => c.type === 'note');
+  if (!noteColumn) return cells;
+  const user = useAuthStore.getState().user;
+  const authorName = user ? `${user.firstName} ${user.lastName}`.trim() : undefined;
+  const rawNote = cells[noteColumn.id] ?? '';
+  return { ...cells, [noteColumn.id]: addNoteEntry(rawNote, newValue, authorName) };
 }
 
 export const useTableStore = create<TableState>((set, get) => {
@@ -147,14 +209,57 @@ export const useTableStore = create<TableState>((set, get) => {
     set({ undoStack: [...undoStack, { columns, rows }].slice(-MAX_HISTORY_DEPTH), redoStack: [] });
   };
 
+  /** Every row/column write in this store goes through one of the three
+   * helpers below instead of a bare `void saveX(...)` — a real, reported
+   * gap: only updateCell (plain single-cell typing) surfaced a failed
+   * save (via lastCellSaveError, watched/toasted by TableView); paste, row
+   * add/delete, drag-reorder, sort, color-fill, column edits, and every
+   * note/contact-linked field write (setLinkedContact, setNextActionNote,
+   * etc.) stayed completely silent — a write that never reached the
+   * server (a slow/asleep backend, a dropped phone connection) looked
+   * identical to a successful one right up until the next reload, when it
+   * would just be gone with no explanation. This doesn't add retry or an
+   * offline queue — same accepted scope cut as before, see
+   * lastCellSaveError's own doc comment — it just makes a failure visible
+   * instead of invisible, everywhere a write can happen. */
+  const reportSaveError = (err: unknown) => {
+    set({
+      lastCellSaveError: err instanceof Error ? `Nepavyko išsaugoti — ${err.message}` : 'Nepavyko išsaugoti pakeitimo serveryje',
+    });
+  };
+  const persistRow = (row: Row) => {
+    saveRow(row)
+      .then(() => set({ lastCellSaveError: null }))
+      .catch(reportSaveError);
+  };
+  const persistRows = (rows: Row[]) => {
+    if (rows.length === 0) return;
+    saveRows(rows)
+      .then(() => set({ lastCellSaveError: null }))
+      .catch(reportSaveError);
+  };
+  const persistColumns = (columns: Column[]) => {
+    const { tableId } = get();
+    if (!tableId) return;
+    updateTableColumns(tableId, columns)
+      .then(() => set({ lastCellSaveError: null }))
+      .catch(reportSaveError);
+  };
+  const persistDeletes = (ids: string[]) => {
+    if (ids.length === 0) return;
+    Promise.all(ids.map((id) => deleteRowDB(id)))
+      .then(() => set({ lastCellSaveError: null }))
+      .catch(reportSaveError);
+  };
+
   /** Undo/redo can restore rows that were deleted and must also delete rows
    * that were created since — a plain saveRows() only upserts, so diff
    * against what's disappearing too. */
   const syncRowsToDB = (previousRows: Row[], nextRows: Row[]) => {
     const nextIds = new Set(nextRows.map((r) => r.id));
     const removedIds = previousRows.filter((r) => !nextIds.has(r.id)).map((r) => r.id);
-    void saveRows(nextRows);
-    void Promise.all(removedIds.map((id) => deleteRowDB(id)));
+    persistRows(nextRows);
+    persistDeletes(removedIds);
   };
 
   return {
@@ -165,24 +270,32 @@ export const useTableStore = create<TableState>((set, get) => {
     undoStack: [],
     redoStack: [],
     lastCellSaveError: null,
+    loadError: null,
+    importProgress: null,
 
     loadTable: async (tableId) => {
-      set({ ready: false });
-      const [table, rows] = await Promise.all([getTable(tableId), loadRowsForTable(tableId)]);
-      if (!table) {
-        set({ tableId: null, columns: [], rows: [], ready: true, undoStack: [], redoStack: [] });
-        return;
+      set({ ready: false, loadError: null });
+      try {
+        const [table, rows] = await Promise.all([getTable(tableId), loadRowsForTable(tableId)]);
+        if (!table) {
+          set({ tableId: null, columns: [], rows: [], ready: true, loadError: null, undoStack: [], redoStack: [] });
+          return;
+        }
+        rows.sort((a, b) => a.order - b.order);
+        set({ tableId: table.id, columns: table.columns, rows, ready: true, loadError: null, undoStack: [], redoStack: [] });
+      } catch (err) {
+        set({
+          loadError: err instanceof Error ? `Nepavyko įkelti lentelės — ${err.message}` : 'Nepavyko įkelti lentelės iš serverio',
+        });
       }
-      rows.sort((a, b) => a.order - b.order);
-      set({ tableId: table.id, columns: table.columns, rows, ready: true, undoStack: [], redoStack: [] });
     },
 
     unload: () => {
-      set({ tableId: null, columns: [], rows: [], ready: false, undoStack: [], redoStack: [] });
+      set({ tableId: null, columns: [], rows: [], ready: false, loadError: null, undoStack: [], redoStack: [] });
     },
 
     undo: () => {
-      const { undoStack, redoStack, columns, rows, tableId } = get();
+      const { undoStack, redoStack, columns, rows } = get();
       if (undoStack.length === 0) return;
       const prev = undoStack[undoStack.length - 1];
       set({
@@ -191,12 +304,12 @@ export const useTableStore = create<TableState>((set, get) => {
         undoStack: undoStack.slice(0, -1),
         redoStack: [...redoStack, { columns, rows }].slice(-MAX_HISTORY_DEPTH),
       });
-      persistColumns(tableId, prev.columns);
+      persistColumns(prev.columns);
       syncRowsToDB(rows, prev.rows);
     },
 
     redo: () => {
-      const { undoStack, redoStack, columns, rows, tableId } = get();
+      const { undoStack, redoStack, columns, rows } = get();
       if (redoStack.length === 0) return;
       const next = redoStack[redoStack.length - 1];
       set({
@@ -205,7 +318,7 @@ export const useTableStore = create<TableState>((set, get) => {
         redoStack: redoStack.slice(0, -1),
         undoStack: [...undoStack, { columns, rows }].slice(-MAX_HISTORY_DEPTH),
       });
-      persistColumns(tableId, next.columns);
+      persistColumns(next.columns);
       syncRowsToDB(rows, next.rows);
     },
 
@@ -228,7 +341,7 @@ export const useTableStore = create<TableState>((set, get) => {
       };
       const columns = [...get().columns, column];
       set({ columns });
-      persistColumns(get().tableId, columns);
+      persistColumns(columns);
     },
 
     insertColumns: (beforeColumnId, count) => {
@@ -245,7 +358,7 @@ export const useTableStore = create<TableState>((set, get) => {
           ? [...current, ...newColumns]
           : [...current.slice(0, index), ...newColumns, ...current.slice(index)];
       set({ columns });
-      persistColumns(get().tableId, columns);
+      persistColumns(columns);
     },
 
     renameColumn: (id, name) => {
@@ -254,7 +367,7 @@ export const useTableStore = create<TableState>((set, get) => {
       snapshot();
       const columns = get().columns.map((c) => (c.id === id ? { ...c, name: trimmed } : c));
       set({ columns });
-      persistColumns(get().tableId, columns);
+      persistColumns(columns);
     },
 
     removeColumn: (id) => {
@@ -273,8 +386,8 @@ export const useTableStore = create<TableState>((set, get) => {
         return row;
       });
       set({ columns, rows });
-      persistColumns(get().tableId, columns);
-      void saveRows(rows);
+      persistColumns(columns);
+      persistRows(rows);
     },
 
     removeColumns: (ids) => {
@@ -294,15 +407,15 @@ export const useTableStore = create<TableState>((set, get) => {
         return colors ? { ...r, cells, colors } : { ...r, cells };
       });
       set({ columns, rows });
-      persistColumns(get().tableId, columns);
-      void saveRows(rows);
+      persistColumns(columns);
+      persistRows(rows);
     },
 
     setColumnHidden: (id, hidden) => {
       snapshot();
       const columns = get().columns.map((c) => (c.id === id ? { ...c, hidden } : c));
       set({ columns });
-      persistColumns(get().tableId, columns);
+      persistColumns(columns);
     },
 
     setColumnsHidden: (ids, hidden) => {
@@ -311,31 +424,56 @@ export const useTableStore = create<TableState>((set, get) => {
       const idSet = new Set(ids);
       const columns = get().columns.map((c) => (idSet.has(c.id) ? { ...c, hidden } : c));
       set({ columns });
-      persistColumns(get().tableId, columns);
+      persistColumns(columns);
     },
 
     setColumnType: (id, type) => {
       snapshot();
       const columns = get().columns.map((c) => {
-        if (c.id !== id) return c;
+        if (c.id !== id) {
+          // Switching *this* column to 'date' takes over as the calendar/
+          // task-list column, same "only one at a time" rule
+          // setNextActionDateColumn already enforces — so any other
+          // column currently holding that flag loses it here too.
+          return type === 'date' && c.isNextActionDate ? { ...c, isNextActionDate: false } : c;
+        }
         const updated: Column = { ...c, type };
         if (type === 'dropdown') updated.options = c.options ?? [];
         else {
           delete updated.options;
           delete updated.optionColors;
         }
-        if (type !== 'date') delete updated.isNextActionDate;
+        if (type !== 'dropdown') {
+          // Unlike isNextActionDate, this is NOT auto-set when a column
+          // becomes 'dropdown' — a dropdown column is just as often a
+          // priority/source/category field as an actual status one, so
+          // auto-claiming the flag here would be wrong more often than
+          // right. It only ever gets set explicitly via the "Naudoti kaip
+          // Status" checkbox below; this branch just clears it when a
+          // column stops being a dropdown at all.
+          delete updated.isStatusColumn;
+        }
+        if (type === 'date') {
+          // Auto-wired into the calendar the moment a column becomes
+          // Date-typed — on explicit request, removing what used to be a
+          // mandatory separate checkbox click for the common case. The
+          // "Naudoti kalendoriuje" checkbox in ColumnMenu stays available
+          // to opt back out (e.g. a second, unrelated date column).
+          updated.isNextActionDate = true;
+        } else {
+          delete updated.isNextActionDate;
+        }
         return updated;
       });
       set({ columns });
-      persistColumns(get().tableId, columns);
+      persistColumns(columns);
     },
 
     setDropdownOptions: (id, options) => {
       snapshot();
       const columns = get().columns.map((c) => (c.id === id ? { ...c, options } : c));
       set({ columns });
-      persistColumns(get().tableId, columns);
+      persistColumns(columns);
     },
 
     setOptionColor: (columnId, option, color) => {
@@ -348,28 +486,42 @@ export const useTableStore = create<TableState>((set, get) => {
         return { ...c, optionColors };
       });
       set({ columns });
-      persistColumns(get().tableId, columns);
+      persistColumns(columns);
     },
 
     setColumnWidth: (id, width) => {
       snapshot();
       const columns = get().columns.map((c) => (c.id === id ? { ...c, width } : c));
       set({ columns });
-      persistColumns(get().tableId, columns);
+      persistColumns(columns);
     },
 
     setNextActionDateColumn: (id) => {
       snapshot();
       const columns = get().columns.map((c) => ({ ...c, isNextActionDate: c.id === id }));
       set({ columns });
-      persistColumns(get().tableId, columns);
+      persistColumns(columns);
     },
 
     clearNextActionDateColumn: () => {
       snapshot();
       const columns = get().columns.map((c) => ({ ...c, isNextActionDate: false }));
       set({ columns });
-      persistColumns(get().tableId, columns);
+      persistColumns(columns);
+    },
+
+    setStatusColumn: (id) => {
+      snapshot();
+      const columns = get().columns.map((c) => ({ ...c, isStatusColumn: c.id === id }));
+      set({ columns });
+      persistColumns(columns);
+    },
+
+    clearStatusColumn: () => {
+      snapshot();
+      const columns = get().columns.map((c) => ({ ...c, isStatusColumn: false }));
+      set({ columns });
+      persistColumns(columns);
     },
 
     reorderColumns: (draggedId, targetId) => {
@@ -395,7 +547,7 @@ export const useTableStore = create<TableState>((set, get) => {
       }
 
       set({ columns: reordered });
-      persistColumns(get().tableId, reordered);
+      persistColumns(reordered);
     },
 
     addRow: () => {
@@ -407,7 +559,7 @@ export const useTableStore = create<TableState>((set, get) => {
       const maxOrder = rows.reduce((m, r) => Math.max(m, r.order), -1);
       const row: Row = { id, tableId, cells: {}, order: maxOrder + 1, createdAt: now, updatedAt: now };
       set({ rows: [...rows, row] });
-      void saveRow(row);
+      persistRow(row);
       return id;
     },
 
@@ -429,14 +581,14 @@ export const useTableStore = create<TableState>((set, get) => {
       const combined = index === -1 ? [...current, ...newRows] : [...current.slice(0, index), ...newRows, ...current.slice(index)];
       const updated = combined.map((r, i) => ({ ...r, order: i }));
       set({ rows: updated });
-      void saveRows(updated);
+      persistRows(updated);
     },
 
     removeRow: (id) => {
       snapshot();
       const rows = get().rows.filter((r) => r.id !== id);
       set({ rows });
-      void deleteRowDB(id);
+      persistDeletes([id]);
     },
 
     removeRows: (ids) => {
@@ -444,7 +596,7 @@ export const useTableStore = create<TableState>((set, get) => {
       const idSet = new Set(ids);
       const rows = get().rows.filter((r) => !idSet.has(r.id));
       set({ rows });
-      void Promise.all(ids.map((id) => deleteRowDB(id)));
+      persistDeletes(ids);
     },
 
     setRowHeight: (id, height) => {
@@ -456,7 +608,7 @@ export const useTableStore = create<TableState>((set, get) => {
         return updatedRow;
       });
       set({ rows });
-      if (updatedRow) void saveRow(updatedRow);
+      if (updatedRow) persistRow(updatedRow);
     },
 
     setLinkedContact: (rowId, contactId) => {
@@ -468,7 +620,7 @@ export const useTableStore = create<TableState>((set, get) => {
         return updatedRow;
       });
       set({ rows });
-      if (updatedRow) void saveRow(updatedRow);
+      if (updatedRow) persistRow(updatedRow);
     },
 
     setNextActionNote: (rowId, note) => {
@@ -481,7 +633,7 @@ export const useTableStore = create<TableState>((set, get) => {
         return updatedRow;
       });
       set({ rows });
-      if (updatedRow) void saveRow(updatedRow);
+      if (updatedRow) persistRow(updatedRow);
     },
 
     setRowsHidden: (ids, hidden) => {
@@ -496,35 +648,30 @@ export const useTableStore = create<TableState>((set, get) => {
         return updated;
       });
       set({ rows });
-      void saveRows(changedRows);
+      persistRows(changedRows);
     },
 
     updateCell: (rowId, columnId, value) => {
       snapshot();
       const { value: clamped, truncated } = clampToLimit(value);
+      const columns = get().columns;
       let updatedRow: Row | undefined;
       const rows = get().rows.map((r) => {
         if (r.id !== rowId) return r;
-        updatedRow = { ...r, cells: { ...r.cells, [columnId]: clamped }, updatedAt: Date.now() };
+        const oldValue = r.cells[columnId] ?? '';
+        const cells = logStatusChangeIfNeeded({ ...r.cells, [columnId]: clamped }, columnId, oldValue, clamped, columns);
+        updatedRow = { ...r, cells, updatedAt: Date.now() };
         return updatedRow;
       });
       set({ rows });
-      if (updatedRow) {
-        saveRow(updatedRow)
-          .then(() => set({ lastCellSaveError: null }))
-          .catch((err) => {
-            set({
-              lastCellSaveError:
-                err instanceof Error ? `Nepavyko išsaugoti — ${err.message}` : 'Nepavyko išsaugoti pakeitimo serveryje',
-            });
-          });
-      }
+      if (updatedRow) persistRow(updatedRow);
       return truncated;
     },
 
     updateCells: (updates) => {
       if (updates.length === 0) return 0;
       snapshot();
+      const columns = get().columns;
       const byRow = new Map<string, CellUpdate[]>();
       for (const u of updates) {
         const list = byRow.get(u.rowId) ?? [];
@@ -537,18 +684,20 @@ export const useTableStore = create<TableState>((set, get) => {
       const rows = get().rows.map((r) => {
         const rowUpdates = byRow.get(r.id);
         if (!rowUpdates) return r;
-        const cells = { ...r.cells };
+        let cells = { ...r.cells };
         for (const u of rowUpdates) {
           const { value, truncated } = clampToLimit(u.value);
           if (truncated) truncatedCount++;
+          const oldValue = cells[u.columnId] ?? '';
           cells[u.columnId] = value;
+          cells = logStatusChangeIfNeeded(cells, u.columnId, oldValue, value, columns);
         }
         const updated = { ...r, cells, updatedAt: now };
         changedRows.push(updated);
         return updated;
       });
       set({ rows });
-      void saveRows(changedRows);
+      persistRows(changedRows);
       return truncatedCount;
     },
 
@@ -575,7 +724,7 @@ export const useTableStore = create<TableState>((set, get) => {
         return updated;
       });
       set({ rows });
-      void saveRows(changedRows);
+      persistRows(changedRows);
     },
 
     moveRows: (draggedIds, targetRowId) => {
@@ -599,7 +748,7 @@ export const useTableStore = create<TableState>((set, get) => {
       const now = Date.now();
       const updated = reordered.map((r, i) => ({ ...r, order: i, updatedAt: now }));
       set({ rows: updated });
-      void saveRows(updated);
+      persistRows(updated);
     },
 
     applySortOrder: (sortedIds) => {
@@ -626,12 +775,30 @@ export const useTableStore = create<TableState>((set, get) => {
       for (const r of byId.values()) ordered.push(r);
       const updated = ordered.map((r, i) => ({ ...r, order: i, updatedAt: now }));
       set({ rows: updated });
-      void saveRows(updated);
+      persistRows(updated);
     },
 
-    importCsvRows: (headers, dataRows, mapping) => {
+    // Builds and appends rows in batches instead of one synchronous pass
+    // over the whole file — a real, reported problem: for a 14k-row
+    // export, building every Row object (with clampToLimit run per cell)
+    // in one blocking loop, then a single `set()`, then handing all 14k
+    // rows to saveRows() as one multi-MB PUT, froze the tab for around two
+    // minutes with zero feedback — nothing rendered until literally
+    // everything (parse, build, *and* the network round trip) had
+    // finished. Chunking fixes this on both ends: `set()` after each
+    // batch means the first rows are on screen almost immediately instead
+    // of waiting for row 14,617, and the `await new Promise(requestAnimationFrame)`
+    // between batches actually yields to the browser so it can repaint —
+    // a plain synchronous loop of any length blocks that regardless of
+    // how the *data* is chunked. saveRows() is called per batch too
+    // (still fire-and-forget, matching every other write in this store),
+    // so persistence lands as a series of smaller requests instead of one
+    // giant one. `importProgress` drives TableView's toolbar progress bar
+    // (next to "🎨 Spalva") — set to null when done so the bar disappears.
+    importCsvRows: async (headers, dataRows, mapping) => {
       const state = get();
       if (!state.tableId) return { createdRows: 0, createdColumns: 0, truncatedCells: 0 };
+      const tableId = state.tableId;
       snapshot();
       const columns = [...state.columns];
       let createdColumns = 0;
@@ -652,13 +819,22 @@ export const useTableStore = create<TableState>((set, get) => {
         createdColumns++;
         headerToColumnId.set(header, column.id);
       }
+      // Columns (and the resulting empty-state/header render) should
+      // update immediately, before the row batches start landing.
+      set({ columns });
+      persistColumns(columns);
 
+      const nonEmptyDataRows = dataRows.filter((dataRow) => dataRow.some((cell) => cell && cell.trim() !== ''));
       let truncatedCells = 0;
       const now = Date.now();
       let nextOrder = state.rows.reduce((m, r) => Math.max(m, r.order), -1) + 1;
-      const newRows: Row[] = dataRows
-        .filter((dataRow) => dataRow.some((cell) => cell && cell.trim() !== ''))
-        .map((dataRow) => {
+      const total = nonEmptyDataRows.length;
+      const BATCH_SIZE = 500;
+      let imported = 0;
+      if (total > 0) set({ importProgress: { imported: 0, total } });
+
+      for (let start = 0; start < total; start += BATCH_SIZE) {
+        const batch = nonEmptyDataRows.slice(start, start + BATCH_SIZE).map((dataRow) => {
           const cells: Record<string, string> = {};
           headers.forEach((header, i) => {
             const columnId = headerToColumnId.get(header);
@@ -668,15 +844,38 @@ export const useTableStore = create<TableState>((set, get) => {
             if (truncated) truncatedCells++;
             cells[columnId] = value;
           });
-          return { id: randomUUID(), tableId: state.tableId!, cells, order: nextOrder++, createdAt: now, updatedAt: now };
+          return { id: randomUUID(), tableId, cells, order: nextOrder++, createdAt: now, updatedAt: now };
         });
 
-      const rows = [...state.rows, ...newRows];
-      set({ columns, rows });
-      persistColumns(state.tableId, columns);
-      void saveRows(newRows);
+        // The batch is on screen (and in the undo snapshot) the instant
+        // it's built — only *persisting* it waits its turn below.
+        set((s) => ({ rows: [...s.rows, ...batch] }));
+        // Awaited, not fire-and-forget — a real, caught bug: firing every
+        // batch's save at once (~10 requests for a 5,000-row test import)
+        // hit Chromium's own connection limit and started failing with
+        // net::ERR_INSUFFICIENT_RESOURCES. Awaiting means at most one
+        // batch's request is in flight at a time, which also makes the
+        // progress bar honest — it reflects rows actually persisted, not
+        // just rows appended to in-memory state. importRows (not the
+        // plain saveRows every other write in this store uses) hits a
+        // distinct server route specifically so a worker's
+        // can_export_import permission can gate CSV import without also
+        // blocking ordinary paste/drag-reorder/sort saves.
+        await importRows(batch);
+        imported += batch.length;
+        set({ importProgress: { imported, total } });
+        // Yields to the browser so the batch just appended actually paints
+        // before the next batch starts building — awaiting saveRows()
+        // above already does this in practice (a real network round trip
+        // spans plenty of paint opportunities), but keeping this explicit
+        // means the progress bar still animates smoothly even against a
+        // very fast/local backend where the save resolves almost
+        // instantly.
+        await new Promise(requestAnimationFrame);
+      }
 
-      return { createdRows: newRows.length, createdColumns, truncatedCells };
+      set({ importProgress: null });
+      return { createdRows: total, createdColumns, truncatedCells };
     },
   };
 });

@@ -42,6 +42,12 @@ export function CallsView({ onJumpToRow, onJumpToContact }: CallsViewProps) {
   const error = useCallsStore((s) => s.error);
   const fetchCalls = useCallsStore((s) => s.fetchCalls);
   const syncCallHistory = useCallsStore((s) => s.syncCallHistory);
+  const balance = useCallsStore((s) => s.balance);
+  const fetchBalance = useCallsStore((s) => s.fetchBalance);
+  const costs = useCallsStore((s) => s.costs);
+  const costsLoading = useCallsStore((s) => s.costsLoading);
+  const costsError = useCallsStore((s) => s.costsError);
+  const fetchCosts = useCallsStore((s) => s.fetchCosts);
   const showToast = useToastStore((s) => s.show);
 
   const columns = useTableStore((s) => s.columns);
@@ -55,50 +61,51 @@ export function CallsView({ onJumpToRow, onJumpToContact }: CallsViewProps) {
   const [startDate, setStartDate] = useState(() => defaultDateInput(0));
   const [endDate, setEndDate] = useState(() => defaultDateInput(0));
 
-  // Zadarma caps /v1/statistics/pbx/ at 10 requests/minute — a real limit
-  // hit in practice while adjusting the date range and re-clicking "Load
-  // calls" a few times in quick succession. A ~7s cooldown between loads
-  // keeps normal use comfortably under that (< 9/min) without being
-  // annoying for a tab that's "load once, work with it" by nature.
-  const [cooldown, setCooldown] = useState(0);
-  useEffect(() => {
-    if (cooldown <= 0) return;
-    const id = setTimeout(() => setCooldown((c) => c - 1), 1000);
-    return () => clearTimeout(id);
-  }, [cooldown]);
-
   const rangeDays = Math.ceil((new Date(endDate).getTime() - new Date(startDate).getTime()) / 86_400_000);
   const rangeTooLong = rangeDays > MAX_RANGE_DAYS;
 
-  const load = () => {
-    if (rangeTooLong || cooldown > 0) return;
-    void fetchCalls(toZadarmaDatetime(startDate, '00:00:00'), toZadarmaDatetime(endDate, '23:59:59'));
-    setCooldown(7);
+  // Loads the call list and its costs together — on explicit request, one
+  // button doing both rather than a separate "Rodyti kainas" step. costs
+  // fetch is sequenced *after* calls resolves (fetchCosts reads the
+  // store's freshly-updated `calls` to know what to correlate against —
+  // see useCallsStore's own fetchCosts), not fired in parallel.
+  //
+  // No forced cooldown on this button — removed on explicit request ("aš
+  // pats galiu palaukti", i.e. the user prefers to pace their own clicks
+  // rather than have the UI force a wait). Zadarma's 10 req/min cap on
+  // /v1/statistics/(pbx)/ is unchanged and still enforced server-side —
+  // clicking faster than that just surfaces the existing rate-limit toast
+  // (see fetchCalls's error handling in useCallsStore.ts), it doesn't skip
+  // the limit, only the client-side nag about it.
+  const load = async () => {
+    if (rangeTooLong) return;
+    const start = toZadarmaDatetime(startDate, '00:00:00');
+    const end = toZadarmaDatetime(endDate, '23:59:59');
+    await fetchCalls(start, end);
+    void fetchCosts(start, end);
   };
 
-  // load() fires a fetch synchronously the instant the effect body runs —
-  // not deferred behind a promise the way syncCallHistory below is — so
-  // React StrictMode's dev-only mount→cleanup→mount double-invoke (done
-  // deliberately, to help surface missing-cleanup bugs) calls it *twice*
-  // in the same synchronous tick, before the first call's setCooldown(7)
-  // has actually re-rendered. Both invocations see the same stale
-  // cooldown === 0 and both fire — two real requests, not one. A ref
-  // survives StrictMode's simulated unmount/remount (it doesn't tear down
-  // the fiber, just re-invokes the effect callbacks), but correctly resets
-  // on a genuine remount later (leaving the Calls tab and coming back,
-  // which really does unmount CallsView — see the tab switch in App.tsx),
-  // so this guard only suppresses the fake double-fire, not a real re-open.
+  // load() fires a fetch synchronously the instant the effect body runs
+  // (the `await` inside it doesn't change that) — so React StrictMode's
+  // dev-only mount→cleanup→mount double-invoke (done deliberately, to help
+  // surface missing-cleanup bugs) calls it *twice* in the same synchronous
+  // tick. A ref survives StrictMode's simulated unmount/remount (it
+  // doesn't tear down the fiber, just re-invokes the effect callbacks),
+  // but correctly resets on a genuine remount later (leaving the Calls tab
+  // and coming back, which really does unmount CallsView — see the tab
+  // switch in App.tsx), so this guard only suppresses the fake
+  // double-fire, not a real re-open.
   const hasAutoLoadedRef = useRef(false);
   useEffect(() => {
     if (!hasAutoLoadedRef.current) {
       hasAutoLoadedRef.current = true;
-      load();
+      void load();
     }
     // Independent of the list load above — grows the persistent local
     // history (Statistics view) in the background, separate from whatever
-    // date range happens to be picked here. Deliberately delayed by the
-    // same 7s cooldown used everywhere else in this file, NOT fired in the
-    // same instant as load() — both hit the same 10-req/min-capped Zadarma
+    // date range happens to be picked here. Deliberately delayed by a
+    // fixed 7s stagger, NOT fired in the same instant as load() — both hit
+    // the same 10-req/min-capped Zadarma
     // endpoint, and starting them simultaneously on every Calls-tab mount
     // was, on its own, enough to trip the rate limit before any manual
     // interaction at all (a real, reported bug: the "wait a moment" toast
@@ -116,6 +123,21 @@ export function CallsView({ onJumpToRow, onJumpToContact }: CallsViewProps) {
   useEffect(() => {
     if (error) showToast(error);
   }, [error, showToast]);
+
+  useEffect(() => {
+    if (costsError) showToast(costsError);
+  }, [costsError, showToast]);
+
+  // Not a statistics-endpoint call (see useCallsStore's fetchBalance) — no
+  // StrictMode-double-fire guard needed here the way load() above needs
+  // one; a duplicate balance fetch under React StrictMode's dev-only
+  // double-invoke is harmless (100/minute limit, one extra request is
+  // nothing), unlike load() sharing the 10/minute statistics budget.
+  useEffect(() => {
+    void fetchBalance();
+    // Fetch once per mount only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Maps a phone-number match key (see utils/phoneMatch.ts) to the row/
   // contact it came from — built once here and reused by
@@ -145,6 +167,11 @@ export function CallsView({ onJumpToRow, onJumpToContact }: CallsViewProps) {
         <button type="button" className={view === 'sms' ? 'active' : ''} onClick={() => setView('sms')}>
           Gaunamos SMS
         </button>
+        {balance && (
+          <span className="calls-balance" title="Likutis sąskaitoje">
+            {balance.amount} {balance.currency}
+          </span>
+        )}
       </div>
 
       {view === 'stats' ? (
@@ -166,8 +193,8 @@ export function CallsView({ onJumpToRow, onJumpToContact }: CallsViewProps) {
         <label>
           Iki <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
         </label>
-        <button type="button" onClick={load} disabled={rangeTooLong || cooldown > 0}>
-          {cooldown > 0 ? `Palaukite ${cooldown} s…` : 'Įkelti skambučius'}
+        <button type="button" onClick={() => void load()} disabled={rangeTooLong}>
+          {costsLoading ? 'Kraunama kainas…' : 'Įkelti skambučius'}
         </button>
         {rangeTooLong && <span className="calls-range-error">Laikotarpis negali viršyti {MAX_RANGE_DAYS} dienų.</span>}
         {summary && (
@@ -192,6 +219,7 @@ export function CallsView({ onJumpToRow, onJumpToContact }: CallsViewProps) {
               <th>Vidinis numeris</th>
               <th>Numeris</th>
               <th>Trukmė</th>
+              <th>Kaina</th>
               <th>Būsena</th>
               <th>Veiksmai</th>
             </tr>
@@ -201,10 +229,12 @@ export function CallsView({ onJumpToRow, onJumpToContact }: CallsViewProps) {
               const key = phoneMatchKey(call.otherParty);
               const matched = key ? phoneToRow.get(key) : undefined;
               const matchedContact = key ? phoneToContact.get(key) : undefined;
+              const cost = costs[call.call_id];
               return (
                 <CallRow
                   key={call.call_id}
                   call={call}
+                  cost={cost}
                   matchedRow={matched}
                   matchedContact={matchedContact}
                   onJumpToRow={onJumpToRow}

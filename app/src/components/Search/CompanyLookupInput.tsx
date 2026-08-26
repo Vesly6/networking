@@ -78,8 +78,8 @@ export function CompanyLookupInput({ value, onChange }: CompanyLookupInputProps)
     <div className="company-lookup">
       <div className="combobox-chips">
         {value.map((id) => (
-          <span key={id} className="combobox-chip">
-            {names[id] ?? id}
+          <span key={id} className="combobox-chip" title={names[id] ?? id}>
+            <span className="combobox-chip-label">{names[id] ?? id}</span>
             <button type="button" className="combobox-chip-remove" onClick={() => removeCompany(id)} aria-label={`Pašalinti ${names[id] ?? id}`}>
               ×
             </button>

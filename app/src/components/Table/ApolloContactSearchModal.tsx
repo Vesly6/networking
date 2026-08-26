@@ -414,7 +414,7 @@ export function ApolloContactSearchModal({
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal apollo-search-modal" onClick={(e) => e.stopPropagation()}>
         <div className="apollo-search-modal-header">
-          <h2>🔍 Ieškoti kontaktų (Apollo)</h2>
+          <h2>🔍 Ieškoti kontaktų</h2>
           <button
             type="button"
             className="apollo-search-modal-filters-toggle"
@@ -519,7 +519,7 @@ export function ApolloContactSearchModal({
                       title={
                         added
                           ? 'Panašus kontaktas jau yra šioje eilutėje — vis tiek galima pridėti dar kartą'
-                          : 'Prideda kontaktą iškart; telefono numerį (jei Apollo jį randa) įrašo pačiam po kelių minučių'
+                          : 'Prideda kontaktą iškart; telefono numerį (jei jį pavyksta rasti) įrašo pačiam po kelių minučių'
                       }
                       onClick={() => void handleAddPerson(p)}
                     >

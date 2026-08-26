@@ -341,7 +341,7 @@ export function SmsInboxView({ phoneToRow, phoneToContact, onJumpToRow, onJumpTo
           type="button"
           onClick={() => void handleSetupWebhook()}
           disabled={settingUpWebhook}
-          title="Vienkartinis veiksmas — praneša Zadarma siųsti gaunamas SMS į šio serverio adresą. Reikalauja PUBLIC_BASE_URL serverio nustatymuose."
+          title="Vienkartinis veiksmas — įjungia gaunamų SMS siuntimą į šio serverio adresą. Reikalauja PUBLIC_BASE_URL serverio nustatymuose."
         >
           {settingUpWebhook ? 'Registruojama…' : '⚙️ Registruoti SMS webhook'}
         </button>

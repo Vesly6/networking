@@ -19,7 +19,7 @@ export function useAddApolloResultToTable() {
 
   const addPerson = (person: ApolloSearchPerson, enriched: ApolloEnrichedPerson | undefined, revealedPhone?: string) => {
     if (columns.length === 0) {
-      showToast('Pirmiausia pridėkite bent vieną stulpelį — kol kas nėra kur sudėti Apollo duomenų');
+      showToast('Pirmiausia pridėkite bent vieną stulpelį — kol kas nėra kur sudėti duomenų');
       return;
     }
     const companyColumn = getColumnByType(columns, 'company');
@@ -76,7 +76,7 @@ export function useAddApolloResultToTable() {
 
   const addCompany = (company: ApolloCompany) => {
     if (columns.length === 0) {
-      showToast('Pirmiausia pridėkite bent vieną stulpelį — kol kas nėra kur sudėti Apollo duomenų');
+      showToast('Pirmiausia pridėkite bent vieną stulpelį — kol kas nėra kur sudėti duomenų');
       return;
     }
     const companyColumn = getColumnByType(columns, 'company');

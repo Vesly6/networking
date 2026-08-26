@@ -24,12 +24,6 @@ import { guessLithuanianDiacritics } from './openai.js';
 
 export class SerperError extends Error {}
 
-function getApiKey(): string {
-  const key = process.env.SERPER_API_KEY;
-  if (!key) throw new SerperError('SERPER_API_KEY is not set — check server/.env');
-  return key;
-}
-
 interface SerperOrganicResult {
   title?: string;
   link?: string;
@@ -56,15 +50,28 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 // sentence, with the real cause still logged server-side (index.ts's
 // error-mapping middleware) for actual debugging.
 const MAX_ATTEMPTS = 3;
+// fetch() has no default timeout — a request that hangs (rather than
+// erroring outright) would previously wait indefinitely, with no retry
+// ever kicking in since the catch block only sees actual failures, not
+// slowness. A real, reported problem ("почему serpdev дает постоянно
+// сбой системы") that couldn't be reproduced locally (this same key/
+// endpoint responded cleanly in ~1.3s when tested directly) — pointing at
+// something environment-specific to where the server actually runs
+// (Render), which a hang-without-error would look like from the user's
+// side: not a normal timeout message, just "it never works." An explicit
+// 10s cap turns a silent hang into the same retried failure path every
+// other network error already goes through.
+const REQUEST_TIMEOUT_MS = 10_000;
 
-async function serperSearch(query: string): Promise<SerperOrganicResult[]> {
+async function serperSearch(query: string, apiKey: string): Promise<SerperOrganicResult[]> {
   let res: Response | undefined;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
       res = await fetch('https://google.serper.dev/search', {
         method: 'POST',
-        headers: { 'X-API-KEY': getApiKey(), 'Content-Type': 'application/json' },
+        headers: { 'X-API-KEY': apiKey, 'Content-Type': 'application/json' },
         body: JSON.stringify({ q: query }),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
       break;
     } catch (err) {
@@ -81,7 +88,7 @@ async function serperSearch(query: string): Promise<SerperOrganicResult[]> {
   // three times would only add latency for nothing.
   const json = (await res!.json().catch(() => null)) as (SerperSearchResponse & { message?: string }) | null;
   if (!res!.ok || !json) {
-    throw new SerperError(json?.message ?? `serper.dev request failed (HTTP ${res!.status})`);
+    throw new SerperError(json?.message ?? `Search service request failed (HTTP ${res!.status})`);
   }
   return Array.isArray(json.organic) ? json.organic : [];
 }
@@ -210,19 +217,29 @@ const MAX_CANDIDATES_PER_PLATFORM = 5;
  * over-narrowing the query was a more likely cause of "finds nothing" than
  * a benefit; a human reviewing up to 5 named candidates can use company
  * context themselves far better than a search query string can. */
-export async function searchSocialProfiles(params: { firstName: string; lastName: string }): Promise<SocialSearchResult> {
+export async function searchSocialProfiles(
+  params: { firstName: string; lastName: string },
+  serperApiKey: string,
+  // Optional — the diacritic-guess step is a best-effort accuracy
+  // enhancement (see nameQueryClause's own doc comment), not a hard
+  // requirement for this search to work at all, so a company that's
+  // configured Serper but not OpenAI just skips it rather than failing
+  // the whole lookup.
+  openaiApiKey?: string,
+): Promise<SocialSearchResult> {
   const name = [params.firstName, params.lastName].filter((s) => s?.trim()).join(' ').trim();
   if (!name) throw new SerperError('Reikia bent vardo, kad būtų galima ieškoti');
 
   // Only worth asking for when the name has no diacritics to begin with —
   // stripping (the other direction) is already free, deterministic string
   // manipulation with nothing to gain from an LLM call.
-  const diacriticGuess = stripDiacritics(name) === name ? await guessLithuanianDiacritics(name) : null;
+  const diacriticGuess =
+    stripDiacritics(name) === name && openaiApiKey ? await guessLithuanianDiacritics(name, openaiApiKey) : null;
 
   const clause = nameQueryClause(name, diacriticGuess);
   const [instagramResults, facebookResults] = await Promise.all([
-    serperSearch(`site:instagram.com ${clause}`),
-    serperSearch(`site:facebook.com ${clause}`),
+    serperSearch(`site:instagram.com ${clause}`, serperApiKey),
+    serperSearch(`site:facebook.com ${clause}`, serperApiKey),
   ]);
 
   const instagram = dedupeProfileUrls(

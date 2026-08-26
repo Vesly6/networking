@@ -10,13 +10,9 @@ export class ZadarmaApiError extends Error {
   }
 }
 
-function getCredentials(): { key: string; secret: string } {
-  const key = process.env.ZADARMA_API_KEY;
-  const secret = process.env.ZADARMA_API_SECRET;
-  if (!key || !secret) {
-    throw new Error('ZADARMA_API_KEY / ZADARMA_API_SECRET are not set — check server/.env');
-  }
-  return { key, secret };
+export interface ZadarmaCredentials {
+  key: string;
+  secret: string;
 }
 
 /** Matches PHP's urlencode() (what PHP_QUERY_RFC1738 uses), which JS's
@@ -58,8 +54,8 @@ async function callZadarma(
   method: string,
   params: Record<string, string | number>,
   httpMethod: 'GET' | 'PUT' | 'POST',
+  { key, secret }: ZadarmaCredentials,
 ): Promise<any> {
-  const { key, secret } = getCredentials();
   const paramsString = buildParamsString(params);
   const authHeader = `${key}:${sign(method, paramsString, secret)}`;
   const url = httpMethod === 'GET' ? `${API_BASE}${method}?${paramsString}` : `${API_BASE}${method}`;
@@ -81,12 +77,12 @@ async function callZadarma(
       body: isBodyMethod ? paramsString : undefined,
     });
   } catch {
-    throw new ZadarmaApiError('Could not reach Zadarma API', null);
+    throw new ZadarmaApiError('Could not reach the calls service', null);
   }
 
   const json: any = await res.json().catch(() => null);
   if (!res.ok || !json || json.status === 'error') {
-    throw new ZadarmaApiError(json?.message ?? `Zadarma request failed (HTTP ${res.status})`, json);
+    throw new ZadarmaApiError(json?.message ?? `Calls service request failed (HTTP ${res.status})`, json);
   }
   return json;
 }
@@ -141,13 +137,16 @@ function extractOtherParty(destination: string, clid: string): string {
 // flag is also why it's worth using even setting the ID mismatch aside:
 // it tells the UI upfront which calls have a recording at all, instead of
 // discovering that with a failed request per call.
-export async function getStatistics(opts: {
-  start: string;
-  end: string;
-  sip?: string;
-  skip?: number;
-  limit?: number;
-}): Promise<{ stats: CallRecord[] }> {
+export async function getStatistics(
+  opts: {
+    start: string;
+    end: string;
+    sip?: string;
+    skip?: number;
+    limit?: number;
+  },
+  creds: ZadarmaCredentials,
+): Promise<{ stats: CallRecord[] }> {
   const { start, end, sip, skip, limit } = opts;
   const params: Record<string, string | number> = {
     start,
@@ -156,7 +155,7 @@ export async function getStatistics(opts: {
     ...(skip !== undefined ? { skip } : {}),
     ...(limit !== undefined ? { limit } : {}),
   };
-  const result = await callZadarma('/v1/statistics/pbx/', params, 'GET');
+  const result = await callZadarma('/v1/statistics/pbx/', params, 'GET', creds);
   const stats: CallRecord[] = (result.stats ?? [])
     .map((c: any) => {
       // Zadarma sends `destination` as a bare JSON number (unquoted), not
@@ -178,27 +177,115 @@ export async function getStatistics(opts: {
   return { stats };
 }
 
-export async function requestRecording(opts: {
-  callId: string;
-  lifetime?: number;
-}): Promise<{ link?: string; links?: string[]; lifetime_till?: string }> {
+/** GET /v1/info/balance/ — confirmed against Zadarma's own docs (not a
+ * statistics endpoint, so it doesn't share the 10-req/minute cap that
+ * getStatistics/getCallCosts below are subject to; it falls under the
+ * general 100/minute limit instead, per this file's own long-established
+ * finding — see getStatistics's doc comment). Safe to call freely, e.g.
+ * on every Calls-tab mount, unlike the statistics-derived calls below. */
+export async function getBalance(creds: ZadarmaCredentials): Promise<{ balance: string; currency: string }> {
+  return callZadarma('/v1/info/balance/', {}, 'GET', creds);
+}
+
+/** The PLAIN /v1/statistics/ endpoint (not /pbx/) — confirmed against
+ * Zadarma's docs to be the *only* one of the two that reports per-call
+ * cost (`cost` = per-minute rate, `billcost` = what the paid minutes
+ * actually cost, `currency`). getStatistics() above deliberately stays on
+ * the PBX endpoint (its call_id is the only one recording/transcription
+ * accept — see that function's own doc comment), so cost data has to come
+ * from this separate call instead, correlated back onto the PBX list by
+ * the caller. This is a genuinely different, second statistics request
+ * against the SAME 10-req/minute-capped budget — never fire it
+ * automatically alongside getStatistics; see index.ts's /api/calls/costs
+ * route and CallsView's explicit "Rodyti kainas" button for why this
+ * stays a deliberate, separate click.
+ *
+ * Correlating a plain-statistics record back to its PBX counterpart has no
+ * clean shared id (the two endpoints use incompatible call_id formats —
+ * see getStatistics's own doc comment), and two things Zadarma's own docs
+ * suggest as a join key turned out not to work once checked against real
+ * data: `sip` is reported in a completely different number space on each
+ * endpoint for the very same account (confirmed live: "100" on /pbx/ vs
+ * "100396" on the plain endpoint), and `callstart`, while the same
+ * "YYYY-MM-DD HH:MM:SS" format on both, is NOT identical between them
+ * either — confirmed live, a consistent few-second gap (the PBX endpoint
+ * logs callstart at dial/ring, the plain one apparently a few seconds
+ * later, closer to connect) meant an *exact* string match against real
+ * data matched zero calls despite both endpoints independently returning
+ * real records for the same range.
+ *
+ * The actual fix: the caller passes the PBX calls it already has (id +
+ * callstart, from getStatistics), and this does a *nearest-timestamp*
+ * match — for each PBX call, the plain-statistics record whose callstart
+ * is closest to it (in either direction) wins, as long as it's within
+ * MAX_MATCH_SECONDS. Returned keyed by the PBX call's own `call_id`, so
+ * the frontend can look a cost up directly by the id it already renders
+ * rows by — no synthetic composite key needed anymore. */
+const MAX_MATCH_SECONDS = 60;
+
+export async function getCallCosts(
+  opts: {
+    start: string;
+    end: string;
+    calls: Array<{ callId: string; callstart: string }>;
+  },
+  creds: ZadarmaCredentials,
+): Promise<Record<string, { billcost: string; currency: string }>> {
+  const { start, end, calls } = opts;
+  const result = await callZadarma('/v1/statistics/', { start, end }, 'GET', creds);
+  const plainRecords: Array<{ ts: number; billcost: string; currency: string }> = (result.stats ?? []).map((c: any) => ({
+    ts: Date.parse(String(c.callstart).replace(' ', 'T')),
+    billcost: String(c.billcost ?? '0'),
+    currency: String(c.currency ?? ''),
+  }));
+
+  const costs: Record<string, { billcost: string; currency: string }> = {};
+  for (const call of calls) {
+    const pbxTs = Date.parse(call.callstart.replace(' ', 'T'));
+    if (!Number.isFinite(pbxTs)) continue;
+    let best: { ts: number; billcost: string; currency: string } | null = null;
+    let bestDiff = Infinity;
+    for (const rec of plainRecords) {
+      const diff = Math.abs(rec.ts - pbxTs);
+      if (diff < bestDiff) {
+        bestDiff = diff;
+        best = rec;
+      }
+    }
+    if (best && bestDiff <= MAX_MATCH_SECONDS * 1000) {
+      costs[call.callId] = { billcost: best.billcost, currency: best.currency };
+    }
+  }
+  return costs;
+}
+
+export async function requestRecording(
+  opts: {
+    callId: string;
+    lifetime?: number;
+  },
+  creds: ZadarmaCredentials,
+): Promise<{ link?: string; links?: string[]; lifetime_till?: string }> {
   const { callId, lifetime } = opts;
   const params: Record<string, string | number> = {
     call_id: callId,
     ...(lifetime !== undefined ? { lifetime } : {}),
   };
-  return callZadarma('/v1/pbx/record/request/', params, 'GET');
+  return callZadarma('/v1/pbx/record/request/', params, 'GET', creds);
 }
 
 /** Click-to-call: dials `from` (your own SIP/extension) first, and once you
  * pick up, connects you to `to`. No public URL needed — this is a plain
  * outbound signed request, same as every other wrapper here. */
-export async function requestCallback(opts: {
-  from: string;
-  to: string;
-}): Promise<{ from: string; to: string; time: number }> {
+export async function requestCallback(
+  opts: {
+    from: string;
+    to: string;
+  },
+  creds: ZadarmaCredentials,
+): Promise<{ from: string; to: string; time: number }> {
   const { from, to } = opts;
-  return callZadarma('/v1/request/callback/', { from, to }, 'GET');
+  return callZadarma('/v1/request/callback/', { from, to }, 'GET', creds);
 }
 
 /** POST /v1/sms/send/ — confirmed against Zadarma's own official PHP
@@ -212,18 +299,21 @@ export async function requestCallback(opts: {
  * must be a number already verified in the account's Sender ID settings
  * (Zadarma rejects an unverified one); omit it to send under the account's
  * default sender name. */
-export async function sendSms(opts: {
-  number: string;
-  message: string;
-  callerId?: string;
-}): Promise<{ number?: string; cost?: string; currency?: string }> {
+export async function sendSms(
+  opts: {
+    number: string;
+    message: string;
+    callerId?: string;
+  },
+  creds: ZadarmaCredentials,
+): Promise<{ number?: string; cost?: string; currency?: string }> {
   const { number, message, callerId } = opts;
   const params: Record<string, string | number> = {
     number,
     message,
     ...(callerId !== undefined ? { caller_id: callerId } : {}),
   };
-  return callZadarma('/v1/sms/send/', params, 'POST');
+  return callZadarma('/v1/sms/send/', params, 'POST', creds);
 }
 
 /** POST /v1/pbx/webhooks/url/ — sets the one URL Zadarma calls back to for
@@ -231,8 +321,8 @@ export async function sendSms(opts: {
  * ones fire). A one-time (or "re-run after moving hosts") admin action,
  * not something normal app usage ever needs to call — see the
  * /api/zadarma/setup-sms-webhook route in index.ts for the only caller. */
-export async function setWebhookUrl(url: string): Promise<unknown> {
-  return callZadarma('/v1/pbx/webhooks/url/', { url }, 'POST');
+export async function setWebhookUrl(url: string, creds: ZadarmaCredentials): Promise<unknown> {
+  return callZadarma('/v1/pbx/webhooks/url/', { url }, 'POST', creds);
 }
 
 /** POST /v1/pbx/webhooks/hooks/ — toggles *which* event types get sent to
@@ -247,12 +337,15 @@ export async function setWebhookUrl(url: string): Promise<unknown> {
  * "true"/"false", per Zadarma's own docs — confirmed live: sending 1/0
  * (this codebase's usual boolean-as-int convention for other Zadarma
  * params) got rejected outright with a generic "Wrong parameters" error. */
-export async function setWebhookHooks(opts: {
-  sms?: boolean;
-  numberLookup?: boolean;
-  callTracking?: boolean;
-  speechRecognition?: boolean;
-}): Promise<unknown> {
+export async function setWebhookHooks(
+  opts: {
+    sms?: boolean;
+    numberLookup?: boolean;
+    callTracking?: boolean;
+    speechRecognition?: boolean;
+  },
+  creds: ZadarmaCredentials,
+): Promise<unknown> {
   const b = (v: boolean) => (v ? 'true' : 'false');
   const params: Record<string, string | number> = {
     ...(opts.sms !== undefined ? { sms: b(opts.sms) } : {}),
@@ -260,7 +353,7 @@ export async function setWebhookHooks(opts: {
     ...(opts.callTracking !== undefined ? { call_tracking: b(opts.callTracking) } : {}),
     ...(opts.speechRecognition !== undefined ? { speech_recognition: b(opts.speechRecognition) } : {}),
   };
-  return callZadarma('/v1/pbx/webhooks/hooks/', params, 'POST');
+  return callZadarma('/v1/pbx/webhooks/hooks/', params, 'POST', creds);
 }
 
 /** Temporary (72h-lifetime, per Zadarma's docs) key for the browser-side
@@ -273,7 +366,7 @@ export async function setWebhookHooks(opts: {
  * don't casually reuse this pattern for anything else without thinking
  * through the same tradeoff again. `sip` is the PBX extension login the
  * widget should register as (see ZADARMA_WEBRTC_SIP in .env). */
-export async function getWebrtcKey(sip: string): Promise<{ key: string }> {
-  return callZadarma('/v1/webrtc/get_key/', { sip }, 'GET');
+export async function getWebrtcKey(sip: string, creds: ZadarmaCredentials): Promise<{ key: string }> {
+  return callZadarma('/v1/webrtc/get_key/', { sip }, 'GET', creds);
 }
 

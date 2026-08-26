@@ -28,6 +28,7 @@ import { phoneMatchKey } from '../../utils/phoneMatch';
 import { randomUUID } from '../../utils/uuid';
 import { contrastTextColor } from '../../utils/color';
 import { useToastStore } from '../../store/useToastStore';
+import { useAuthStore } from '../../store/useAuthStore';
 import { confirmDialog } from '../../store/useConfirmStore';
 import { getAllTranscriptions, saveSmsLogEntry, getAllSmsLog } from '../../db/db';
 import { ApolloContactSearchModal } from './ApolloContactSearchModal';
@@ -56,6 +57,16 @@ interface CellHoverEditorProps {
    * works unchanged. Not used in contact mode (that mode already has direct
    * access to this row's own contacts via `value`). */
   contactsRaw?: string;
+  /** This table's Status column's optionColors (Column.optionColors,
+   * looked up in TableView.tsx the same computed-once-per-row way as
+   * contactsRaw above), keyed by status value — e.g. {"Accepted":
+   * "#22c55e"}. A status-change auto-logged into this note column (see
+   * useTableStore.ts's logStatusChangeIfNeeded) has an entry whose text is
+   * literally that status value, so parseTaggedEntry below renders it as
+   * a colored chip the same way it already does for the fixed NOTE_TAGS
+   * words — on explicit request, so a status transition is visible at a
+   * glance in the note history, not just as a resulting plain-text word. */
+  statusOptionColors?: Record<string, string>;
   onAddNoteEntry: (text: string) => void;
   onUpdateNoteEntry: (id: string, text: string) => void;
   onRemoveNoteEntry: (id: string) => void;
@@ -172,7 +183,17 @@ interface TaggedEntry {
 // rendering; a prefix/suffix check is still the only way to find a
 // neatsiliepė/LinkedIn-request entry, since neither has a fixed stored
 // flag for it — see the original getHistoryEntryColor this replaced.
-function parseTaggedEntry(text: string): TaggedEntry | null {
+function parseTaggedEntry(text: string, statusOptionColors?: Record<string, string>): TaggedEntry | null {
+  // Checked first, ahead of the fixed NOTE_TAG_COLORS below — a status-
+  // change auto-log entry's text is literally the status value itself
+  // (see useTableStore.ts's logStatusChangeIfNeeded), so an exact match
+  // here means "the whole entry is a status", same shape as a bare
+  // NOTE_TAGS word. A status value without an assigned optionColor (most
+  // dropdowns don't color every option) just falls through to plain text —
+  // there's no color to show.
+  if (statusOptionColors?.[text]) {
+    return { color: statusOptionColors[text], tagLabel: text, restText: '', tagPosition: 'whole' };
+  }
   if (NOTE_TAG_COLORS[text]) {
     return { color: NOTE_TAG_COLORS[text], tagLabel: text, restText: '', tagPosition: 'whole' };
   }
@@ -221,6 +242,7 @@ export function CellHoverEditor({
   companyName,
   highlightEntryId,
   contactsRaw,
+  statusOptionColors,
   onAddNoteEntry,
   onUpdateNoteEntry,
   onRemoveNoteEntry,
@@ -231,6 +253,15 @@ export function CellHoverEditor({
   onClose,
 }: CellHoverEditorProps) {
   const showToast = useToastStore((s) => s.show);
+  // A worker without these can still ADD a new note/contact entry (that's
+  // unrestricted — see the server-side content-diff validator this UI
+  // layer mirrors) but never edit/delete an *existing* one, including
+  // their own — server-enforced already; this just keeps the buttons from
+  // being visible and clickable only to fail.
+  const currentUser = useAuthStore((s) => s.user);
+  const canDeleteNotes = currentUser?.role !== 'worker' || currentUser.permissions.canDeleteNotes;
+  const canEditContacts = currentUser?.role !== 'worker' || currentUser.permissions.canEditContacts;
+  const canDeleteContacts = currentUser?.role !== 'worker' || currentUser.permissions.canDeleteContacts;
   const [pos, setPos] = useState<{ top: number; left: number; width: number; maxHeight: number } | null>(null);
   const [newEntryDraft, setNewEntryDraft] = useState('');
   const [contactDraft, setContactDraft] = useState('');
@@ -1089,11 +1120,15 @@ export function CellHoverEditor({
               {parseNoteHistory(value).length > 0 && (
                 <div className="cell-hover-history">
                   {parseNoteHistory(value).map((entry) => {
-                    const tagged = parseTaggedEntry(entry.text);
+                    const tagged = parseTaggedEntry(entry.text, statusOptionColors);
                     return (
                     <div key={entry.id} className="cell-hover-history-entry">
-                      {entry.createdAt > 0 && (
-                        <div className="cell-hover-history-time">{formatHistoryTimestamp(entry.createdAt)}</div>
+                      {(entry.authorName || entry.createdAt > 0) && (
+                        <div className="cell-hover-history-time">
+                          {entry.authorName && <span className="cell-hover-history-author">{entry.authorName}</span>}
+                          {entry.authorName && entry.createdAt > 0 && ' · '}
+                          {entry.createdAt > 0 && formatHistoryTimestamp(entry.createdAt)}
+                        </div>
                       )}
                       <div className="cell-hover-history-row">
                         {editingNoteId === entry.id ? (
@@ -1116,23 +1151,19 @@ export function CellHoverEditor({
                             }}
                           />
                         ) : (
-                          <button
-                            type="button"
-                            className="cell-hover-history-text cell-hover-history-text-button"
-                            onClick={() => startEditingNote(entry.id, entry.text)}
-                          >
-                            {/* On request — a tag used to color the whole
-                                entry's background, which read as "the
-                                whole line shouting one color" for an
-                                entry that's mostly a name ("Andrius
-                                Ivanaitis neatsiliepė"). Now only the tag
-                                word itself renders as a small colored
-                                chip (matching the quick-tag buttons
-                                above), with any name/rest of the text
-                                staying plain — the entry itself is never
-                                colored anymore, so it no longer needs its
-                                own contrastTextColor fix either. */}
-                            {!tagged ? (
+                          (() => {
+                            // On request — a tag used to color the whole
+                            // entry's background, which read as "the
+                            // whole line shouting one color" for an entry
+                            // that's mostly a name ("Andrius Ivanaitis
+                            // neatsiliepė"). Now only the tag word itself
+                            // renders as a small colored chip (matching
+                            // the quick-tag buttons above), with any
+                            // name/rest of the text staying plain — the
+                            // entry itself is never colored anymore, so
+                            // it no longer needs its own
+                            // contrastTextColor fix either.
+                            const content = !tagged ? (
                               entry.text
                             ) : tagged.tagPosition === 'suffix' ? (
                               <>
@@ -1161,19 +1192,37 @@ export function CellHoverEditor({
                               >
                                 {tagged.tagLabel}
                               </span>
-                            )}
+                            );
+                            // A worker without canDeleteNotes can't edit
+                            // this entry (that's what editing an existing
+                            // one via startEditingNote ultimately writes
+                            // as — see the shared server-side validator),
+                            // so it's plain text for them, not a button.
+                            return canDeleteNotes ? (
+                              <button
+                                type="button"
+                                className="cell-hover-history-text cell-hover-history-text-button"
+                                onClick={() => startEditingNote(entry.id, entry.text)}
+                              >
+                                {content}
+                              </button>
+                            ) : (
+                              <span className="cell-hover-history-text">{content}</span>
+                            );
+                          })()
+                        )}
+                        {canDeleteNotes && (
+                          <button
+                            type="button"
+                            className="cell-hover-history-remove"
+                            title="Ištrinti įrašą"
+                            onClick={() => {
+                              void removeNoteEntry(entry.id);
+                            }}
+                          >
+                            ×
                           </button>
                         )}
-                        <button
-                          type="button"
-                          className="cell-hover-history-remove"
-                          title="Ištrinti įrašą"
-                          onClick={() => {
-                            void removeNoteEntry(entry.id);
-                          }}
-                        >
-                          ×
-                        </button>
                       </div>
                     </div>
                     );
@@ -1201,7 +1250,7 @@ export function CellHoverEditor({
                   onClick={() => setApolloModalOpen(true)}
                   title={
                     companyName
-                      ? `Ieškoti žmonių įmonėje „${companyName}“ (Apollo)`
+                      ? `Ieškoti žmonių įmonėje „${companyName}“`
                       : 'Šiai eilutei nenustatytas įmonės pavadinimas'
                   }
                 >
@@ -1465,24 +1514,28 @@ export function CellHoverEditor({
                                 >
                                   🔍
                                 </button>
-                                <button
-                                  type="button"
-                                  className="cell-hover-contact-edit"
-                                  title="Redaguoti kontaktą"
-                                  onClick={() => startEditingContact(c)}
-                                >
-                                  ✏️
-                                </button>
-                                <button
-                                  type="button"
-                                  className="cell-hover-contact-remove"
-                                  title="Pašalinti kontaktą"
-                                  onClick={() => {
-                                    void removeContact(c.id);
-                                  }}
-                                >
-                                  ×
-                                </button>
+                                {canEditContacts && (
+                                  <button
+                                    type="button"
+                                    className="cell-hover-contact-edit"
+                                    title="Redaguoti kontaktą"
+                                    onClick={() => startEditingContact(c)}
+                                  >
+                                    ✏️
+                                  </button>
+                                )}
+                                {canDeleteContacts && (
+                                  <button
+                                    type="button"
+                                    className="cell-hover-contact-remove"
+                                    title="Pašalinti kontaktą"
+                                    onClick={() => {
+                                      void removeContact(c.id);
+                                    }}
+                                  >
+                                    ×
+                                  </button>
+                                )}
                               </div>
                             </div>
                             {smsComposeFor === c.id && phone && (

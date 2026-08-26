@@ -1,5 +1,6 @@
 import type { Column, Row } from '../../types';
 import { useTableStore } from '../../store/useTableStore';
+import { useAuthStore } from '../../store/useAuthStore';
 import { confirmDialog } from '../../store/useConfirmStore';
 import { ContextMenu } from '../ContextMenu';
 
@@ -53,6 +54,13 @@ export function CellContextMenu({
   const insertColumns = useTableStore((s) => s.insertColumns);
   const removeColumns = useTableStore((s) => s.removeColumns);
   const setColumnsHidden = useTableStore((s) => s.setColumnsHidden);
+  const currentUser = useAuthStore((s) => s.user);
+  const canDeleteRowsPerm = currentUser?.role !== 'worker' || currentUser.permissions.canDeleteRows;
+  const canDeleteColumnsPerm = currentUser?.role !== 'worker' || currentUser.permissions.canDeleteColumns;
+  const canInsertRowsPerm = currentUser?.role !== 'worker' || currentUser.permissions.canInsertRows;
+  const canInsertColumnsPerm = currentUser?.role !== 'worker' || currentUser.permissions.canInsertColumns;
+  const canHidePerm = currentUser?.role !== 'worker' || currentUser.permissions.canHideRowsColumns;
+  const canClearPerm = currentUser?.role !== 'worker' || currentUser.permissions.canClearContent;
 
   const rowTargetSet = new Set(rowTargetIds);
   const rowIndices = rows.reduce<number[]>((acc, r, i) => (rowTargetSet.has(r.id) ? [...acc, i] : acc), []);
@@ -81,73 +89,89 @@ export function CellContextMenu({
       <button type="button" className="context-menu-item" onClick={() => run(onPaste)}>
         Įklijuoti
       </button>
-      <button type="button" className="context-menu-item" onClick={() => run(onClear)}>
-        Išvalyti turinį
-      </button>
+      {canClearPerm && (
+        <button type="button" className="context-menu-item" onClick={() => run(onClear)}>
+          Išvalyti turinį
+        </button>
+      )}
 
       <div className="context-menu-separator" />
       {rowInsertEnabled ? (
-        <>
-          <button type="button" className="context-menu-item" onClick={() => run(() => insertRows(rows[firstRowIndex].id, rowCount))}>
-            Įterpti {rowCount > 1 ? 'eilutes' : 'eilutę'} virš{rowSuffix}
-          </button>
-          <button
-            type="button"
-            className="context-menu-item"
-            onClick={() => run(() => insertRows(rows[lastRowIndex + 1]?.id ?? null, rowCount))}
-          >
-            Įterpti {rowCount > 1 ? 'eilutes' : 'eilutę'} žemiau{rowSuffix}
-          </button>
-        </>
+        canInsertRowsPerm && (
+          <>
+            <button type="button" className="context-menu-item" onClick={() => run(() => insertRows(rows[firstRowIndex].id, rowCount))}>
+              Įterpti {rowCount > 1 ? 'eilutes' : 'eilutę'} virš{rowSuffix}
+            </button>
+            <button
+              type="button"
+              className="context-menu-item"
+              onClick={() => run(() => insertRows(rows[lastRowIndex + 1]?.id ?? null, rowCount))}
+            >
+              Įterpti {rowCount > 1 ? 'eilutes' : 'eilutę'} žemiau{rowSuffix}
+            </button>
+          </>
+        )
       ) : (
         <button type="button" className="context-menu-item" onClick={() => run(() => addRow())}>
           Pridėti eilutę
         </button>
       )}
-      <button type="button" className="context-menu-item" onClick={() => run(() => setRowsHidden(rowTargetIds, true))}>
-        Slėpti {rowCount > 1 ? 'eilutes' : 'eilutę'}{rowSuffix}
-      </button>
-      <button
-        type="button"
-        className="context-menu-item context-menu-danger"
-        onClick={async () => {
-          const ok = await confirmDialog({
-            message: `Ištrinti ${rowCount > 1 ? `pasirinktas eilutes (${rowCount})` : 'šią eilutę'}?`,
-            danger: true,
-          });
-          if (ok) run(() => removeRows(rowTargetIds));
-        }}
-      >
-        Ištrinti {rowCount > 1 ? 'eilutes' : 'eilutę'}{rowSuffix}
-      </button>
+      {canHidePerm && (
+        <button type="button" className="context-menu-item" onClick={() => run(() => setRowsHidden(rowTargetIds, true))}>
+          Slėpti {rowCount > 1 ? 'eilutes' : 'eilutę'}{rowSuffix}
+        </button>
+      )}
+      {canDeleteRowsPerm && (
+        <button
+          type="button"
+          className="context-menu-item context-menu-danger"
+          onClick={async () => {
+            const ok = await confirmDialog({
+              message: `Ištrinti ${rowCount > 1 ? `pasirinktas eilutes (${rowCount})` : 'šią eilutę'}?`,
+              danger: true,
+            });
+            if (ok) run(() => removeRows(rowTargetIds));
+          }}
+        >
+          Ištrinti {rowCount > 1 ? 'eilutes' : 'eilutę'}{rowSuffix}
+        </button>
+      )}
 
       <div className="context-menu-separator" />
-      <button type="button" className="context-menu-item" onClick={() => run(() => insertColumns(columns[firstColIndex].id, colCount))}>
-        Įterpti {colCount > 1 ? 'stulpelius' : 'stulpelį'} kairėje{colSuffix}
-      </button>
-      <button
-        type="button"
-        className="context-menu-item"
-        onClick={() => run(() => insertColumns(columns[lastColIndex + 1]?.id ?? null, colCount))}
-      >
-        Įterpti {colCount > 1 ? 'stulpelius' : 'stulpelį'} dešinėje{colSuffix}
-      </button>
-      <button type="button" className="context-menu-item" onClick={() => run(() => setColumnsHidden(columnTargetIds, true))}>
-        Slėpti {colCount > 1 ? 'stulpelius' : 'stulpelį'}{colSuffix}
-      </button>
-      <button
-        type="button"
-        className="context-menu-item context-menu-danger"
-        onClick={async () => {
-          const ok = await confirmDialog({
-            message: `Ištrinti ${colCount > 1 ? `pasirinktus stulpelius (${colCount})` : 'šį stulpelį'}? Duomenys bus prarasti.`,
-            danger: true,
-          });
-          if (ok) run(() => removeColumns(columnTargetIds));
-        }}
-      >
-        Ištrinti {colCount > 1 ? 'stulpelius' : 'stulpelį'}{colSuffix}
-      </button>
+      {canInsertColumnsPerm && (
+        <>
+          <button type="button" className="context-menu-item" onClick={() => run(() => insertColumns(columns[firstColIndex].id, colCount))}>
+            Įterpti {colCount > 1 ? 'stulpelius' : 'stulpelį'} kairėje{colSuffix}
+          </button>
+          <button
+            type="button"
+            className="context-menu-item"
+            onClick={() => run(() => insertColumns(columns[lastColIndex + 1]?.id ?? null, colCount))}
+          >
+            Įterpti {colCount > 1 ? 'stulpelius' : 'stulpelį'} dešinėje{colSuffix}
+          </button>
+        </>
+      )}
+      {canHidePerm && (
+        <button type="button" className="context-menu-item" onClick={() => run(() => setColumnsHidden(columnTargetIds, true))}>
+          Slėpti {colCount > 1 ? 'stulpelius' : 'stulpelį'}{colSuffix}
+        </button>
+      )}
+      {canDeleteColumnsPerm && (
+        <button
+          type="button"
+          className="context-menu-item context-menu-danger"
+          onClick={async () => {
+            const ok = await confirmDialog({
+              message: `Ištrinti ${colCount > 1 ? `pasirinktus stulpelius (${colCount})` : 'šį stulpelį'}? Duomenys bus prarasti.`,
+              danger: true,
+            });
+            if (ok) run(() => removeColumns(columnTargetIds));
+          }}
+        >
+          Ištrinti {colCount > 1 ? 'stulpelius' : 'stulpelį'}{colSuffix}
+        </button>
+      )}
     </ContextMenu>
   );
 }

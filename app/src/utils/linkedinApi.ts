@@ -117,3 +117,23 @@ export function setLinkedInPaused(paused: boolean): Promise<LinkedInSafetySnapsh
     body: JSON.stringify({ paused }),
   });
 }
+
+export interface SchedulerRunResult {
+  due: number;
+  autoExecuted: number;
+  pendingApproval: number;
+  errors: number;
+  circuitBreakerTripped: boolean;
+  skippedConcurrent?: boolean;
+}
+
+/** LinkedInView.tsx's "▶ Vykdyti dabar" button — this used to also run on
+ * its own background setInterval every 5 minutes regardless of any user
+ * action; removed on explicit request (see server/src/index.ts's own doc
+ * comment on why), so this manual trigger is now the only way a due
+ * sequence step ever actually gets processed — with manual review on (the
+ * default), that just means refreshing what's in the Pending Approval
+ * queue; with it off, this is what actually sends. */
+export function runLinkedInScheduler(): Promise<SchedulerRunResult> {
+  return localApiRequest('/api/linkedin/scheduler/run', { method: 'POST' });
+}

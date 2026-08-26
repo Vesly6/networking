@@ -10,18 +10,6 @@ export class InstantlyApiError extends Error {
   }
 }
 
-// Called outside any try/catch at every call site below — same lesson
-// already learned once this session for anthropic.ts's own getApiKey():
-// wrapping this inside callInstantly's try/catch swallowed a missing-key
-// error into a misleading "Could not reach the Instantly API" message.
-function getApiKey(): string {
-  const key = process.env.INSTANTLY_API_KEY;
-  if (!key) {
-    throw new InstantlyApiError('INSTANTLY_API_KEY is not set — check server/.env', 0, null);
-  }
-  return key;
-}
-
 interface CallOptions {
   method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
   query?: Record<string, string | number | boolean | undefined>;
@@ -39,8 +27,7 @@ function buildQuery(query?: CallOptions['query']): string {
   return qs ? `?${qs}` : '';
 }
 
-async function callInstantly<T>(path: string, options: CallOptions = {}): Promise<T> {
-  const apiKey = getApiKey();
+async function callInstantly<T>(path: string, options: CallOptions = {}, apiKey: string): Promise<T> {
   const { method = 'GET', query, body } = options;
   let res: Response;
   try {
@@ -53,7 +40,7 @@ async function callInstantly<T>(path: string, options: CallOptions = {}): Promis
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
   } catch {
-    throw new InstantlyApiError('Could not reach the Instantly API', 0, null);
+    throw new InstantlyApiError('Could not reach the email service', 0, null);
   }
 
   const rawText = await res.text();
@@ -95,23 +82,26 @@ export interface InstantlyCampaign {
   [key: string]: unknown;
 }
 
-export function listCampaigns(params: { limit?: number; starting_after?: string; search?: string; status?: number }) {
-  return callInstantly<InstantlyPage<InstantlyCampaign>>('/campaigns', { query: params });
+export function listCampaigns(
+  params: { limit?: number; starting_after?: string; search?: string; status?: number },
+  apiKey: string,
+) {
+  return callInstantly<InstantlyPage<InstantlyCampaign>>('/campaigns', { query: params }, apiKey);
 }
 
-export function getCampaign(id: string) {
-  return callInstantly<InstantlyCampaign>(`/campaigns/${encodeURIComponent(id)}`);
+export function getCampaign(id: string, apiKey: string) {
+  return callInstantly<InstantlyCampaign>(`/campaigns/${encodeURIComponent(id)}`, {}, apiKey);
 }
 
 // Real, live side effects on the account's actual sending — confirmed
 // paths directly against the spec: NOT /start and /stop (what the docs
 // site's own summary claimed), the real paths are /activate and /pause.
-export function activateCampaign(id: string) {
-  return callInstantly<{ status: string }>(`/campaigns/${encodeURIComponent(id)}/activate`, { method: 'POST' });
+export function activateCampaign(id: string, apiKey: string) {
+  return callInstantly<{ status: string }>(`/campaigns/${encodeURIComponent(id)}/activate`, { method: 'POST' }, apiKey);
 }
 
-export function pauseCampaign(id: string) {
-  return callInstantly<{ status: string }>(`/campaigns/${encodeURIComponent(id)}/pause`, { method: 'POST' });
+export function pauseCampaign(id: string, apiKey: string) {
+  return callInstantly<{ status: string }>(`/campaigns/${encodeURIComponent(id)}/pause`, { method: 'POST' }, apiKey);
 }
 
 export interface InstantlyCampaignAnalyticsOverview {
@@ -127,10 +117,15 @@ export interface InstantlyCampaignAnalyticsOverview {
   [key: string]: unknown;
 }
 
-export function getCampaignAnalyticsOverview(params: { id?: string; ids?: string[]; start_date?: string; end_date?: string }) {
-  return callInstantly<InstantlyCampaignAnalyticsOverview>('/campaigns/analytics/overview', {
-    query: { id: params.id, start_date: params.start_date, end_date: params.end_date },
-  });
+export function getCampaignAnalyticsOverview(
+  params: { id?: string; ids?: string[]; start_date?: string; end_date?: string },
+  apiKey: string,
+) {
+  return callInstantly<InstantlyCampaignAnalyticsOverview>(
+    '/campaigns/analytics/overview',
+    { query: { id: params.id, start_date: params.start_date, end_date: params.end_date } },
+    apiKey,
+  );
 }
 
 export interface InstantlyCampaignDailyAnalytics {
@@ -146,8 +141,11 @@ export interface InstantlyCampaignDailyAnalytics {
   [key: string]: unknown;
 }
 
-export function getCampaignAnalyticsDaily(params: { campaign_id?: string; start_date?: string; end_date?: string }) {
-  return callInstantly<InstantlyCampaignDailyAnalytics[]>('/campaigns/analytics/daily', { query: params });
+export function getCampaignAnalyticsDaily(
+  params: { campaign_id?: string; start_date?: string; end_date?: string },
+  apiKey: string,
+) {
+  return callInstantly<InstantlyCampaignDailyAnalytics[]>('/campaigns/analytics/daily', { query: params }, apiKey);
 }
 
 /** The per-campaign analytics *list* (plural /campaigns/analytics) — not
@@ -169,8 +167,8 @@ export interface InstantlyCampaignAnalyticsRow {
   [key: string]: unknown;
 }
 
-export function getCampaignsAnalyticsList(params: { start_date?: string; end_date?: string }) {
-  return callInstantly<InstantlyCampaignAnalyticsRow[]>('/campaigns/analytics', { query: params });
+export function getCampaignsAnalyticsList(params: { start_date?: string; end_date?: string }, apiKey: string) {
+  return callInstantly<InstantlyCampaignAnalyticsRow[]>('/campaigns/analytics', { query: params }, apiKey);
 }
 
 // --- Leads ("companies") ---
@@ -203,8 +201,8 @@ export interface ListLeadsBody {
 
 // POST, not GET — search/filter/pagination all live in the request body
 // per the spec, unlike every other list endpoint here.
-export function listLeads(body: ListLeadsBody) {
-  return callInstantly<InstantlyPage<InstantlyLead>>('/leads/list', { method: 'POST', body });
+export function listLeads(body: ListLeadsBody, apiKey: string) {
+  return callInstantly<InstantlyPage<InstantlyLead>>('/leads/list', { method: 'POST', body }, apiKey);
 }
 
 export interface CreateLeadBody {
@@ -219,16 +217,16 @@ export interface CreateLeadBody {
   list_id?: string;
 }
 
-export function createLead(body: CreateLeadBody) {
-  return callInstantly<InstantlyLead>('/leads', { method: 'POST', body });
+export function createLead(body: CreateLeadBody, apiKey: string) {
+  return callInstantly<InstantlyLead>('/leads', { method: 'POST', body }, apiKey);
 }
 
-export function updateLead(id: string, body: Partial<CreateLeadBody>) {
-  return callInstantly<InstantlyLead>(`/leads/${encodeURIComponent(id)}`, { method: 'PATCH', body });
+export function updateLead(id: string, body: Partial<CreateLeadBody>, apiKey: string) {
+  return callInstantly<InstantlyLead>(`/leads/${encodeURIComponent(id)}`, { method: 'PATCH', body }, apiKey);
 }
 
-export function deleteLead(id: string) {
-  return callInstantly<{ status: string }>(`/leads/${encodeURIComponent(id)}`, { method: 'DELETE' });
+export function deleteLead(id: string, apiKey: string) {
+  return callInstantly<{ status: string }>(`/leads/${encodeURIComponent(id)}`, { method: 'DELETE' }, apiKey);
 }
 
 // --- Block list (the real "unsubscribe" mechanism) ---
@@ -248,16 +246,16 @@ export interface InstantlyBlockListEntry {
   [key: string]: unknown;
 }
 
-export function addToBlockList(bl_value: string) {
-  return callInstantly<InstantlyBlockListEntry>('/block-lists-entries', { method: 'POST', body: { bl_value } });
+export function addToBlockList(bl_value: string, apiKey: string) {
+  return callInstantly<InstantlyBlockListEntry>('/block-lists-entries', { method: 'POST', body: { bl_value } }, apiKey);
 }
 
-export function listBlockList(params: { limit?: number; starting_after?: string; search?: string }) {
-  return callInstantly<InstantlyPage<InstantlyBlockListEntry>>('/block-lists-entries', { query: params });
+export function listBlockList(params: { limit?: number; starting_after?: string; search?: string }, apiKey: string) {
+  return callInstantly<InstantlyPage<InstantlyBlockListEntry>>('/block-lists-entries', { query: params }, apiKey);
 }
 
-export function removeFromBlockList(id: string) {
-  return callInstantly<{ status: string }>(`/block-lists-entries/${encodeURIComponent(id)}`, { method: 'DELETE' });
+export function removeFromBlockList(id: string, apiKey: string) {
+  return callInstantly<{ status: string }>(`/block-lists-entries/${encodeURIComponent(id)}`, { method: 'DELETE' }, apiKey);
 }
 
 // --- Email accounts ("mailboxes") ---
@@ -275,8 +273,11 @@ export interface InstantlyAccount {
   [key: string]: unknown;
 }
 
-export function listAccounts(params: { limit?: number; starting_after?: string; search?: string; status?: number }) {
-  return callInstantly<InstantlyPage<InstantlyAccount>>('/accounts', { query: params });
+export function listAccounts(
+  params: { limit?: number; starting_after?: string; search?: string; status?: number },
+  apiKey: string,
+) {
+  return callInstantly<InstantlyPage<InstantlyAccount>>('/accounts', { query: params }, apiKey);
 }
 
 /** SMTP/IMAP-only — provider_code 1 ("Custom IMAP/SMTP"), confirmed as a
@@ -300,28 +301,28 @@ export interface CreateAccountBody {
   daily_limit?: number;
 }
 
-export function createAccount(body: CreateAccountBody) {
-  return callInstantly<InstantlyAccount>('/accounts', { method: 'POST', body: { ...body, provider_code: 1 } });
+export function createAccount(body: CreateAccountBody, apiKey: string) {
+  return callInstantly<InstantlyAccount>('/accounts', { method: 'POST', body: { ...body, provider_code: 1 } }, apiKey);
 }
 
 // Accounts have no `id` field at all — confirmed directly against the
 // spec, they're identified by email address everywhere, including these
 // action paths (NOT /accounts/{id}/... as the docs site's own summary
 // claimed).
-export function pauseAccount(email: string) {
-  return callInstantly<{ status: string }>(`/accounts/${encodeURIComponent(email)}/pause`, { method: 'POST' });
+export function pauseAccount(email: string, apiKey: string) {
+  return callInstantly<{ status: string }>(`/accounts/${encodeURIComponent(email)}/pause`, { method: 'POST' }, apiKey);
 }
 
-export function resumeAccount(email: string) {
-  return callInstantly<{ status: string }>(`/accounts/${encodeURIComponent(email)}/resume`, { method: 'POST' });
+export function resumeAccount(email: string, apiKey: string) {
+  return callInstantly<{ status: string }>(`/accounts/${encodeURIComponent(email)}/resume`, { method: 'POST' }, apiKey);
 }
 
-export function enableWarmup(emails: string[]) {
-  return callInstantly<{ status: string }>('/accounts/warmup/enable', { method: 'POST', body: { emails } });
+export function enableWarmup(emails: string[], apiKey: string) {
+  return callInstantly<{ status: string }>('/accounts/warmup/enable', { method: 'POST', body: { emails } }, apiKey);
 }
 
-export function disableWarmup(emails: string[]) {
-  return callInstantly<{ status: string }>('/accounts/warmup/disable', { method: 'POST', body: { emails } });
+export function disableWarmup(emails: string[], apiKey: string) {
+  return callInstantly<{ status: string }>('/accounts/warmup/disable', { method: 'POST', body: { emails } }, apiKey);
 }
 
 // --- Unibox ---
@@ -353,27 +354,30 @@ export interface InstantlyEmail {
   [key: string]: unknown;
 }
 
-export function listEmails(params: {
-  limit?: number;
-  starting_after?: string;
-  search?: string;
-  campaign_id?: string;
-  // Confirmed live against the real API: both silently no-op (return the
-  // exact same results with or without them) rather than actually
-  // filtering — kept here anyway since they're documented, real query
-  // params and passing them is harmless, but the frontend's own "More"
-  // menu (UniboxPanel.tsx) does NOT rely on either of these alone; it
-  // re-filters client-side using reminder_ts for "Reminders only" (a
-  // field that does come back reliably), and has no reliable client-side
-  // signal at all for "Scheduled emails" — that one is genuinely
-  // best-effort/unverified in this account (zero scheduled emails to
-  // test against).
-  has_reminder?: boolean;
-  scheduled_only?: boolean;
-  is_unread?: boolean;
-  eaccount?: string;
-}) {
-  return callInstantly<InstantlyPage<InstantlyEmail>>('/emails', { query: params });
+export function listEmails(
+  params: {
+    limit?: number;
+    starting_after?: string;
+    search?: string;
+    campaign_id?: string;
+    // Confirmed live against the real API: both silently no-op (return the
+    // exact same results with or without them) rather than actually
+    // filtering — kept here anyway since they're documented, real query
+    // params and passing them is harmless, but the frontend's own "More"
+    // menu (UniboxPanel.tsx) does NOT rely on either of these alone; it
+    // re-filters client-side using reminder_ts for "Reminders only" (a
+    // field that does come back reliably), and has no reliable client-side
+    // signal at all for "Scheduled emails" — that one is genuinely
+    // best-effort/unverified in this account (zero scheduled emails to
+    // test against).
+    has_reminder?: boolean;
+    scheduled_only?: boolean;
+    is_unread?: boolean;
+    eaccount?: string;
+  },
+  apiKey: string,
+) {
+  return callInstantly<InstantlyPage<InstantlyEmail>>('/emails', { query: params }, apiKey);
 }
 
 export interface ReplyToEmailBody {
@@ -387,8 +391,8 @@ export interface ReplyToEmailBody {
  * category of irreversible side effect as click-to-call/SMS elsewhere in
  * this app. Only ever call this from an explicit, already-confirmed user
  * action. */
-export function replyToEmail(body: ReplyToEmailBody) {
-  return callInstantly<InstantlyEmail>('/emails/reply', { method: 'POST', body });
+export function replyToEmail(body: ReplyToEmailBody, apiKey: string) {
+  return callInstantly<InstantlyEmail>('/emails/reply', { method: 'POST', body }, apiKey);
 }
 
 export interface ForwardEmailBody {
@@ -400,16 +404,16 @@ export interface ForwardEmailBody {
 }
 
 /** Same real-side-effect caveat as replyToEmail above. */
-export function forwardEmail(body: ForwardEmailBody) {
-  return callInstantly<InstantlyEmail>('/emails/forward', { method: 'POST', body });
+export function forwardEmail(body: ForwardEmailBody, apiKey: string) {
+  return callInstantly<InstantlyEmail>('/emails/forward', { method: 'POST', body }, apiKey);
 }
 
-export function markThreadRead(threadId: string) {
-  return callInstantly<{ status: string }>(`/emails/threads/${encodeURIComponent(threadId)}/mark-as-read`, { method: 'POST' });
+export function markThreadRead(threadId: string, apiKey: string) {
+  return callInstantly<{ status: string }>(`/emails/threads/${encodeURIComponent(threadId)}/mark-as-read`, { method: 'POST' }, apiKey);
 }
 
-export function getUnreadCount() {
-  return callInstantly<{ count: number }>('/emails/unread/count');
+export function getUnreadCount(apiKey: string) {
+  return callInstantly<{ count: number }>('/emails/unread/count', {}, apiKey);
 }
 
 /** Sets a lead's interest status (Interested/Meeting Booked/Won/...) — the
@@ -418,9 +422,13 @@ export function getUnreadCount() {
  * "Lead" (Instantly's own semantics, per the API's own doc comment on this
  * field). Distinct from the block-list "unsubscribe" mechanism elsewhere
  * in this file — this is a CRM-style status tag, not an opt-out. */
-export function updateLeadInterestStatus(params: { leadEmail: string; interestValue: number | null; campaignId?: string }) {
-  return callInstantly<{ status: string }>('/leads/update-interest-status', {
-    method: 'POST',
-    body: { lead_email: params.leadEmail, interest_value: params.interestValue, campaign_id: params.campaignId },
-  });
+export function updateLeadInterestStatus(
+  params: { leadEmail: string; interestValue: number | null; campaignId?: string },
+  apiKey: string,
+) {
+  return callInstantly<{ status: string }>(
+    '/leads/update-interest-status',
+    { method: 'POST', body: { lead_email: params.leadEmail, interest_value: params.interestValue, campaign_id: params.campaignId } },
+    apiKey,
+  );
 }

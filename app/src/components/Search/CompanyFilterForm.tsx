@@ -71,7 +71,7 @@ export function CompanyFilterForm({ params, onChange, onSubmit, loading }: Compa
         <label className="search-filter-field">
           <span>Domenai</span>
           <input
-            placeholder="apollo.io, google.com"
+            placeholder="imone.lt, google.com"
             value={joinList(params.q_organization_domains_list)}
             onChange={(e) => set('q_organization_domains_list', splitList(e.target.value))}
           />

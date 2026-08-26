@@ -166,24 +166,23 @@ export async function saveRows(rows: Row[]): Promise<void> {
   });
 }
 
+/** Same shape/endpoint semantics as saveRows above, but a distinct server
+ * route (POST /api/rows/import) specifically so a worker's can_export_import
+ * permission can gate CSV import without also blocking every other bulk
+ * write (paste, drag-reorder, sort) that goes through the general
+ * saveRows/PUT /api/rows path. useTableStore.ts's importCsvRows calls
+ * this instead of saveRows for each of its batches. */
+export async function importRows(rows: Row[]): Promise<void> {
+  if (rows.length === 0) return;
+  await localApiRequest('/api/rows/import', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ rows }),
+  });
+}
+
 export async function deleteRowDB(id: string): Promise<void> {
   await localApiRequest(`/api/rows/${encodeURIComponent(id)}`, { method: 'DELETE' });
-}
-
-// --- Legacy IndexedDB readers — kept only for the one-time "migrate my
-// existing local data to the server" action (utils/migrateTableData.ts).
-// Deliberately separate names from the now-server-backed functions above
-// so nothing accidentally reads local data instead of the server by
-// mistake. Never call these for normal app operation. ---
-
-export async function loadTablesFromIndexedDB(): Promise<TableMeta[]> {
-  const db = await getDB();
-  return db.getAll('tables');
-}
-
-export async function loadRowsForTableFromIndexedDB(tableId: string): Promise<Row[]> {
-  const db = await getDB();
-  return db.getAllFromIndex('rows', 'by-table', tableId);
 }
 
 export async function getTranscription(callId: string): Promise<TranscriptionRecord | null> {

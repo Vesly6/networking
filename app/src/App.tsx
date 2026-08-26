@@ -15,21 +15,42 @@ import { LessonsView } from './components/Lessons/LessonsView';
 import { IncomingCallBanner } from './components/IncomingCallBanner';
 import { Toast } from './components/Toast';
 import { ConfirmDialog } from './components/ConfirmDialog';
+import { TypeToConfirmDialog } from './components/TypeToConfirmDialog';
 import { Softphone } from './components/Softphone';
 import { ThemeToggle } from './components/ThemeToggle';
 import { SheetTabs } from './components/SheetTabs';
 import { LoginScreen } from './components/LoginScreen';
+import { RegistrationView } from './components/RegistrationView';
+import { WorkersView } from './components/Workers/WorkersView';
+import { IntegrationsView } from './components/Integrations/IntegrationsView';
 import { BrandLogo } from './components/BrandLogo';
 import { getNextActionColumn } from './utils/row';
 import { isOverdue, isDueToday } from './utils/date';
 import './App.css';
 
 type Tab = 'table' | 'calendar' | 'calls' | 'search' | 'linkedin' | 'instantly' | 'email' | 'lessons';
+// 'workers' (managing the company's own worker accounts) and
+// 'integrations' ("API raktai", the self-service API-credentials screen)
+// both used to be extra values this Tab-like `tab` state could take,
+// rendered as an extra top-nav button + tab-panel *inside* an open table.
+// Moved to be reachable only from the Workspace ("Darbo sritis") screen
+// instead (see `workspaceScreen` below) for a real, reported layout bug:
+// SheetTabs (App.tsx's own sibling-of-<main>, position:fixed-at-the-
+// bottom-of-viewport bar) is only ever unmounted while !activeTable — so
+// as long as these two screens lived inside the open-table branch,
+// SheetTabs stayed mounted and fixed underneath them, and scrolling either
+// screen's own (often taller-than-viewport) content made the fixed bar
+// visually overlap/cut through whatever card happened to be at the bottom
+// of the screen at that scroll position. Neither screen is scoped to a
+// specific table anyway (workers/integrations are company-wide), so
+// there's no real reason either needed to be reachable *from inside* an
+// open table in the first place.
+type AppScreen = Tab;
 
 function App() {
   const token = useAuthStore((s) => s.token);
-  const loggedInViaRecovery = useAuthStore((s) => s.loggedInViaRecovery);
-  const dismissRecoveryNotice = useAuthStore((s) => s.dismissRecoveryNotice);
+  const user = useAuthStore((s) => s.user);
+  const fetchMe = useAuthStore((s) => s.fetchMe);
 
   const workspaceReady = useWorkspaceStore((s) => s.ready);
   const workspaceInitError = useWorkspaceStore((s) => s.initError);
@@ -40,12 +61,19 @@ function App() {
   const renameTable = useWorkspaceStore((s) => s.renameTable);
 
   const tableReady = useTableStore((s) => s.ready);
+  const tableLoadError = useTableStore((s) => s.loadError);
   const loadTable = useTableStore((s) => s.loadTable);
   const unload = useTableStore((s) => s.unload);
   const columns = useTableStore((s) => s.columns);
   const rows = useTableStore((s) => s.rows);
 
-  const [tab, setTab] = useState<Tab>('table');
+  const [tab, setTab] = useState<AppScreen>('table');
+  // Only meaningful while !activeTable — lets "Darbuotojai"/"API raktai"
+  // be reached from the Workspace screen itself (WorkspaceView.tsx's
+  // onOpenWorkers/onOpenIntegrations), which is now their only entry
+  // point (see the Tab/AppScreen comment above for why they were moved
+  // out of the in-table nav).
+  const [workspaceScreen, setWorkspaceScreen] = useState<'tables' | 'integrations' | 'workers'>('tables');
   const [focusRowId, setFocusRowId] = useState<string | null>(null);
   const [focusContact, setFocusContact] = useState<{ rowId: string; columnId: string; contactId: string } | null>(null);
   const [editingTitle, setEditingTitle] = useState(false);
@@ -91,6 +119,17 @@ function App() {
     void initWorkspace();
   }, [token, initWorkspace]);
 
+  // Hydrates the full user (role/visibleTabs/permissions/company) fresh
+  // from the server whenever a token exists — the token itself only
+  // carries userId/companyId/role (see auth.ts), not the live permission
+  // flags, so this is what lets a super-admin's permission change take
+  // effect for a worker without forcing a re-login. Re-runs whenever
+  // `token` actually changes (login, logout, a fresh mount with an
+  // already-stored token) rather than on every render.
+  useEffect(() => {
+    if (token) void fetchMe();
+  }, [token, fetchMe]);
+
   // Only the id drives loading — the table's name/columns are always fetched
   // fresh from IndexedDB inside loadTable(), never trusted from this cached
   // `tables` list, so edits made in useTableStore can never appear to "revert"
@@ -106,6 +145,23 @@ function App() {
 
   const activeTable = useMemo(() => tables.find((t) => t.id === activeTableId) ?? null, [tables, activeTableId]);
   const pendingPhoneCount = usePendingPhoneSearchStore((s) => s.count);
+
+  // Two layers: a company only has the tabs it was provisioned with
+  // (enabledFeatures — e.g. a client not yet given Calls/LinkedIn/Search
+  // simply doesn't have them, regardless of role), and within that, a
+  // worker's own visibleTabs (set by their super-admin) can narrow it
+  // further. owner/super_admin always see everything their company has —
+  // only a worker's set is ever a strict subset of it. Computed even
+  // before `user` is guaranteed non-null (the early-return loading gate
+  // above runs later in this same render) — an empty set here is simply
+  // never rendered from, since that gate already bailed out first.
+  const allowedTabs = useMemo(() => {
+    const companyTabs = new Set(user?.company?.enabledFeatures ?? []);
+    if (user?.role === 'worker' && user.visibleTabs) {
+      return new Set(user.visibleTabs.filter((t) => companyTabs.has(t)));
+    }
+    return companyTabs;
+  }, [user]);
 
   const dueBadge = useMemo(() => {
     const dateColumn = getNextActionColumn(columns);
@@ -131,6 +187,71 @@ function App() {
     setFocusContact({ rowId, columnId, contactId });
   }, []);
 
+  // Cross-table jump — WorkersView's activity-history "→" button, unlike
+  // every other jump-to-row caller in this app (Calls/SMS/Calendar), can't
+  // assume the target row lives in whatever table happens to be open right
+  // now: a worker's logged actions can span any table they touched. If the
+  // target table isn't already active, this switches to it first (which
+  // the activeTableId effect above turns into a real loadTable() call) and
+  // parks the actual row-focus in `pendingRowJump` until that load
+  // resolves — TableView's own focus effect requires the row to already be
+  // present in its rows, so jumping straight to setFocusRowId the instant
+  // setActiveTable is called would silently no-op against the *previous*
+  // table's still-loaded rows.
+  const [pendingRowJump, setPendingRowJump] = useState<{
+    tableId: string;
+    rowId: string;
+    columnId?: string;
+    contactId?: string;
+  } | null>(null);
+
+  const jumpToTableRow = useCallback(
+    (tableId: string, rowId: string) => {
+      if (tableId === activeTableId && tableReady) {
+        handleJumpToRow(rowId);
+        return;
+      }
+      setPendingRowJump({ tableId, rowId });
+      if (tableId !== activeTableId) setActiveTable(tableId);
+    },
+    [activeTableId, tableReady, handleJumpToRow, setActiveTable],
+  );
+
+  const jumpToTableContact = useCallback(
+    (tableId: string, rowId: string, columnId: string, contactId: string) => {
+      if (tableId === activeTableId && tableReady) {
+        handleJumpToContact(rowId, columnId, contactId);
+        return;
+      }
+      setPendingRowJump({ tableId, rowId, columnId, contactId });
+      if (tableId !== activeTableId) setActiveTable(tableId);
+    },
+    [activeTableId, tableReady, handleJumpToContact, setActiveTable],
+  );
+
+  useEffect(() => {
+    if (!pendingRowJump) return;
+    if (pendingRowJump.tableId !== activeTableId) return; // still switching tables
+    if (!tableReady) return; // target table still loading
+    if (pendingRowJump.columnId && pendingRowJump.contactId) {
+      handleJumpToContact(pendingRowJump.rowId, pendingRowJump.columnId, pendingRowJump.contactId);
+    } else {
+      handleJumpToRow(pendingRowJump.rowId);
+    }
+    setPendingRowJump(null);
+  }, [pendingRowJump, activeTableId, tableReady, handleJumpToRow, handleJumpToContact]);
+
+  // Checked before even the login gate below — a fixed, secret path
+  // (app.serteo.lt/reg<SECRET>) only the owner ever knows exists (never
+  // linked anywhere in this app's own nav/UI), matching whoever they hand
+  // it to straight to company registration regardless of whether *they*
+  // happen to already be logged in as someone else. No router dependency
+  // for this one path — see RegistrationView's own doc comment.
+  const registrationMatch = window.location.pathname.match(/^\/reg(.+)$/);
+  if (registrationMatch) {
+    return <RegistrationView secret={registrationMatch[1]} />;
+  }
+
   // Gated before workspace loading even starts — nothing in this app is
   // meant to be reachable without logging in first, and checking here
   // (rather than after workspaceReady) avoids a flash of "Loading…" before
@@ -148,6 +269,18 @@ function App() {
   // logging in.
   if (!token) {
     return <LoginScreen />;
+  }
+
+  // A brief gap right after login/mount, before /api/auth/me resolves —
+  // the tab bar below needs user.visibleTabs/company.enabledFeatures to
+  // know what to show at all, so it renders nothing meaningful until
+  // this settles (normally near-instant, a single indexed DB lookup).
+  if (!user) {
+    return (
+      <div className="app-loading">
+        <span>Kraunama…</span>
+      </div>
+    );
   }
 
   // Table/row data moved from client-only IndexedDB to a server-backed
@@ -177,6 +310,25 @@ function App() {
     );
   }
 
+  // Same fix as workspaceInitError above, applied to loadTable() — before
+  // this, a failed/timed-out table load left `tableReady` stuck at false
+  // forever with no explanation and no way out short of a full page
+  // reload (see useTableStore's own loadError doc comment for the real,
+  // reported symptom this caused). Shared between the Table and Calendar
+  // tab-panels below since both gate on the same tableReady/loadError.
+  const tableLoadingOrError = tableLoadError ? (
+    <div className="app-loading app-loading-error">
+      <span>{tableLoadError}</span>
+      <button type="button" onClick={() => activeTableId && void loadTable(activeTableId)}>
+        Bandyti dar kartą
+      </button>
+    </div>
+  ) : (
+    <div className="app-loading">
+      <span>Kraunama…</span>
+    </div>
+  );
+
   return (
     <>
       {/* Rendered once, at this fixed position, regardless of which branch
@@ -188,18 +340,35 @@ function App() {
       <Softphone />
       <IncomingCallBanner onJumpToRow={handleJumpToRow} onJumpToContact={handleJumpToContact} />
       <ConfirmDialog />
-      {loggedInViaRecovery && (
-        <div className="recovery-banner">
-          Prisijungėte naudodami atkūrimo slaptažodį — kai turėsite laiko, atnaujinkite pagrindinį slaptažodį Render
-          valdymo skyde (AUTH_PASSWORD).
-          <button type="button" onClick={dismissRecoveryNotice}>
-            Atmesti
-          </button>
-        </div>
-      )}
+      <TypeToConfirmDialog />
       {!activeTable ? (
         <div className="app">
-          <WorkspaceView onOpenTable={setActiveTable} />
+          {workspaceScreen === 'integrations' || workspaceScreen === 'workers' ? (
+            <div className="workspace-view">
+              <div className="workspace-header">
+                <div className="brand">
+                  <BrandLogo />
+                  <h2>{workspaceScreen === 'integrations' ? 'API raktai' : 'Darbuotojai'}</h2>
+                </div>
+                <div className="workspace-header-actions">
+                  <button type="button" onClick={() => setWorkspaceScreen('tables')}>
+                    ← Darbo sritis
+                  </button>
+                </div>
+              </div>
+              {workspaceScreen === 'integrations' ? (
+                <IntegrationsView />
+              ) : (
+                <WorkersView onJumpToRow={jumpToTableRow} onJumpToContact={jumpToTableContact} />
+              )}
+            </div>
+          ) : (
+            <WorkspaceView
+              onOpenTable={setActiveTable}
+              onOpenWorkers={user.role !== 'worker' ? () => setWorkspaceScreen('workers') : undefined}
+              onOpenIntegrations={user.role !== 'worker' ? () => setWorkspaceScreen('integrations') : undefined}
+            />
+          )}
           <Toast />
         </div>
       ) : (
@@ -208,7 +377,14 @@ function App() {
             <div className="brand">
               <BrandLogo />
             </div>
-            <button type="button" className="back-to-workspace" onClick={() => setActiveTable(null)}>
+            <button
+              type="button"
+              className="back-to-workspace"
+              onClick={() => {
+                setActiveTable(null);
+                setWorkspaceScreen('tables');
+              }}
+            >
               ← Darbo sritis
             </button>
             {editingTitle ? (
@@ -241,7 +417,7 @@ function App() {
             {pendingPhoneCount > 0 && (
               <span
                 className="pending-phone-search-badge"
-                title={`Fone ieškoma ${pendingPhoneCount} telefono ${pendingPhoneCount === 1 ? 'numerio' : 'numerių'} (Apollo) — galite tęsti darbą, jums pranešime, kai bus rasta`}
+                title={`Fone ieškoma ${pendingPhoneCount} telefono ${pendingPhoneCount === 1 ? 'numerio' : 'numerių'} — galite tęsti darbą, jums pranešime, kai bus rasta`}
               >
                 🕐 {pendingPhoneCount}
               </span>
@@ -261,91 +437,107 @@ function App() {
               )}
             </button>
             <nav className={`app-tabs ${mobileNavOpen ? 'app-tabs-open' : ''}`}>
-              <button
-                type="button"
-                className={tab === 'table' ? 'active' : ''}
-                onClick={() => {
-                  setTab('table');
-                  setMobileNavOpen(false);
-                }}
-              >
-                Lentelė
-              </button>
-              <button
-                type="button"
-                className={tab === 'calendar' ? 'active' : ''}
-                onClick={() => {
-                  setTab('calendar');
-                  setMobileNavOpen(false);
-                }}
-              >
-                Kalendorius
-                {(dueBadge.overdue > 0 || dueBadge.today > 0) && (
-                  <span className={`tab-badge ${dueBadge.overdue > 0 ? 'tab-badge-overdue' : ''}`}>
-                    {dueBadge.overdue + dueBadge.today}
-                  </span>
-                )}
-              </button>
-              <button
-                type="button"
-                className={tab === 'calls' ? 'active' : ''}
-                onClick={() => {
-                  setTab('calls');
-                  setMobileNavOpen(false);
-                }}
-              >
-                Skambučiai
-              </button>
-              <button
-                type="button"
-                className={tab === 'search' ? 'active' : ''}
-                onClick={() => {
-                  setTab('search');
-                  setMobileNavOpen(false);
-                }}
-              >
-                Paieška
-              </button>
-              <button
-                type="button"
-                className={tab === 'linkedin' ? 'active' : ''}
-                onClick={() => {
-                  setTab('linkedin');
-                  setMobileNavOpen(false);
-                }}
-              >
-                LinkedIn
-              </button>
-              <button
-                type="button"
-                className={tab === 'instantly' ? 'active' : ''}
-                onClick={() => {
-                  setTab('instantly');
-                  setMobileNavOpen(false);
-                }}
-              >
-                Paštas
-              </button>
-              <button
-                type="button"
-                className={tab === 'email' ? 'active' : ''}
-                onClick={() => {
-                  setTab('email');
-                  setMobileNavOpen(false);
-                }}
-              >
-                DI
-              </button>
-              <button
-                type="button"
-                className={tab === 'lessons' ? 'active' : ''}
-                onClick={() => {
-                  setTab('lessons');
-                  setMobileNavOpen(false);
-                }}
-              >
-                Pamokos
-              </button>
+              {allowedTabs.has('table') && (
+                <button
+                  type="button"
+                  className={tab === 'table' ? 'active' : ''}
+                  onClick={() => {
+                    setTab('table');
+                    setMobileNavOpen(false);
+                  }}
+                >
+                  Lentelė
+                </button>
+              )}
+              {allowedTabs.has('calendar') && (
+                <button
+                  type="button"
+                  className={tab === 'calendar' ? 'active' : ''}
+                  onClick={() => {
+                    setTab('calendar');
+                    setMobileNavOpen(false);
+                  }}
+                >
+                  Kalendorius
+                  {(dueBadge.overdue > 0 || dueBadge.today > 0) && (
+                    <span className={`tab-badge ${dueBadge.overdue > 0 ? 'tab-badge-overdue' : ''}`}>
+                      {dueBadge.overdue + dueBadge.today}
+                    </span>
+                  )}
+                </button>
+              )}
+              {allowedTabs.has('calls') && (
+                <button
+                  type="button"
+                  className={tab === 'calls' ? 'active' : ''}
+                  onClick={() => {
+                    setTab('calls');
+                    setMobileNavOpen(false);
+                  }}
+                >
+                  Skambučiai
+                </button>
+              )}
+              {allowedTabs.has('search') && (
+                <button
+                  type="button"
+                  className={tab === 'search' ? 'active' : ''}
+                  onClick={() => {
+                    setTab('search');
+                    setMobileNavOpen(false);
+                  }}
+                >
+                  Paieška
+                </button>
+              )}
+              {allowedTabs.has('linkedin') && (
+                <button
+                  type="button"
+                  className={tab === 'linkedin' ? 'active' : ''}
+                  onClick={() => {
+                    setTab('linkedin');
+                    setMobileNavOpen(false);
+                  }}
+                >
+                  LinkedIn
+                </button>
+              )}
+              {allowedTabs.has('instantly') && (
+                <button
+                  type="button"
+                  className={tab === 'instantly' ? 'active' : ''}
+                  onClick={() => {
+                    setTab('instantly');
+                    setMobileNavOpen(false);
+                  }}
+                >
+                  Paštas
+                </button>
+              )}
+              {allowedTabs.has('email') && (
+                <button
+                  type="button"
+                  className={tab === 'email' ? 'active' : ''}
+                  onClick={() => {
+                    setTab('email');
+                    setMobileNavOpen(false);
+                  }}
+                >
+                  DI
+                </button>
+              )}
+              {allowedTabs.has('lessons') && (
+                <button
+                  type="button"
+                  className={tab === 'lessons' ? 'active' : ''}
+                  onClick={() => {
+                    setTab('lessons');
+                    setMobileNavOpen(false);
+                  }}
+                >
+                  Pamokos
+                </button>
+              )}
             </nav>
           </header>
 
@@ -422,19 +614,11 @@ function App() {
                   onContactFocusHandled={() => setFocusContact(null)}
                 />
               ) : (
-                <div className="app-loading">
-                  <span>Kraunama…</span>
-                </div>
+                tableLoadingOrError
               )}
             </div>
             <div className={`tab-panel ${tab === 'calendar' ? 'tab-panel-active' : ''}`}>
-              {tableReady ? (
-                <CalendarView key={activeTableId} onJumpToRow={handleJumpToRow} />
-              ) : (
-                <div className="app-loading">
-                  <span>Kraunama…</span>
-                </div>
-              )}
+              {tableReady ? <CalendarView key={activeTableId} onJumpToRow={handleJumpToRow} /> : tableLoadingOrError}
             </div>
           </main>
 

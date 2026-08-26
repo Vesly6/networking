@@ -160,6 +160,20 @@ export function pollPhoneReveal(requestId: string): Promise<PhonePollResult> {
   return localApiRequest(`/api/apollo/webhook/${encodeURIComponent(requestId)}`);
 }
 
+/** Not actually an Apollo call (goes through server/src/openai.ts) — kept
+ * here since it exists purely to make the "Pareigos" filter's free-typed
+ * entries match better against Apollo's English-indexed database
+ * (PeopleFilterForm.tsx). Always resolves (never rejects) — the server
+ * route falls back to the original text on any translation failure, so
+ * this never blocks a filter chip from being added. */
+export function translateJobTitle(title: string): Promise<{ title: string }> {
+  return localApiRequest('/api/search/translate-title', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title }),
+  });
+}
+
 export function searchPeople(
   params: PeopleSearchParams,
 ): Promise<{ people: ApolloSearchPerson[]; total_entries: number; page: number }> {

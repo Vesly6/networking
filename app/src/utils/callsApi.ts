@@ -47,6 +47,30 @@ export function fetchCalls(start: string, end: string): Promise<{ stats: CallRec
   return localApiRequest(`/api/calls?${params.toString()}`);
 }
 
+export function fetchBalance(): Promise<{ balance: string; currency: string }> {
+  return localApiRequest('/api/zadarma/balance');
+}
+
+/** Keyed by the PBX call's own `call_id` — the server matches each call
+ * you already have (passed here as id+callstart) against the separate
+ * plain-statistics endpoint by nearest timestamp, not an exact shared key
+ * (see server/src/zadarma.ts's getCallCosts for why an exact `sip`/
+ * `callstart` join doesn't actually work against real data). A second,
+ * real hit against the same rate-limited statistics budget as fetchCalls
+ * — only ever call this from an explicit, separate action, never
+ * automatically alongside it. */
+export function fetchCallCosts(
+  start: string,
+  end: string,
+  calls: Array<{ call_id: string; callstart: string }>,
+): Promise<Record<string, { billcost: string; currency: string }>> {
+  return localApiRequest('/api/calls/costs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ start, end, calls }),
+  });
+}
+
 export function fetchRecording(callId: string): Promise<RecordingInfo> {
   return localApiRequest(`/api/calls/${encodeURIComponent(callId)}/recording`);
 }

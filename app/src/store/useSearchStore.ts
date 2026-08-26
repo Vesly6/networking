@@ -90,7 +90,7 @@ export const useSearchStore = create<SearchState>((set, get) => ({
       // object), so result.page was always undefined here.
       set({ people: result.people, peopleTotal: result.total_entries, peoplePage: page, peopleLoading: false });
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Nepavyko atlikti Apollo paieškos';
+      const message = err instanceof Error ? err.message : 'Nepavyko atlikti paieškos';
       set({ peopleError: message, peopleLoading: false });
     }
   },
@@ -118,7 +118,7 @@ export const useSearchStore = create<SearchState>((set, get) => ({
         companiesLoading: false,
       });
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Nepavyko atlikti Apollo paieškos';
+      const message = err instanceof Error ? err.message : 'Nepavyko atlikti paieškos';
       set({ companiesError: message, companiesLoading: false });
     }
   },
@@ -192,7 +192,7 @@ export const useSearchStore = create<SearchState>((set, get) => ({
       // apolloApi.ts's pollPhoneReveal / server/src/apollo.ts's
       // pollWebhookResult for how this was confirmed.
       if (!result.request_id) {
-        throw new Error(result.phone_enrichment?.message ?? 'Apollo nepradėjo šio žmogaus telefono paieškos');
+        throw new Error(result.phone_enrichment?.message ?? 'Nepavyko pradėti šio žmogaus telefono paieškos');
       }
       const requestId = result.request_id;
       // Global, not local to this store's own phonePendingIds (which
@@ -215,7 +215,7 @@ export const useSearchStore = create<SearchState>((set, get) => ({
             throw new Error(poll.message);
           }
           if (Date.now() >= deadline) {
-            throw new Error('Apollo dar negrąžino telefono numerio — bandykite dar kartą po kelių minučių');
+            throw new Error('Telefono numeris dar nerastas — bandykite dar kartą po kelių minučių');
           }
           await sleep(Math.min(Math.max(poll.retryAfterSeconds, 5), 20) * 1000);
         }

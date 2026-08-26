@@ -10,15 +10,7 @@ export class ApolloApiError extends Error {
   }
 }
 
-function getApiKey(): string {
-  const key = process.env.APOLLO_API_KEY;
-  if (!key) {
-    throw new Error('APOLLO_API_KEY is not set — check server/.env');
-  }
-  return key;
-}
-
-async function callApollo<T>(path: string, body: Record<string, unknown>): Promise<T> {
+async function callApollo<T>(path: string, body: Record<string, unknown>, apiKey: string): Promise<T> {
   // Undefined values are dropped by JSON.stringify automatically — unlike
   // Zadarma's hand-signed query strings elsewhere in this server, there's
   // no separate "build the params string" step here to accidentally filter
@@ -31,12 +23,12 @@ async function callApollo<T>(path: string, body: Record<string, unknown>): Promi
       headers: {
         'Content-Type': 'application/json',
         'Cache-Control': 'no-cache',
-        'x-api-key': getApiKey(),
+        'x-api-key': apiKey,
       },
       body: JSON.stringify(body),
     });
   } catch {
-    throw new ApolloApiError('Could not reach Apollo API', 0, null);
+    throw new ApolloApiError('Could not reach the data service', 0, null);
   }
 
   // people/match's top-level `request_id` (used for phone-reveal polling,
@@ -145,8 +137,9 @@ export interface ApolloSearchPerson {
 
 export async function searchPeople(
   params: PeopleSearchParams,
+  apiKey: string,
 ): Promise<{ people: ApolloSearchPerson[]; total_entries: number; page: number }> {
-  return callApollo('/mixed_people/api_search', params as Record<string, unknown>);
+  return callApollo('/mixed_people/api_search', params as Record<string, unknown>, apiKey);
 }
 
 /** Every documented filter for POST /mixed_companies/search. Unlike people
@@ -218,12 +211,13 @@ export interface ApolloCompany {
 
 export async function searchCompanies(
   params: CompanySearchParams,
+  apiKey: string,
 ): Promise<{ companies: ApolloCompany[]; total_entries: number; page: number }> {
   const result = await callApollo<{
     accounts: ApolloCompany[];
     organizations?: ApolloCompany[];
     pagination?: { total_entries: number; page: number };
-  }>('/mixed_companies/search', params as Record<string, unknown>);
+  }>('/mixed_companies/search', params as Record<string, unknown>, apiKey);
 
   const seen = new Set<string>();
   const companies: ApolloCompany[] = [];
@@ -300,7 +294,7 @@ export interface ApolloEnrichedPerson {
   [key: string]: unknown;
 }
 
-export async function enrichPerson(params: PeopleEnrichParams): Promise<{
+export async function enrichPerson(params: PeopleEnrichParams, apiKey: string): Promise<{
   person: ApolloEnrichedPerson | null;
   // The id pollWebhookResult()/GET /webhook_result/:id below actually
   // needs — a string (see callApollo's precision-preserving parse above).
@@ -322,7 +316,7 @@ export async function enrichPerson(params: PeopleEnrichParams): Promise<{
   // status/message fields; use the top-level request_id above for polling.
   phone_enrichment?: { request_id?: string; status: string; message?: string };
 }> {
-  return callApollo('/people/match', params as Record<string, unknown>);
+  return callApollo('/people/match', params as Record<string, unknown>, apiKey);
 }
 
 /** GET /webhook_result/{request_id} — the documented way to retrieve a
@@ -363,14 +357,14 @@ export type WebhookPollResult =
   | { status: 'ready'; phoneNumbers: Array<{ sanitized_number: string; status_cd?: string; confidence_cd?: string | null }> }
   | { status: 'error'; message: string };
 
-export async function pollWebhookResult(requestId: string): Promise<WebhookPollResult> {
+export async function pollWebhookResult(requestId: string, apiKey: string): Promise<WebhookPollResult> {
   let res: Response;
   try {
     res = await fetch(`${API_BASE}/webhook_result/${encodeURIComponent(requestId)}`, {
-      headers: { 'x-api-key': getApiKey() },
+      headers: { 'x-api-key': apiKey },
     });
   } catch {
-    throw new ApolloApiError('Could not reach Apollo API', 0, null);
+    throw new ApolloApiError('Could not reach the data service', 0, null);
   }
 
   if (res.status === 404) {
@@ -402,7 +396,7 @@ export async function pollWebhookResult(requestId: string): Promise<WebhookPollR
 
   const json: any = await res.json().catch(() => null);
   if (!res.ok || !json) {
-    throw new ApolloApiError(`Apollo webhook poll failed (HTTP ${res.status})`, res.status, json);
+    throw new ApolloApiError(`Data service webhook poll failed (HTTP ${res.status})`, res.status, json);
   }
   if (json.webhook_status === 'failed') {
     return { status: 'error', message: json.failure_reason ?? 'Apollo could not find a phone number' };

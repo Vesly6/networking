@@ -105,8 +105,8 @@ export function ComboBoxMultiInput({ value, onChange, suggestions, placeholder }
         {value.map((v) => {
           const label = labelByValue.get(v) ?? v;
           return (
-            <span key={v} className="combobox-chip">
-              {label}
+            <span key={v} className="combobox-chip" title={label}>
+              <span className="combobox-chip-label">{label}</span>
               <button type="button" className="combobox-chip-remove" onClick={() => removeValue(v)} aria-label={`Pašalinti ${label}`}>
                 ×
               </button>

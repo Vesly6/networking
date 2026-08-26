@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { Column, ColumnType } from '../../types';
 import { useTableStore } from '../../store/useTableStore';
+import { useAuthStore } from '../../store/useAuthStore';
 import { confirmDialog } from '../../store/useConfirmStore';
 import { useToastStore } from '../../store/useToastStore';
 import { Popover } from '../Popover';
@@ -30,6 +31,20 @@ export function ColumnMenu({ column, columns, anchor, onClose }: ColumnMenuProps
   const setOptionColor = useTableStore((s) => s.setOptionColor);
   const setNextActionDateColumn = useTableStore((s) => s.setNextActionDateColumn);
   const clearNextActionDateColumn = useTableStore((s) => s.clearNextActionDateColumn);
+  const setStatusColumn = useTableStore((s) => s.setStatusColumn);
+  const clearStatusColumn = useTableStore((s) => s.clearStatusColumn);
+  const currentUser = useAuthStore((s) => s.user);
+  // Changing a column's type is blocked for every worker unconditionally —
+  // not a togglable permission like the others in this file. Retyping an
+  // existing column can silently corrupt how its already-stored data
+  // displays (see CLAUDE.md's CSV-import-mapping story for exactly that
+  // failure mode with a note/contact column), so this is treated the same
+  // as any other structural schema change: admin-only, full stop. Enforced
+  // server-side too (see server/src/index.ts's PATCH
+  // /api/tables/:id/columns) — this disabled state is just the matching
+  // UI, not the actual boundary.
+  const canChangeType = currentUser?.role !== 'worker';
+  const canDelete = currentUser?.role !== 'worker' || currentUser.permissions.canDeleteColumns;
 
   const [name, setName] = useState(column.name);
   const [newOption, setNewOption] = useState('');
@@ -80,7 +95,12 @@ export function ColumnMenu({ column, columns, anchor, onClose }: ColumnMenuProps
 
       <label className="popover-field">
         <span>Tipas</span>
-        <select value={column.type} onChange={(e) => setColumnType(column.id, e.target.value as ColumnType)}>
+        <select
+          value={column.type}
+          disabled={!canChangeType}
+          title={canChangeType ? undefined : 'Tik administratorius gali keisti stulpelio tipą'}
+          onChange={(e) => setColumnType(column.id, e.target.value as ColumnType)}
+        >
           {(Object.keys(TYPE_LABELS) as ColumnType[]).map((t) => (
             <option key={t} value={t}>
               {TYPE_LABELS[t]}
@@ -150,6 +170,14 @@ export function ColumnMenu({ column, columns, anchor, onClose }: ColumnMenuProps
               +
             </button>
           </div>
+          <label className="popover-field popover-checkbox">
+            <input
+              type="checkbox"
+              checked={!!column.isStatusColumn}
+              onChange={(e) => (e.target.checked ? setStatusColumn(column.id) : clearStatusColumn())}
+            />
+            <span>Naudoti kaip Status (pakeitimai registruojami Note)</span>
+          </label>
         </div>
       )}
 
@@ -167,19 +195,21 @@ export function ColumnMenu({ column, columns, anchor, onClose }: ColumnMenuProps
       )}
 
       <div className="popover-footer">
-        <button
-          type="button"
-          className="danger"
-          onClick={async () => {
-            const ok = await confirmDialog({ message: `Ištrinti stulpelį „${column.name}“? Jo duomenys bus prarasti.`, danger: true });
-            if (ok) {
-              removeColumn(column.id);
-              onClose();
-            }
-          }}
-        >
-          Ištrinti stulpelį
-        </button>
+        {canDelete && (
+          <button
+            type="button"
+            className="danger"
+            onClick={async () => {
+              const ok = await confirmDialog({ message: `Ištrinti stulpelį „${column.name}“? Jo duomenys bus prarasti.`, danger: true });
+              if (ok) {
+                removeColumn(column.id);
+                onClose();
+              }
+            }}
+          >
+            Ištrinti stulpelį
+          </button>
+        )}
         <button type="button" onClick={onClose}>
           Baigta
         </button>

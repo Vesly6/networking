@@ -8,3 +8,5 @@ sms-inbox.sqlite
 sms-inbox.sqlite-*
 table-data.sqlite
 table-data.sqlite-*
+accounts.sqlite
+accounts.sqlite-*

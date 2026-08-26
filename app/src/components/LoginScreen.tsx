@@ -2,10 +2,10 @@ import { useState, type FormEvent } from 'react';
 import { useAuthStore } from '../store/useAuthStore';
 
 /** Full-screen gate — App.tsx renders this instead of the real app
- * whenever useAuthStore has no valid token. One shared account (this is a
- * single-operator tool), so there's no sign-up, just username + password,
- * with the recovery password accepted transparently as an alternate
- * password for the same account (see server/src/auth.ts). */
+ * whenever useAuthStore has no valid token. Real multi-tenant accounts
+ * now (server/src/accounts/db.ts) — there's still no public sign-up here,
+ * just username + password; the only way a *new* account gets created is
+ * the owner-only secret registration link (see RegistrationView.tsx). */
 export function LoginScreen() {
   const login = useAuthStore((s) => s.login);
   const loggingIn = useAuthStore((s) => s.loggingIn);
@@ -43,7 +43,6 @@ export function LoginScreen() {
         <button type="submit" className="primary" disabled={loggingIn || !username || !password}>
           {loggingIn ? 'Jungiamasi…' : 'Prisijungti'}
         </button>
-        <p className="login-hint">Pamiršote slaptažodį? Čia taip pat veikia jūsų atkūrimo slaptažodis.</p>
       </form>
     </div>
   );

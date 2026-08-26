@@ -11,14 +11,6 @@ export class TranscriptionError extends Error {}
 
 const STT_MODEL = 'scribe_v2';
 
-function getApiKey(): string {
-  const key = process.env.ELEVENLABS_API_KEY;
-  if (!key) {
-    throw new TranscriptionError('ELEVENLABS_API_KEY is not set — check server/.env');
-  }
-  return key;
-}
-
 // Same reasoning as the old OpenAI integration: the multipart upload needs a
 // real filename/extension for the API to know how to decode it, and Zadarma
 // always serves recordings as .ogg regardless of what (if anything) the
@@ -36,7 +28,7 @@ function extensionFromUrl(url: string): string {
  * two differ only in *how* the audio bytes are obtained (fetched from a
  * Zadarma URL vs. uploaded directly from the browser's own microphone
  * recording), not in how they're sent to ElevenLabs. */
-async function callSpeechToText(audio: Blob, filename: string, language?: string): Promise<{ text: string }> {
+async function callSpeechToText(audio: Blob, filename: string, apiKey: string, language?: string): Promise<{ text: string }> {
   const form = new FormData();
   form.append('file', audio, filename);
   form.append('model_id', STT_MODEL);
@@ -50,18 +42,18 @@ async function callSpeechToText(audio: Blob, filename: string, language?: string
       // out explicitly since every other integration in this file (Zadarma,
       // OpenAI) uses a different auth scheme, and it's an easy thing to get
       // wrong by pattern-matching the wrong neighbor.
-      headers: { 'xi-api-key': getApiKey() },
+      headers: { 'xi-api-key': apiKey },
       body: form,
     });
   } catch {
-    throw new TranscriptionError('Could not reach ElevenLabs');
+    throw new TranscriptionError('Could not reach the transcription service');
   }
 
   const json: any = await res.json().catch(() => null);
   if (!res.ok || !json) {
     const detail = json?.detail;
     const message = typeof detail === 'string' ? detail : detail?.message;
-    throw new TranscriptionError(message ?? `ElevenLabs transcription failed (HTTP ${res.status})`);
+    throw new TranscriptionError(message ?? `Transcription service failed (HTTP ${res.status})`);
   }
   return { text: json.text ?? '' };
 }
@@ -70,19 +62,19 @@ async function callSpeechToText(audio: Blob, filename: string, language?: string
  * to ElevenLabs' speech-to-text endpoint. `language` is an ISO-639-1 hint
  * (e.g. 'lt' for Lithuanian) — optional, but skips auto-detection when the
  * language is already known. */
-export async function transcribeFromUrl(recordingUrl: string, language?: string): Promise<{ text: string }> {
+export async function transcribeFromUrl(recordingUrl: string, apiKey: string, language?: string): Promise<{ text: string }> {
   let audioRes: Response;
   try {
     audioRes = await fetch(recordingUrl);
   } catch {
-    throw new TranscriptionError('Could not download the recording from Zadarma');
+    throw new TranscriptionError('Could not download the recording');
   }
   if (!audioRes.ok) {
     throw new TranscriptionError(`Could not download the recording (HTTP ${audioRes.status})`);
   }
   const audioBlob = await audioRes.blob();
   const extension = extensionFromUrl(recordingUrl);
-  return callSpeechToText(audioBlob, `call.${extension}`, language);
+  return callSpeechToText(audioBlob, `call.${extension}`, apiKey, language);
 }
 
 /** Transcribes a raw audio buffer uploaded directly from the browser — the
@@ -93,9 +85,14 @@ export async function transcribeFromUrl(recordingUrl: string, language?: string)
  * matching file extension for the multipart upload — ElevenLabs, like the
  * old OpenAI integration this codebase already learned this lesson from,
  * infers audio format from the filename's extension, not Content-Type. */
-export async function transcribeFromBuffer(buffer: Buffer, mimeType: string, language?: string): Promise<{ text: string }> {
+export async function transcribeFromBuffer(
+  buffer: Buffer,
+  mimeType: string,
+  apiKey: string,
+  language?: string,
+): Promise<{ text: string }> {
   const extension = mimeType.split('/')[1]?.split(';')[0]?.toLowerCase();
   const safeExtension = extension && SUPPORTED_EXTENSIONS.includes(extension) ? extension : 'webm';
   const blob = new Blob([buffer], { type: mimeType });
-  return callSpeechToText(blob, `voice-note.${safeExtension}`, language);
+  return callSpeechToText(blob, `voice-note.${safeExtension}`, apiKey, language);
 }

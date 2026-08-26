@@ -67,6 +67,9 @@ export function LinkedInView() {
   const saveSettingsError = useLinkedInStore((s) => s.saveSettingsError);
   const saveSafetySettings = useLinkedInStore((s) => s.saveSafetySettings);
   const togglePause = useLinkedInStore((s) => s.togglePause);
+  const runningScheduler = useLinkedInStore((s) => s.runningScheduler);
+  const runSchedulerError = useLinkedInStore((s) => s.runSchedulerError);
+  const runScheduler = useLinkedInStore((s) => s.runScheduler);
   const showToast = useToastStore((s) => s.show);
 
   const [profileUrl, setProfileUrl] = useState('');
@@ -95,6 +98,10 @@ export function LinkedInView() {
     if (saveSettingsError) showToast(saveSettingsError);
   }, [saveSettingsError, showToast]);
 
+  useEffect(() => {
+    if (runSchedulerError) showToast(runSchedulerError);
+  }, [runSchedulerError, showToast]);
+
   const paused = safety?.settings.paused ?? false;
 
   const handleTogglePause = async () => {
@@ -108,6 +115,27 @@ export function LinkedInView() {
     if (!ok) return;
     await togglePause();
     showToast(paused ? 'Automatizacija tęsiama' : 'Automatizacija sustabdyta');
+  };
+
+  // The scheduler no longer runs on its own background timer at all (see
+  // server/src/index.ts's own doc comment on why — real Chrome window
+  // activity happening with no user action was the reported problem) —
+  // this button is now the only way a due sequence step ever gets
+  // processed. With manual review on (the default) it just refreshes what
+  // Pending Approval already shows; with it off, this is what actually
+  // sends, so it gets a toast summarizing what happened either way.
+  const handleRunScheduler = async () => {
+    const result = await runScheduler();
+    if (!result) return;
+    if (result.skippedConcurrent) {
+      showToast('Kita vykdymo eiga jau vyksta — bandykite dar kartą po akimirkos');
+      return;
+    }
+    const parts = [`Rasta veiksmų: ${result.due}`];
+    if (result.autoExecuted > 0) parts.push(`įvykdyta: ${result.autoExecuted}`);
+    if (result.pendingApproval > 0) parts.push(`laukia patvirtinimo: ${result.pendingApproval}`);
+    if (result.errors > 0) parts.push(`klaidų: ${result.errors}`);
+    showToast(parts.join(' · '));
   };
 
   const handleSaveSettings = async () => {
@@ -157,6 +185,14 @@ export function LinkedInView() {
           </span>
           <button type="button" onClick={() => void refreshStatus()} disabled={statusLoading}>
             ↻ Atnaujinti
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleRunScheduler()}
+            disabled={runningScheduler || paused}
+            title="Sekos nebevyksta automatiškai fone — paspauskite, kad patikrintumėte/vykdytumėte, kas šiuo metu suplanuota"
+          >
+            {runningScheduler ? 'Vykdoma…' : '▶ Vykdyti dabar'}
           </button>
           {/* Always visible regardless of which section is open below —
               the whole premise of a kill switch is not having to go dig

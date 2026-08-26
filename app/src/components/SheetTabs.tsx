@@ -1,5 +1,6 @@
 import { useEffect, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { useWorkspaceStore } from '../store/useWorkspaceStore';
+import { useAuthStore } from '../store/useAuthStore';
 import { confirmDeleteTable } from '../utils/confirmDeleteTable';
 import { countRowsForTable } from '../db/db';
 import { ContextMenu } from './ContextMenu';
@@ -18,6 +19,14 @@ export function SheetTabs() {
   const duplicateTable = useWorkspaceStore((s) => s.duplicateTable);
   const renameTable = useWorkspaceStore((s) => s.renameTable);
   const deleteTable = useWorkspaceStore((s) => s.deleteTable);
+  const currentUser = useAuthStore((s) => s.user);
+  // Same hard block as WorkspaceView.tsx's own table cards, and for the
+  // identical reason — this is a second, faster entry point to the exact
+  // same four actions (rename/new/duplicate/delete), so it needs the same
+  // gate or a worker could just use this row instead. See WorkspaceView's
+  // own doc comment for the full reasoning; server/src/index.ts's
+  // requireNotWorker on all four routes is what actually enforces it.
+  const canManageTables = currentUser?.role !== 'worker';
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState('');
@@ -37,6 +46,7 @@ export function SheetTabs() {
 
   const handleContextMenu = (e: ReactMouseEvent, id: string, name: string) => {
     e.preventDefault();
+    if (!canManageTables) return;
     setMenu({ x: e.clientX, y: e.clientY, id, name });
   };
 
@@ -75,15 +85,21 @@ export function SheetTabs() {
             className={`sheet-tab ${t.id === activeTableId ? 'sheet-tab-active' : ''}`}
             onClick={() => setActiveTable(t.id)}
             onContextMenu={(e) => handleContextMenu(e, t.id, t.name)}
-            title="Spustelėkite, kad perjungtumėte lenteles — dešiniuoju paspaudimu pervadinkite, pridėkite, dubliuokite ar ištrinkite"
+            title={
+              canManageTables
+                ? 'Spustelėkite, kad perjungtumėte lenteles — dešiniuoju paspaudimu pervadinkite, pridėkite, dubliuokite ar ištrinkite'
+                : 'Spustelėkite, kad perjungtumėte lenteles'
+            }
           >
             {t.name}
           </button>
         ),
       )}
-      <button type="button" className="sheet-tab-add" title="Nauja lentelė" onClick={handleNewTable}>
-        +
-      </button>
+      {canManageTables && (
+        <button type="button" className="sheet-tab-add" title="Nauja lentelė" onClick={handleNewTable}>
+          +
+        </button>
+      )}
       {menu && (
         <ContextMenu x={menu.x} y={menu.y}>
           <button

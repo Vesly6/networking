@@ -24,6 +24,15 @@ function withLeadingPlus(phone: string): string {
 
 interface CallRowProps {
   call: CallRecord;
+  /** Undefined until CallsView's "Rodyti kainas" has been clicked for
+   * the current date range (a separate, explicit action — see
+   * useCallsStore's fetchCosts doc comment for why this isn't fetched
+   * automatically alongside the call list) — or when no cost record could
+   * be correlated to this specific call at all (see server/src/
+   * zadarma.ts's getCallCosts for why that join is a best-effort one, not
+   * a guaranteed match). Either way, the cell just shows "—" rather than
+   * distinguishing the two "no value" cases from each other. */
+  cost?: { billcost: string; currency: string };
   matchedRow?: { rowId: string; label: string };
   /** A specific person (not just the row's own Phone column) whose
    * Contacts-entry number matched this call — see CallsView.tsx's
@@ -33,7 +42,7 @@ interface CallRowProps {
   onJumpToContact: (rowId: string, columnId: string, contactId: string) => void;
 }
 
-export function CallRow({ call, matchedRow, matchedContact, onJumpToRow, onJumpToContact }: CallRowProps) {
+export function CallRow({ call, cost, matchedRow, matchedContact, onJumpToRow, onJumpToContact }: CallRowProps) {
   const showToast = useToastStore((s) => s.show);
   const fetchRecording = useCallsStore((s) => s.fetchRecording);
   const recordingLink = useCallsStore((s) => s.recordingLinks[call.call_id]);
@@ -110,6 +119,7 @@ export function CallRow({ call, matchedRow, matchedContact, onJumpToRow, onJumpT
           </div>
         </td>
         <td>{formatDuration(call.seconds)}</td>
+        <td>{cost ? `${cost.billcost} ${cost.currency}` : '—'}</td>
         <td>{getCallDispositionLabel(call.disposition)}</td>
         <td>
           {!call.is_recorded ? (

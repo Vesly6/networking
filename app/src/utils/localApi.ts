@@ -22,7 +22,7 @@ export async function localApiRequest<T>(path: string, init?: RequestInit): Prom
   } catch {
     throw new Error(
       IS_LOCAL_DEFAULT
-        ? 'Could not reach the local Zadarma proxy — is it running? (npm run dev in server/)'
+        ? 'Could not reach the local backend server — is it running? (npm run dev in server/)'
         : `Could not reach the server at ${LOCAL_API_BASE}`,
     );
   }

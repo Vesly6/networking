@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import type { PeopleSearchParams } from '../../utils/apolloApi';
+import { translateJobTitle, type PeopleSearchParams } from '../../utils/apolloApi';
 import { ComboBoxMultiInput } from './ComboBoxMultiInput';
 import { CompanyLookupInput } from './CompanyLookupInput';
 import { FilterAccordionSection } from './FilterAccordionSection';
@@ -54,9 +54,39 @@ export function PeopleFilterForm({ params, onChange, onSubmit, loading }: People
   // "Įmonės domenas".
   const [companyLookupIds, setCompanyLookupIds] = useState<string[]>([]);
   const companyLookupDomainsRef = useRef<string[]>([]);
+  // Read by the Pareigos translate-on-add effect below, which resolves
+  // asynchronously (after a real network round trip) — by the time it
+  // does, `params` as this render closed over it may already be stale
+  // (the user could have toggled another filter in the meantime). A ref,
+  // kept current on every render, means the swap always merges onto
+  // whatever the *latest* params actually are, not a stale snapshot.
+  const paramsRef = useRef(params);
+  paramsRef.current = params;
 
   const set = <K extends keyof PeopleSearchParams>(key: K, value: PeopleSearchParams[K]) =>
     onChange({ ...params, [key]: value });
+
+  const JOB_TITLE_VALUES = new Set(JOB_TITLES.map((t) => t.value));
+  // Shared by both title filters below ("Pareigos" and "Darbo skelbimai"'s
+  // own "Pareigos skelbimuose") — picking from the suggestion list already
+  // sends Apollo's own English `value` (see jobTitles.ts), so this only
+  // ever fires for a genuinely custom-typed entry, translating it in the
+  // background and swapping it in place once done. The chip shows the
+  // original text immediately (translation isn't blocking); if it fails,
+  // the original text is simply what stays.
+  const handleTitlesChange = (key: 'person_titles' | 'q_organization_job_titles') => (v: string[]) => {
+    const prev = (paramsRef.current[key] as string[] | undefined) ?? [];
+    set(key, v.length > 0 ? v : undefined);
+    const added = v.find((x) => !prev.includes(x));
+    if (!added || JOB_TITLE_VALUES.has(added)) return;
+    void translateJobTitle(added).then(({ title }) => {
+      if (!title || title === added) return;
+      const current = (paramsRef.current[key] as string[] | undefined) ?? [];
+      if (!current.includes(added)) return; // removed again before the translation came back
+      const next = current.map((x) => (x === added ? title : x));
+      onChange({ ...paramsRef.current, [key]: next });
+    });
+  };
 
   // "Raktažodžiai" (free text) and "Industrija" (picked from Apollo's own
   // list) — see the FilterAccordionSection below for why both are folded
@@ -94,7 +124,7 @@ export function PeopleFilterForm({ params, onChange, onSubmit, loading }: People
         onSubmit();
       }}
     >
-      <FilterAccordionSection title="Raktažodžiai" activeCount={(freeKeywords.trim() ? 1 : 0) + industrija.length} defaultOpen>
+      <FilterAccordionSection title="Visi raktažodžiai" activeCount={(freeKeywords.trim() ? 1 : 0) + industrija.length} defaultOpen>
         {/* People Search has exactly one free-text parameter (q_keywords, a
             single string — confirmed against Apollo's own API docs, no
             array-based industry-tags field exists here the way
@@ -109,9 +139,9 @@ export function PeopleFilterForm({ params, onChange, onSubmit, loading }: People
             clearing or editing one never touches the other's contribution
             — only the combined result is what actually reaches `params`. */}
         <label className="search-filter-field">
-          <span>Raktažodžiai</span>
+          <span>Visi raktažodžiai</span>
           <input
-            placeholder="Aurimas Griciunas"
+            placeholder="Food, Gamyba, Aurimas, CEO"
             value={freeKeywords}
             onChange={(e) => {
               setFreeKeywords(e.target.value);
@@ -133,13 +163,13 @@ export function PeopleFilterForm({ params, onChange, onSubmit, loading }: People
         </div>
       </FilterAccordionSection>
 
-      <FilterAccordionSection title="Pareigos" activeCount={(params.person_titles?.length ?? 0) + seniorities.length}>
+      <FilterAccordionSection title="Pareigos" activeCount={(params.person_titles?.length ?? 0) + seniorities.length} defaultOpen>
         <div className="search-filter-field">
           <span>Pareigos</span>
           <ComboBoxMultiInput
             placeholder="CEO, Rinkodaros vadybininkas, Pardavimų vadovas"
             value={params.person_titles ?? []}
-            onChange={(v) => set('person_titles', v.length > 0 ? v : undefined)}
+            onChange={handleTitlesChange('person_titles')}
             suggestions={JOB_TITLES}
           />
         </div>
@@ -168,7 +198,7 @@ export function PeopleFilterForm({ params, onChange, onSubmit, loading }: People
         </div>
       </FilterAccordionSection>
 
-      <FilterAccordionSection title="Įmonė" activeCount={companyLookupIds.length + (params.q_organization_domains_list?.length ?? 0)}>
+      <FilterAccordionSection title="Įmonė" activeCount={companyLookupIds.length + (params.q_organization_domains_list?.length ?? 0)} defaultOpen>
         <div className="search-filter-field">
           <span>Įmonės pavadinimas</span>
           <CompanyLookupInput
@@ -220,14 +250,14 @@ export function PeopleFilterForm({ params, onChange, onSubmit, loading }: People
         <label className="search-filter-field">
           <span>Įmonės domenas</span>
           <input
-            placeholder="apollo.io, google.com"
+            placeholder="imone.lt, google.com"
             value={joinList(params.q_organization_domains_list)}
             onChange={(e) => set('q_organization_domains_list', splitList(e.target.value))}
           />
         </label>
       </FilterAccordionSection>
 
-      <FilterAccordionSection title="Lokacija" activeCount={params.person_locations?.length ?? 0}>
+      <FilterAccordionSection title="Lokacija" activeCount={params.person_locations?.length ?? 0} defaultOpen>
         <div className="search-filter-field">
           <span>Asmens vieta</span>
           <ComboBoxMultiInput
@@ -351,7 +381,7 @@ export function PeopleFilterForm({ params, onChange, onSubmit, loading }: People
           <span>Pareigos skelbimuose</span>
           <ComboBoxMultiInput
             value={params.q_organization_job_titles ?? []}
-            onChange={(v) => set('q_organization_job_titles', v.length > 0 ? v : undefined)}
+            onChange={handleTitlesChange('q_organization_job_titles')}
             suggestions={JOB_TITLES}
           />
         </div>

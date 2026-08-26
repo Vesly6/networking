@@ -14,6 +14,15 @@ export interface CallStatRecord {
   seconds: number;
   disposition: string;
   otherParty: string;
+  /** Absent until CallsStatsView's "Rodyti išlaidas" has been run for the
+   * period this record falls in — see that component's own doc comment
+   * for how it's fetched (reusing the same /api/calls/costs nearest-
+   * timestamp correlation the live Calls list uses) and persisted back
+   * onto this same IndexedDB record via saveCallStats, so it survives
+   * without needing to be re-fetched every time the Statistics view is
+   * reopened. */
+  billcost?: string;
+  currency?: string;
 }
 
 export function toCallStatRecord(call: CallRecord): CallStatRecord {
@@ -32,6 +41,21 @@ export interface CallStatsSummary {
   answerRate: number;
   totalSeconds: number;
   avgAnsweredSeconds: number;
+  /** null when not one single record in the period has cost data yet (the
+   * period has never had "Rodyti išlaidas" run for it) — distinct from a
+   * real 0, which is a legitimate total (e.g. a period with only free
+   * internal calls). withCost/withoutCost let the UI say "known total, N
+   * calls still missing cost data" rather than implying the total is
+   * complete when it might not be — costs are fetched with a 60s
+   * nearest-timestamp tolerance (see server/src/zadarma.ts's
+   * getCallCosts), so even a period that's been "run" once can end up
+   * with a few calls never matched. Assumes a single currency across the
+   * period (true in practice — one Zadarma account, one billing
+   * currency); currency is whichever the first cost-bearing record has. */
+  totalCost: number | null;
+  currency: string | null;
+  callsWithCost: number;
+  callsWithoutCost: number;
 }
 
 export function summarize(records: CallStatRecord[]): CallStatsSummary {
@@ -39,12 +63,19 @@ export function summarize(records: CallStatRecord[]): CallStatsSummary {
   const answeredRecords = records.filter((r) => r.disposition === 'answered');
   const answered = answeredRecords.length;
   const totalSeconds = records.reduce((sum, r) => sum + r.seconds, 0);
+  const costRecords = records.filter((r) => r.billcost !== undefined);
+  const totalCost = costRecords.length > 0 ? costRecords.reduce((sum, r) => sum + Number(r.billcost), 0) : null;
+  const currency = costRecords[0]?.currency ?? null;
   return {
     totalCalls,
     answered,
     answerRate: totalCalls > 0 ? answered / totalCalls : 0,
     totalSeconds,
     avgAnsweredSeconds: answered > 0 ? totalSeconds / answered : 0,
+    totalCost,
+    currency,
+    callsWithCost: costRecords.length,
+    callsWithoutCost: totalCalls - costRecords.length,
   };
 }
 

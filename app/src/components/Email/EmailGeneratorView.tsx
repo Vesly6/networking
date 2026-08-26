@@ -6,24 +6,35 @@ const MODE_META: Record<EmailMode, { label: string; placeholder: string }> = {
   new: {
     label: 'Apie ką rašyti',
     placeholder:
-      'Aprašykite, kokiu stiliumi ir apie ką reikia parašyti naują laišką. Galite padiktuoti balsu rusų kalba — paspauskite mikrofono mygtuką.',
+      'Aprašykite, kokiu stiliumi ir apie ką reikia parašyti naują laišką. Galite padiktuoti balsu — paspauskite mikrofono mygtuką.',
   },
   reply: {
     label: 'Kaip atsakyti',
     placeholder:
-      'Aprašykite, kokiu stiliumi ir ką atsakyti klientui. Galite padiktuoti balsu rusų kalba — paspauskite mikrofono mygtuką.',
+      'Aprašykite, kokiu stiliumi ir ką atsakyti klientui. Galite padiktuoti balsu — paspauskite mikrofono mygtuką.',
   },
   reminder: {
     label: 'Ką norite priminti / paminėti',
     placeholder:
-      'Aprašykite, apie ką priminti klientui ir kokiu tonu. Galite padiktuoti balsu rusų kalba — paspauskite mikrofono mygtuką.',
+      'Aprašykite, apie ką priminti klientui ir kokiu tonu. Galite padiktuoti balsu — paspauskite mikrofono mygtuką.',
   },
 };
 
+// The mic dictates in whichever spoken language the operator actually
+// talks in (not to be confused with `lang`/`setLang` below, which picks
+// the *generated email's* language) — separate because the Web Speech
+// API only ever listens for one language per session, so "recognize
+// Russian or Lithuanian" has to mean "let the operator pick which one",
+// not both at once.
+const MIC_LANG_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: 'ru-RU', label: '🇷🇺 Rusų' },
+  { value: 'lt-LT', label: '🇱🇹 Lietuvių' },
+];
+
 const MODEL_OPTIONS: Array<{ value: EmailModel; label: string }> = [
-  { value: 'claude-opus-5', label: 'Claude Opus 5 (geriausia kokybė)' },
-  { value: 'claude-sonnet-5', label: 'Claude Sonnet 5 (kainos ir kokybės balansas)' },
-  { value: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5 (greitai ir pigiai)' },
+  { value: 'claude-opus-5', label: 'Geriausia kokybė' },
+  { value: 'claude-sonnet-5', label: 'Kainos ir kokybės balansas' },
+  { value: 'claude-haiku-4-5-20251001', label: 'Greitai ir pigiai' },
 ];
 
 // Same minimal ambient typing this codebase already uses for another
@@ -80,6 +91,7 @@ export function EmailGeneratorView() {
   const [recording, setRecording] = useState(false);
   const [copied, setCopied] = useState(false);
   const [speechSupported, setSpeechSupported] = useState(true);
+  const [micLang, setMicLang] = useState('ru-RU');
 
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const outputRef = useRef<HTMLTextAreaElement>(null);
@@ -94,7 +106,6 @@ export function EmailGeneratorView() {
       return;
     }
     const recognition = new Ctor();
-    recognition.lang = 'ru-RU';
     recognition.continuous = true;
     recognition.interimResults = true;
     recognition.onresult = (event) => {
@@ -136,6 +147,12 @@ export function EmailGeneratorView() {
       setRecording(false);
     } else {
       setError('');
+      // Set right before start(), not at construction — the recognizer
+      // object is created once per mount (see the effect above) and
+      // reused across calls, but .lang is only read when start() actually
+      // begins listening, so switching the toggle and pressing the mic
+      // again picks up the new language with no need to recreate anything.
+      recognition.lang = micLang;
       try {
         recognition.start();
         setRecording(true);
@@ -252,15 +269,33 @@ export function EmailGeneratorView() {
         <div className="field">
           <div className="field-header">
             <label htmlFor="email-instructions">{meta.label}</label>
-            <button
-              type="button"
-              className={`icon-btn ${recording ? 'recording' : ''}`}
-              title={speechSupported ? 'Įrašyti balsu (rusų kalba)' : 'Balso įvedimas nepalaikomas šioje naršyklėje'}
-              disabled={!speechSupported}
-              onClick={toggleRecording}
-            >
-              🎤
-            </button>
+            <div className="mic-controls">
+              {speechSupported && (
+                <div className="mic-lang-select">
+                  {MIC_LANG_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      className={micLang === opt.value ? 'active' : ''}
+                      disabled={recording}
+                      title="Kuria kalba diktuosite mikrofonui"
+                      onClick={() => setMicLang(opt.value)}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <button
+                type="button"
+                className={`icon-btn ${recording ? 'recording' : ''}`}
+                title={speechSupported ? 'Įrašyti balsu' : 'Balso įvedimas nepalaikomas šioje naršyklėje'}
+                disabled={!speechSupported}
+                onClick={toggleRecording}
+              >
+                🎤
+              </button>
+            </div>
           </div>
           <textarea
             id="email-instructions"
@@ -269,7 +304,7 @@ export function EmailGeneratorView() {
             value={instructions}
             onChange={(e) => setInstructions(e.target.value)}
           />
-          {recording && <div className="recording-indicator">● Vyksta įrašymas... (kalbėkite rusiškai)</div>}
+          {recording && <div className="recording-indicator">● Vyksta įrašymas...</div>}
         </div>
 
         {error && <div className="search-result-detail-error">{error}</div>}

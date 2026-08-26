@@ -1,11 +1,3 @@
-function getApiKey(): string {
-  const key = process.env.OPENAI_API_KEY;
-  if (!key) {
-    throw new Error('OPENAI_API_KEY is not set — check server/.env');
-  }
-  return key;
-}
-
 export class ContactParseError extends Error {}
 
 const CONTACT_PARSE_MODEL = 'gpt-4o-mini';
@@ -17,13 +9,13 @@ Output ONLY the cleaned line as: Name, Title, Company, email, phone — omit any
 
 /** Cheap ($0.15/1M input tokens as of writing — a pasted contact blob is a
  * few dozen tokens) chat-completion call, not the transcription model. */
-export async function parseContactText(rawText: string): Promise<{ text: string }> {
+export async function parseContactText(rawText: string, apiKey: string): Promise<{ text: string }> {
   let res: Response;
   try {
     res = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${getApiKey()}`,
+        Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
@@ -36,15 +28,15 @@ export async function parseContactText(rawText: string): Promise<{ text: string 
       }),
     });
   } catch {
-    throw new ContactParseError('Could not reach OpenAI');
+    throw new ContactParseError('Could not reach the AI service');
   }
 
   const json: any = await res.json().catch(() => null);
   if (!res.ok || !json) {
-    throw new ContactParseError(json?.error?.message ?? `OpenAI request failed (HTTP ${res.status})`);
+    throw new ContactParseError(json?.error?.message ?? `AI service request failed (HTTP ${res.status})`);
   }
   const text = json.choices?.[0]?.message?.content?.trim();
-  if (!text) throw new ContactParseError('OpenAI returned an empty result');
+  if (!text) throw new ContactParseError('AI service returned an empty result');
   return { text };
 }
 
@@ -76,12 +68,12 @@ Respond with ONLY the name (corrected or unchanged) — no explanation, no quote
  * useful to add to the search query) or the call itself fails — a failure
  * here should never block the real search from still running with
  * whatever spelling was actually given. */
-export async function guessLithuanianDiacritics(name: string): Promise<string | null> {
+export async function guessLithuanianDiacritics(name: string, apiKey: string): Promise<string | null> {
   try {
     const res = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${getApiKey()}`,
+        Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
@@ -98,6 +90,48 @@ export async function guessLithuanianDiacritics(name: string): Promise<string | 
     const guess = json?.choices?.[0]?.message?.content?.trim();
     if (!guess || guess.toLowerCase() === name.toLowerCase()) return null;
     return guess;
+  } catch {
+    return null;
+  }
+}
+
+const TITLE_TRANSLATE_MODEL = 'gpt-4o-mini';
+
+const TITLE_TRANSLATE_SYSTEM_PROMPT = `You translate a job title into English, for use as a search filter against a database indexed in English.
+If the input is already in English, respond with it unchanged (only fix obvious casing, e.g. "ceo" -> "CEO").
+Respond with ONLY the translated title — no explanation, no quotes, no extra text.`;
+
+/** Same narrow, fail-soft shape as guessLithuanianDiacritics() above (null
+ * on any failure, never throws) — this backs the "Pareigos" job-title
+ * filter's free-typed entries (PeopleFilterForm.tsx's ComboBoxMultiInput):
+ * picking from the suggestion list already sends Apollo's own English
+ * `value`, but a custom-typed Lithuanian title (e.g. "Pardavimų vadovas")
+ * went straight to Apollo's person_titles param as-is, which matches far
+ * worse against a database indexed in English — real, reported feedback
+ * ("сделать пойск на англиском, так намного точнее будет"). A failed
+ * translation call falls back to the original typed text rather than
+ * blocking the filter from being added at all. */
+export async function translateJobTitleToEnglish(title: string, apiKey: string): Promise<string | null> {
+  try {
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: TITLE_TRANSLATE_MODEL,
+        messages: [
+          { role: 'system', content: TITLE_TRANSLATE_SYSTEM_PROMPT },
+          { role: 'user', content: title },
+        ],
+        temperature: 0,
+      }),
+    });
+    if (!res.ok) return null;
+    const json: any = await res.json().catch(() => null);
+    const translated = json?.choices?.[0]?.message?.content?.trim();
+    return translated || null;
   } catch {
     return null;
   }
@@ -144,13 +178,13 @@ Output ONLY the final summary from step 2 (bullets or the one-sentence fallback)
  * derived, secondary artifact of an already-paid-for transcript, not a
  * second transcription, so keeping it inexpensive matters: a summary
  * nobody explicitly asked to pay more for. */
-export async function summarizeCall(transcriptText: string): Promise<{ summary: string }> {
+export async function summarizeCall(transcriptText: string, apiKey: string): Promise<{ summary: string }> {
   let res: Response;
   try {
     res = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${getApiKey()}`,
+        Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
@@ -168,15 +202,15 @@ export async function summarizeCall(transcriptText: string): Promise<{ summary: 
       }),
     });
   } catch {
-    throw new SummarizeError('Could not reach OpenAI');
+    throw new SummarizeError('Could not reach the AI service');
   }
 
   const json: any = await res.json().catch(() => null);
   if (!res.ok || !json) {
-    throw new SummarizeError(json?.error?.message ?? `OpenAI request failed (HTTP ${res.status})`);
+    throw new SummarizeError(json?.error?.message ?? `AI service request failed (HTTP ${res.status})`);
   }
   const summary = json.choices?.[0]?.message?.content?.trim();
-  if (!summary) throw new SummarizeError('OpenAI returned an empty result');
+  if (!summary) throw new SummarizeError('AI service returned an empty result');
   return { summary };
 }
 
@@ -220,7 +254,10 @@ export interface LinkedInPersonalizeParams {
  * human to review/adjust before approving, never auto-applied straight
  * into a send (same "AI drafts, human reviews" pattern as the contact-
  * paste cleanup and the AI-suggested inbox replies below). */
-export async function personalizeLinkedInMessage(params: LinkedInPersonalizeParams): Promise<{ text: string }> {
+export async function personalizeLinkedInMessage(
+  params: LinkedInPersonalizeParams,
+  apiKey: string,
+): Promise<{ text: string }> {
   const person = [
     params.firstName && `First name: ${params.firstName}`,
     params.lastName && `Last name: ${params.lastName}`,
@@ -238,7 +275,7 @@ export async function personalizeLinkedInMessage(params: LinkedInPersonalizePara
     res = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${getApiKey()}`,
+        Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
@@ -251,15 +288,15 @@ export async function personalizeLinkedInMessage(params: LinkedInPersonalizePara
       }),
     });
   } catch {
-    throw new LinkedInPersonalizeError('Could not reach OpenAI');
+    throw new LinkedInPersonalizeError('Could not reach the AI service');
   }
 
   const json: any = await res.json().catch(() => null);
   if (!res.ok || !json) {
-    throw new LinkedInPersonalizeError(json?.error?.message ?? `OpenAI request failed (HTTP ${res.status})`);
+    throw new LinkedInPersonalizeError(json?.error?.message ?? `AI service request failed (HTTP ${res.status})`);
   }
   let text = json.choices?.[0]?.message?.content?.trim();
-  if (!text) throw new LinkedInPersonalizeError('OpenAI returned an empty result');
+  if (!text) throw new LinkedInPersonalizeError('AI service returned an empty result');
   if (params.isConnectNote && text.length > LINKEDIN_CONNECT_NOTE_LIMIT) {
     text = text.slice(0, LINKEDIN_CONNECT_NOTE_LIMIT);
   }
@@ -287,6 +324,7 @@ export interface LinkedInReplyMessage {
 export async function suggestLinkedInReply(
   participantName: string | null,
   messages: LinkedInReplyMessage[],
+  apiKey: string,
 ): Promise<{ text: string }> {
   if (messages.length === 0) throw new LinkedInReplyError('No messages in this conversation yet');
   const transcript = messages.map((m) => `${m.direction === 'out' ? 'Me' : participantName || 'Them'}: ${m.content}`).join('\n');
@@ -296,7 +334,7 @@ export async function suggestLinkedInReply(
     res = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${getApiKey()}`,
+        Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
@@ -309,14 +347,14 @@ export async function suggestLinkedInReply(
       }),
     });
   } catch {
-    throw new LinkedInReplyError('Could not reach OpenAI');
+    throw new LinkedInReplyError('Could not reach the AI service');
   }
 
   const json: any = await res.json().catch(() => null);
   if (!res.ok || !json) {
-    throw new LinkedInReplyError(json?.error?.message ?? `OpenAI request failed (HTTP ${res.status})`);
+    throw new LinkedInReplyError(json?.error?.message ?? `AI service request failed (HTTP ${res.status})`);
   }
   const text = json.choices?.[0]?.message?.content?.trim();
-  if (!text) throw new LinkedInReplyError('OpenAI returned an empty result');
+  if (!text) throw new LinkedInReplyError('AI service returned an empty result');
   return { text };
 }

@@ -10,6 +10,14 @@ export interface Column {
   optionColors?: Record<string, string>;
   /** Only one date column at a time drives the calendar/task list */
   isNextActionDate?: boolean;
+  /** Only used when type === 'dropdown'. Only one dropdown column at a
+   * time is "the" status column (same one-at-a-time rule as
+   * isNextActionDate) — every value change on it auto-logs a new entry
+   * into the table's note column (see useTableStore.ts's updateCell/
+   * updateCells), on explicit request, for a permanent, in-context record
+   * of status transitions ("Rejected" → "Accepted") without a separate
+   * audit UI. */
+  isStatusColumn?: boolean;
   /** Column width in pixels; falls back to a default when unset. */
   width?: number;
   /** Hidden from the grid (header + data cells) but its data is untouched —
