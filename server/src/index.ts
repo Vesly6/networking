@@ -460,13 +460,29 @@ app.post('/api/zadarma/sms-webhook', (req, res) => {
     body,
   });
   const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : null);
-  // Best-effort field extraction — Zadarma's known webhook events name the
-  // caller/callee caller_id/called_did (see NotifyStart in the official
-  // client), so those are checked first; from/to/sender/msisdn/text/message
-  // are generic fallbacks in case the SMS event uses different names.
-  const fromNumber = str(body.caller_id) ?? str(body.from) ?? str(body.sender) ?? str(body.msisdn);
-  const toNumber = str(body.called_did) ?? str(body.to) ?? str(body.destination);
-  const message = str(body.text) ?? str(body.message) ?? str(body.sms);
+  // Confirmed live against a real incoming SMS (found only by logging a
+  // real production payload — see this route's own long doc comment
+  // above for why nothing about this shape is documented anywhere):
+  // Zadarma's actual SMS webhook does NOT put caller/message fields at
+  // the top level at all. The real body is `{ event: 'SMS', result:
+  // '<JSON-encoded string>' }`, with the fields that actually matter —
+  // caller_did (this account's own number, i.e. the SMS's recipient),
+  // caller_id (the sender's number), text (the message) — inside that
+  // nested, *double*-encoded JSON string. Parsed first; the original
+  // top-level guesses stay as fallbacks in case a different event
+  // shape ever doesn't nest this way.
+  let resultObj: Record<string, unknown> = {};
+  if (typeof body.result === 'string') {
+    try {
+      resultObj = JSON.parse(body.result);
+    } catch {
+      // Malformed/unexpected result string — falls through to the
+      // top-level fallbacks below, same behavior as before this fix.
+    }
+  }
+  const fromNumber = str(resultObj.caller_id) ?? str(body.caller_id) ?? str(body.from) ?? str(body.sender) ?? str(body.msisdn);
+  const toNumber = str(resultObj.caller_did) ?? str(body.called_did) ?? str(body.to) ?? str(body.destination);
+  const message = str(resultObj.text) ?? str(body.text) ?? str(body.message) ?? str(body.sms);
   insertIncomingSms({
     event: str(body.event),
     fromNumber,
