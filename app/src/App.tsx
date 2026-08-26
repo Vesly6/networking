@@ -3,6 +3,7 @@ import { useTableStore } from './store/useTableStore';
 import { useWorkspaceStore } from './store/useWorkspaceStore';
 import { useAuthStore } from './store/useAuthStore';
 import { usePendingPhoneSearchStore } from './store/usePendingPhoneSearchStore';
+import { useToastStore } from './store/useToastStore';
 import { TableView } from './components/Table/TableView';
 import { CalendarView } from './components/Calendar/CalendarView';
 import { WorkspaceView } from './components/Workspace/WorkspaceView';
@@ -54,6 +55,7 @@ function App() {
 
   const workspaceReady = useWorkspaceStore((s) => s.ready);
   const workspaceInitError = useWorkspaceStore((s) => s.initError);
+  const workspaceActionError = useWorkspaceStore((s) => s.actionError);
   const initWorkspace = useWorkspaceStore((s) => s.init);
   const tables = useWorkspaceStore((s) => s.tables);
   const activeTableId = useWorkspaceStore((s) => s.activeTableId);
@@ -129,6 +131,19 @@ function App() {
   useEffect(() => {
     if (token) void fetchMe();
   }, [token, fetchMe]);
+
+  // Same "stores own data, components own side effects" convention as
+  // useTableStore's lastCellSaveError — watched here (rather than inside
+  // WorkspaceView/SheetTabs individually) since App.tsx is the one thing
+  // always mounted regardless of which of those two actually triggered
+  // the create/duplicate/rename/delete that failed. See
+  // useWorkspaceStore's own actionError doc comment for the real,
+  // reported bug this fixes (duplicating a large table silently doing
+  // nothing on failure).
+  const showToast = useToastStore((s) => s.show);
+  useEffect(() => {
+    if (workspaceActionError) showToast(workspaceActionError);
+  }, [workspaceActionError, showToast]);
 
   // Only the id drives loading — the table's name/columns are always fetched
   // fresh from IndexedDB inside loadTable(), never trusted from this cached

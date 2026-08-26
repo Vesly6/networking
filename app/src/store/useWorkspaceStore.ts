@@ -57,14 +57,34 @@ interface WorkspaceState {
    * happened before this was added — `init()` throwing left `ready` stuck
    * at `false` forever with no user-facing signal at all. */
   initError: string | null;
+  /** Set when the most recent createTable/duplicateTable/renameTable/
+   * deleteTable call failed to persist server-side — null otherwise. A
+   * real, reported bug: none of these four actions had any error
+   * handling at all — createTable/duplicateTable let an unhandled
+   * rejection propagate straight out of their onClick handlers (no
+   * try/catch at the call sites in WorkspaceView.tsx/SheetTabs.tsx
+   * either), and renameTable/deleteTable were plain fire-and-forget
+   * (`void updateTableName(...)`/`void deleteTableDB(...)`). Duplicating
+   * a large (~14,000-row) table is exactly the case most likely to hit a
+   * slow/failed request (one big PUT /api/rows for the whole cloned
+   * table), and with no error surfaced anywhere, that failure looked
+   * like literally nothing happened — the context menu just sat there.
+   * Same "stores own data, components own side effects" convention as
+   * useTableStore's own lastCellSaveError — App.tsx watches this and
+   * toasts, since both WorkspaceView and SheetTabs (the two places these
+   * actions are triggered from) need the same handling and App.tsx is
+   * the one thing always mounted regardless of which screen is active. */
+  actionError: string | null;
   init: () => Promise<void>;
   /** Async, not a synchronous id return — awaits both the table record
    * and its seed rows actually landing server-side before resolving, for
    * the identical reason duplicateTable below does: a caller that
    * switches to viewing the new table immediately (both real callers do)
    * would otherwise race a still-in-flight bulk row write and could
-   * render the freshly-seeded table as empty. */
-  createTable: (name: string) => Promise<string>;
+   * render the freshly-seeded table as empty. Returns null (and sets
+   * actionError) if either write fails, rather than throwing — see
+   * actionError's own doc comment. */
+  createTable: (name: string) => Promise<string | null>;
   /** Clones a table's columns and every row (fresh ids throughout, cell
    * keys remapped to the new column ids) into a brand-new table — used by
    * SheetTabs' right-click "Duplicate". Async because it has to read the
@@ -82,6 +102,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   activeTableId: null,
   ready: false,
   initError: null,
+  actionError: null,
 
   init: async () => {
     try {
@@ -122,68 +143,94 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       updatedAt: now,
     };
     set({ tables: [...get().tables, table] });
-    await saveTable(table);
-    await saveRows(buildSeedRows(table.id));
-    return table.id;
+    try {
+      await saveTable(table);
+      await saveRows(buildSeedRows(table.id));
+      set({ actionError: null });
+      return table.id;
+    } catch (err) {
+      set({
+        tables: get().tables.filter((t) => t.id !== table.id),
+        actionError: err instanceof Error ? `Nepavyko sukurti lentelės — ${err.message}` : 'Nepavyko sukurti lentelės serveryje',
+      });
+      return null;
+    }
   },
 
   duplicateTable: async (id) => {
-    // Re-read fresh from IndexedDB rather than trusting get().tables' cached
-    // TableMeta — that snapshot is only as current as whenever the
-    // workspace list itself last loaded, and never updated when
-    // useTableStore edits columns (only the IndexedDB record is; see
-    // loadTable's own doc comment for the same rule). Reading the cached
-    // copy here reproduced that exact class of bug: duplicating a table
-    // right after adding a column to it copied zero columns, because
-    // get().tables still held the table's columns as they were before
-    // that edit.
-    const source = await getTable(id);
-    if (!source) return null;
+    try {
+      // Re-read fresh from IndexedDB rather than trusting get().tables' cached
+      // TableMeta — that snapshot is only as current as whenever the
+      // workspace list itself last loaded, and never updated when
+      // useTableStore edits columns (only the IndexedDB record is; see
+      // loadTable's own doc comment for the same rule). Reading the cached
+      // copy here reproduced that exact class of bug: duplicating a table
+      // right after adding a column to it copied zero columns, because
+      // get().tables still held the table's columns as they were before
+      // that edit.
+      const source = await getTable(id);
+      if (!source) return null;
 
-    const columnIdMap = new Map<string, string>();
-    const columns = source.columns.map((c) => {
-      const newId = randomUUID();
-      columnIdMap.set(c.id, newId);
-      return { ...c, id: newId };
-    });
+      const columnIdMap = new Map<string, string>();
+      const columns = source.columns.map((c) => {
+        const newId = randomUUID();
+        columnIdMap.set(c.id, newId);
+        return { ...c, id: newId };
+      });
 
-    const now = Date.now();
-    const newTable: TableMeta = {
-      id: randomUUID(),
-      name: `${source.name} (kopija)`,
-      columns,
-      createdAt: now,
-      updatedAt: now,
-    };
+      const now = Date.now();
+      const newTable: TableMeta = {
+        id: randomUUID(),
+        name: `${source.name} (kopija)`,
+        columns,
+        createdAt: now,
+        updatedAt: now,
+      };
 
-    const sourceRows = await loadRowsForTable(id);
-    const newRows: Row[] = sourceRows.map((r) => {
-      const cells: Record<string, string> = {};
-      for (const [oldColId, value] of Object.entries(r.cells)) {
-        const newColId = columnIdMap.get(oldColId);
-        if (newColId) cells[newColId] = value;
-      }
-      let colors: Record<string, string> | undefined;
-      if (r.colors) {
-        colors = {};
-        for (const [oldColId, color] of Object.entries(r.colors)) {
+      const sourceRows = await loadRowsForTable(id);
+      const newRows: Row[] = sourceRows.map((r) => {
+        const cells: Record<string, string> = {};
+        for (const [oldColId, value] of Object.entries(r.cells)) {
           const newColId = columnIdMap.get(oldColId);
-          if (newColId) colors[newColId] = color;
+          if (newColId) cells[newColId] = value;
         }
-      }
-      return { id: randomUUID(), tableId: newTable.id, cells, colors, order: r.order, height: r.height, createdAt: now, updatedAt: now };
-    });
+        let colors: Record<string, string> | undefined;
+        if (r.colors) {
+          colors = {};
+          for (const [oldColId, color] of Object.entries(r.colors)) {
+            const newColId = columnIdMap.get(oldColId);
+            if (newColId) colors[newColId] = color;
+          }
+        }
+        return { id: randomUUID(), tableId: newTable.id, cells, colors, order: r.order, height: r.height, createdAt: now, updatedAt: now };
+      });
 
-    // Both awaited (not the usual fire-and-forget void saveX(...) pattern
-    // elsewhere in this store) — the caller switches to viewing this new
-    // table right after this resolves (SheetTabs' "Duplicate table"), and
-    // loadTable() does a one-shot fresh read from IndexedDB with no retry.
-    // Returning before the writes land would make the new table briefly
-    // (or, if the write loses the race, indefinitely) look empty.
-    await saveTable(newTable);
-    await saveRows(newRows);
-    set({ tables: [...get().tables, newTable] });
-    return newTable.id;
+      // Both awaited (not the usual fire-and-forget void saveX(...) pattern
+      // elsewhere in this store) — the caller switches to viewing this new
+      // table right after this resolves (SheetTabs' "Duplicate table"), and
+      // loadTable() does a one-shot fresh read from IndexedDB with no retry.
+      // Returning before the writes land would make the new table briefly
+      // (or, if the write loses the race, indefinitely) look empty.
+      await saveTable(newTable);
+      await saveRows(newRows);
+      set({ tables: [...get().tables, newTable], actionError: null });
+      return newTable.id;
+    } catch (err) {
+      // Whole body wrapped, not just the final writes — a real, reported
+      // bug: nothing here had any error handling at all, so a failure
+      // anywhere in this chain (even the initial getTable/loadRowsForTable
+      // reads) was an unhandled rejection that propagated straight out of
+      // SheetTabs.tsx's onClick with zero visible indication — the context
+      // menu just sat there, looking like nothing had happened. Most
+      // likely to bite on exactly the table size where it actually got
+      // reported: a large (~14,000-row) table means saveRows() here is one
+      // big PUT, the single most likely request in this whole app to hit
+      // a slow/failed connection.
+      set({
+        actionError: err instanceof Error ? `Nepavyko dubliuoti lentelės — ${err.message}` : 'Nepavyko dubliuoti lentelės serveryje',
+      });
+      return null;
+    }
   },
 
   renameTable: (id, name) => {
@@ -191,7 +238,13 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     if (!trimmed) return;
     const tables = get().tables.map((t) => (t.id === id ? { ...t, name: trimmed, updatedAt: Date.now() } : t));
     set({ tables });
-    void updateTableName(id, trimmed);
+    updateTableName(id, trimmed)
+      .then(() => set({ actionError: null }))
+      .catch((err) => {
+        set({
+          actionError: err instanceof Error ? `Nepavyko pervadinti lentelės — ${err.message}` : 'Nepavyko pervadinti lentelės serveryje',
+        });
+      });
   },
 
   deleteTable: (id) => {
@@ -199,7 +252,13 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     const tables = get().tables.filter((t) => t.id !== id);
     set({ tables, activeTableId: wasActive ? null : get().activeTableId });
     if (wasActive) localStorage.removeItem(LAST_ACTIVE_KEY);
-    void deleteTableDB(id);
+    deleteTableDB(id)
+      .then(() => set({ actionError: null }))
+      .catch((err) => {
+        set({
+          actionError: err instanceof Error ? `Nepavyko ištrinti lentelės — ${err.message}` : 'Nepavyko ištrinti lentelės serveryje',
+        });
+      });
   },
 
   setActiveTable: (id) => {

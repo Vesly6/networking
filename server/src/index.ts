@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import express, { type NextFunction, type Request, type Response } from 'express';
+import compression from 'compression';
 import cors from 'cors';
 import { timingSafeEqual } from 'node:crypto';
 import {
@@ -146,6 +147,19 @@ const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
 
 const app = express();
 app.use(cors({ origin: ALLOWED_ORIGINS }));
+// A real, reported problem: switching between tables felt "very slow,"
+// most noticeably on the largest one (~14,000 rows) — GET
+// /api/tables/:id/rows sends that whole table as one JSON response on
+// every single switch (loadTable() always re-fetches fresh, deliberately,
+// to avoid the staleness bugs a cached copy would reintroduce — see
+// CLAUDE.md), and that response is several MB of highly repetitive JSON
+// (the same column-id keys repeated across every row's cells_json). gzip
+// compresses that kind of payload dramatically — this shrinks the actual
+// bytes sent over the wire on every load/switch instead of trying to
+// avoid the fetch altogether, with no behavior change and no new
+// staleness risk. Placed before every route/body-parser so it compresses
+// every JSON response this server sends, not just this one route.
+app.use(compression());
 // Express's default body-size limit is 100kb — fine for every other route
 // in this app, but PUT /api/rows (the bulk row-save endpoint, saveRows()
 // on the frontend) sends an entire table's rows as one JSON payload by

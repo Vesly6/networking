@@ -42,7 +42,15 @@ export function SheetTabs() {
     setEditingName(name);
   };
 
-  const handleNewTable = async () => setActiveTable(await createTable(`Lentelė ${tables.length + 1}`));
+  const handleNewTable = async () => {
+    const id = await createTable(`Lentelė ${tables.length + 1}`);
+    // On failure, stay on the current table (whose error toast App.tsx
+    // already shows) rather than getting bounced out to the Workspace
+    // screen — createTable() itself returns null instead of throwing on
+    // failure specifically so callers can make this call, see
+    // useWorkspaceStore's own actionError doc comment.
+    if (id) setActiveTable(id);
+  };
 
   const handleContextMenu = (e: ReactMouseEvent, id: string, name: string) => {
     e.preventDefault();

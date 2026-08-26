@@ -199,6 +199,35 @@ function logStatusChangeIfNeeded(
 }
 
 export const useTableStore = create<TableState>((set, get) => {
+  /** Tracks which table the *most recently started* loadTable() call was
+   * for — a real, reported bug: switching tables quickly (SheetTabs) fires
+   * a new loadTable() before the previous one has resolved, and with no
+   * guard, whichever request happened to resolve *last* won regardless of
+   * whether it was actually the most recent one — a slower, now-stale
+   * request for a table the user already navigated away from could
+   * overwrite the correct, already-loaded table with stale
+   * rows/columns, or (worse) apply its own late failure as `loadError`
+   * even though the table the user is now actually looking at loaded
+   * fine. Every loadTable() call checks this against its own `tableId`
+   * before applying its result — same "capture an identifier, check it's
+   * still current before applying" pattern this codebase already uses for
+   * Apollo's phone-reveal poll and InboxPanel's AI-suggest-reply race. */
+  let latestRequestedTableId: string | null = null;
+  /** Actually cancels a superseded loadTable()'s in-flight requests
+   * (fetch's AbortController), not just its eventually-ignored result —
+   * a real, reported production issue: rapidly switching between tables
+   * (SheetTabs) never used to cancel the abandoned request, so the
+   * server kept building/holding that response (a full row-array +
+   * JSON.stringify of it, multi-MB for a ~14,000-row table) in memory
+   * even after the client no longer wanted it; several of those piling
+   * up concurrently under fast repeated switching is a plausible
+   * contributor to a real "JavaScript heap out of memory" crash seen in
+   * production. Aborting the fetch as soon as a newer loadTable() starts
+   * means the browser stops waiting on/buffering that response, and the
+   * server-side request is torn down rather than left to keep running to
+   * completion for a client that already left. */
+  let currentLoadController: AbortController | null = null;
+
   /** Push the state as it was *before* the mutation about to run onto the
    * undo stack, and drop the redo stack (a fresh action invalidates "future"
    * history). Every action below always creates new `columns`/`rows`
@@ -274,9 +303,21 @@ export const useTableStore = create<TableState>((set, get) => {
     importProgress: null,
 
     loadTable: async (tableId) => {
+      latestRequestedTableId = tableId;
+      currentLoadController?.abort();
+      const controller = new AbortController();
+      currentLoadController = controller;
       set({ ready: false, loadError: null });
       try {
-        const [table, rows] = await Promise.all([getTable(tableId), loadRowsForTable(tableId)]);
+        const [table, rows] = await Promise.all([
+          getTable(tableId, controller.signal),
+          loadRowsForTable(tableId, controller.signal),
+        ]);
+        // A newer loadTable() call has since started (the user switched
+        // tables again before this one finished) — applying this result
+        // now would overwrite whatever that newer call already loaded (or
+        // is about to), possibly with a different table's stale data.
+        if (latestRequestedTableId !== tableId) return;
         if (!table) {
           set({ tableId: null, columns: [], rows: [], ready: true, loadError: null, undoStack: [], redoStack: [] });
           return;
@@ -284,6 +325,7 @@ export const useTableStore = create<TableState>((set, get) => {
         rows.sort((a, b) => a.order - b.order);
         set({ tableId: table.id, columns: table.columns, rows, ready: true, loadError: null, undoStack: [], redoStack: [] });
       } catch (err) {
+        if (latestRequestedTableId !== tableId) return;
         set({
           loadError: err instanceof Error ? `Nepavyko įkelti lentelės — ${err.message}` : 'Nepavyko įkelti lentelės iš serverio',
         });
@@ -291,6 +333,12 @@ export const useTableStore = create<TableState>((set, get) => {
     },
 
     unload: () => {
+      // Also invalidates AND actually cancels any loadTable() still in
+      // flight for the table being left — see latestRequestedTableId's
+      // and currentLoadController's own doc comments above.
+      latestRequestedTableId = null;
+      currentLoadController?.abort();
+      currentLoadController = null;
       set({ tableId: null, columns: [], rows: [], ready: false, loadError: null, undoStack: [], redoStack: [] });
     },
 

@@ -101,9 +101,9 @@ export async function saveTable(table: TableMeta): Promise<void> {
   });
 }
 
-export async function getTable(id: string): Promise<TableMeta | null> {
+export async function getTable(id: string, signal?: AbortSignal): Promise<TableMeta | null> {
   try {
-    return await localApiRequest<TableMeta>(`/api/tables/${encodeURIComponent(id)}`);
+    return await localApiRequest<TableMeta>(`/api/tables/${encodeURIComponent(id)}`, { signal });
   } catch {
     return null;
   }
@@ -138,8 +138,8 @@ export async function deleteTableDB(id: string): Promise<void> {
   await localApiRequest(`/api/tables/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }
 
-export async function loadRowsForTable(tableId: string): Promise<Row[]> {
-  const { rows } = await localApiRequest<{ rows: Row[] }>(`/api/tables/${encodeURIComponent(tableId)}/rows`);
+export async function loadRowsForTable(tableId: string, signal?: AbortSignal): Promise<Row[]> {
+  const { rows } = await localApiRequest<{ rows: Row[] }>(`/api/tables/${encodeURIComponent(tableId)}/rows`, { signal });
   return rows;
 }
 

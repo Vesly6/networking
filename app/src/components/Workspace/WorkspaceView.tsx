@@ -56,7 +56,7 @@ export function WorkspaceView({ onOpenTable, onOpenWorkers, onOpenIntegrations }
 
   const handleCreate = async () => {
     const id = await createTable(`Lentelė ${tables.length + 1}`);
-    onOpenTable(id);
+    if (id) onOpenTable(id);
   };
 
   const handleDeleteTable = async (id: string, name: string) => {
