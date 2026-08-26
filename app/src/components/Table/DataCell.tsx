@@ -45,10 +45,13 @@ interface DataCellProps {
   /** note/contact only — opens CellHoverEditor for this cell. Named for
    * what it does, not how it's triggered; see the click handler below. */
   onOpenEditor: (anchor: HTMLElement) => void;
-  /** The active search box query, trimmed — only ever set on rows the
-   * search has already matched, so this just highlights *where* the match
-   * is within that row's cells. Undefined/empty means no active search. */
-  highlightQuery?: string;
+  /** The active search box query and/or committed search tags — only
+   * ever set on rows the search has already matched, so this just
+   * highlights *where* the match is within that row's cells. An array
+   * highlights every term (the live search box text plus every
+   * committed tag) at once, so a row matched by several different tags
+   * shows all of them. Undefined/empty means no active search. */
+  highlightQuery?: string | string[];
   /** Raw stored value of this row's `contact`-type column (whichever one,
    * if any — see getColumnByType), for the next-action-date cell's "who to
    * call" picker. Only read by the `date` branch when `column.isNextActionDate`. */
@@ -601,6 +604,18 @@ function DataCellImpl({
 // called onToggleDatePopover, but this comparator had no idea that
 // mattered, so React skipped re-rendering the cell and the popover never
 // actually appeared.
+// highlightQuery can now be an array (the live search text plus every
+// committed search tag — see TableView's searchTags) — TableView passes
+// a fresh array literal on every render, so comparing by `===` would
+// never consider two equivalent arrays equal and this memo would stop
+// doing anything for every row once any tag existed. Joined into a
+// single string with a separator that can't appear in a real query
+// (search terms are plain user text) so the comparison stays a cheap
+// primitive `===` either way.
+function highlightKey(v: string | string[] | undefined): string {
+  return Array.isArray(v) ? v.join('\u0000') : (v ?? '');
+}
+
 export const DataCell = memo(DataCellImpl, (prev, next) => {
   return (
     prev.row === next.row &&
@@ -608,7 +623,7 @@ export const DataCell = memo(DataCellImpl, (prev, next) => {
     prev.selected === next.selected &&
     prev.editable === next.editable &&
     prev.inRange === next.inRange &&
-    prev.highlightQuery === next.highlightQuery &&
+    highlightKey(prev.highlightQuery) === highlightKey(next.highlightQuery) &&
     prev.activeDatePopover === next.activeDatePopover &&
     prev.contactsRaw === next.contactsRaw
   );

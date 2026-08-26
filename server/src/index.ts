@@ -2326,7 +2326,20 @@ if (!getCompanyIntegrations(ownerCompanyId)) {
     openaiApiKey: process.env.OPENAI_API_KEY,
     anthropicApiKey: process.env.ANTHROPIC_API_KEY,
     elevenlabsApiKey: process.env.ELEVENLABS_API_KEY,
-    linkedinCdpUrl: process.env.LINKEDIN_CDP_URL,
+    // A real, reported gap: LINKEDIN_CDP_URL is normally left UNSET on
+    // purpose — CLAUDE.md's own Commands section says it "only needs
+    // setting if you're not using the 9222 default," which is the common
+    // case — but linkedin/browser.ts's own CDP_URL constant falls back to
+    // 'http://127.0.0.1:9222' when the env var is absent, so "unset"
+    // there means "use the default," not "not configured." This seed
+    // copied process.env.LINKEDIN_CDP_URL literally, so a company running
+    // on the implicit default seeded a `null` linkedin_cdp_url — and
+    // computeAvailableFeatures (accounts/db.ts) correctly-per-its-own-
+    // logic then hid the LinkedIn tab entirely, even though the feature
+    // was actually working. Matching browser.ts's own fallback here means
+    // the seed reflects what's actually running, not just what happens to
+    // be an explicit env var.
+    linkedinCdpUrl: process.env.LINKEDIN_CDP_URL || 'http://127.0.0.1:9222',
   });
 }
 

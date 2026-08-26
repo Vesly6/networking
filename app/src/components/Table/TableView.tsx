@@ -75,6 +75,35 @@ interface CellPos {
 // phone-containing cell in the table.
 const MIN_PHONE_SEARCH_DIGITS = 4;
 
+/** True when any cell in `row` matches `query` — the single-term test
+ * both the live search box and every committed search tag (see
+ * searchTags) run through, AND'd together across however many terms are
+ * currently active (filteredSortedRows below). Pulled out as its own
+ * function specifically so it's the same logic either way — there's no
+ * real difference between "the text you're still typing" and "a term you
+ * already pressed Enter on," they're just two different UI states of the
+ * same underlying filter. */
+function rowMatchesTextQuery(row: Row, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  // Phone numbers get typed/stored in wildly different formats
+  // ("+370 640 11013" vs "37064011013" vs a bare "64011013") — a plain
+  // substring match on the raw text misses all but an exact match.
+  // Comparing digits-only (in addition to, not instead of, the normal
+  // text match) lets any of those find the same cell. Gated to queries
+  // with at least a handful of digits so short numeric searches (a year,
+  // a single digit) don't start matching every phone-containing cell.
+  const qDigits = normalizePhoneDigits(query);
+  const phoneSearchActive = qDigits.length >= MIN_PHONE_SEARCH_DIGITS;
+  return Object.values(row.cells).some((v) => {
+    if (!v) return false;
+    if (v.toLowerCase().includes(q)) return true;
+    if (!phoneSearchActive) return false;
+    const vDigits = normalizePhoneDigits(v);
+    return vDigits.length > 0 && vDigits.includes(qDigits);
+  });
+}
+
 /** The fill handle only ever extends along a single axis — same as
  * Excel's own: whichever of row/column has the larger displacement from
  * the source cell wins, and the other axis is ignored (a mostly-diagonal
@@ -135,12 +164,14 @@ function indexAtOffset(ranges: { start: number; end: number }[], offset: number,
 // potentially against rows that no longer exist, is a fair bit more
 // machinery for less payoff than what's actually reported as "resetting
 // to some default."
-function loadPersistedViewState(tableId: string | null): { search: string; numericFilters: Record<string, NumericRangeFilter> } {
-  if (!tableId) return { search: '', numericFilters: {} };
+function loadPersistedViewState(
+  tableId: string | null,
+): { search: string; numericFilters: Record<string, NumericRangeFilter>; searchTags: string[] } {
+  if (!tableId) return { search: '', numericFilters: {}, searchTags: [] };
   try {
     const raw = localStorage.getItem(`${TABLE_VIEW_STATE_KEY_PREFIX}${tableId}`);
-    if (!raw) return { search: '', numericFilters: {} };
-    const parsed = JSON.parse(raw) as { search?: unknown; numericFilters?: unknown };
+    if (!raw) return { search: '', numericFilters: {}, searchTags: [] };
+    const parsed = JSON.parse(raw) as { search?: unknown; numericFilters?: unknown; searchTags?: unknown };
     const search = typeof parsed.search === 'string' ? parsed.search : '';
     // Added after numericFilters (the per-column range-filter popover)
     // shipped — a real, reported gap: the search box already survived a
@@ -154,16 +185,27 @@ function loadPersistedViewState(tableId: string | null): { search: string; numer
       parsed.numericFilters && typeof parsed.numericFilters === 'object' && !Array.isArray(parsed.numericFilters)
         ? (parsed.numericFilters as Record<string, NumericRangeFilter>)
         : {};
-    return { search, numericFilters };
+    // Committed search tags (the "type a word, press Enter, it sticks as
+    // a chip" filtering — see the search-input onKeyDown below) — on
+    // explicit request: working through one niche/segment over several
+    // days needs the filter to genuinely survive a reload, the same way
+    // numericFilters above already had to.
+    const searchTags = Array.isArray(parsed.searchTags) ? parsed.searchTags.filter((t): t is string => typeof t === 'string') : [];
+    return { search, numericFilters, searchTags };
   } catch {
-    return { search: '', numericFilters: {} };
+    return { search: '', numericFilters: {}, searchTags: [] };
   }
 }
 
-function saveViewState(tableId: string | null, search: string, numericFilters: Record<string, NumericRangeFilter>) {
+function saveViewState(
+  tableId: string | null,
+  search: string,
+  numericFilters: Record<string, NumericRangeFilter>,
+  searchTags: string[],
+) {
   if (!tableId) return;
   try {
-    localStorage.setItem(`${TABLE_VIEW_STATE_KEY_PREFIX}${tableId}`, JSON.stringify({ search, numericFilters }));
+    localStorage.setItem(`${TABLE_VIEW_STATE_KEY_PREFIX}${tableId}`, JSON.stringify({ search, numericFilters, searchTags }));
   } catch {
     // localStorage can throw (quota exceeded, private-browsing
     // restrictions) — persistence here is a nice-to-have, not required
@@ -254,9 +296,19 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
   const [numericFilters, setNumericFilters] = useState<Record<string, NumericRangeFilter>>(
     () => loadPersistedViewState(tableId).numericFilters,
   );
+  // Committed search-box tags — on explicit request: typing a word and
+  // pressing Enter "locks it in" as a chip (narrowing the visible rows
+  // to those matching it), the box clears for the next word, and every
+  // committed tag stays applied together (AND — a row must match all of
+  // them) until removed individually or the table is left. The live
+  // (not-yet-committed) `search` text above still applies too, on top of
+  // whatever tags are already committed, so typing the next term keeps
+  // giving live feedback before you commit it. See the search-input
+  // onKeyDown below for where a tag actually gets added.
+  const [searchTags, setSearchTags] = useState<string[]>(() => loadPersistedViewState(tableId).searchTags);
   useEffect(() => {
-    saveViewState(tableId, search, numericFilters);
-  }, [tableId, search, numericFilters]);
+    saveViewState(tableId, search, numericFilters, searchTags);
+  }, [tableId, search, numericFilters, searchTags]);
   // Memory for "which direction did the last click on this same column
   // use" — purely so a second click on the same header flips asc -> desc,
   // same as before. Deliberately a ref, not state: nothing should
@@ -558,27 +610,14 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
     // untouched (still in `rows`, still in CSV export, which reads `rows`
     // directly rather than this memo).
     let visible = rows.filter((r) => !r.hidden);
-    if (search.trim()) {
-      const q = search.trim().toLowerCase();
-      // Phone numbers get typed/stored in wildly different formats
-      // ("+370 640 11013" vs "37064011013" vs a bare "64011013") — a plain
-      // substring match on the raw text misses all but an exact match.
-      // Comparing digits-only (in addition to, not instead of, the normal
-      // text match) lets any of those find the same cell. Gated to queries
-      // with at least a handful of digits so short numeric searches (a
-      // year, a single digit) don't start matching every phone-containing
-      // cell in the table.
-      const qDigits = normalizePhoneDigits(search);
-      const phoneSearchActive = qDigits.length >= MIN_PHONE_SEARCH_DIGITS;
-      visible = visible.filter((row) =>
-        Object.values(row.cells).some((v) => {
-          if (!v) return false;
-          if (v.toLowerCase().includes(q)) return true;
-          if (!phoneSearchActive) return false;
-          const vDigits = normalizePhoneDigits(v);
-          return vDigits.length > 0 && vDigits.includes(qDigits);
-        }),
-      );
+    // Every committed search tag plus whatever's still live in the search
+    // box, AND'd together — a row has to match ALL of them (see
+    // searchTags' own doc comment above for why AND, not OR: this is
+    // meant for progressively narrowing down into one niche/segment, not
+    // broadening across several at once).
+    const activeQueries = [...searchTags, search].filter((q) => q.trim());
+    if (activeQueries.length > 0) {
+      visible = visible.filter((row) => activeQueries.every((q) => rowMatchesTextQuery(row, q)));
     }
     // Additive alongside search/sort, not a replacement for either — see
     // NumericRangeFilterPopover's own doc comment for why this exists
@@ -591,7 +630,14 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
       visible = visible.filter((row) => activeFilterEntries.every(([columnId, filter]) => matchesNumericRange(row.cells[columnId] ?? '', filter)));
     }
     return visible;
-  }, [rows, search, numericFilters]);
+  }, [rows, search, searchTags, numericFilters]);
+
+  // Every currently-active text query (committed tags + whatever's still
+  // being typed), for DataCell's highlightQuery — same list
+  // filteredSortedRows above filters by, just handed to cells as an array
+  // so a row matched by several different tags shows all of them
+  // highlighted, not just the live search box text.
+  const activeHighlightQueries = useMemo(() => [...searchTags, search].filter((q) => q.trim()), [searchTags, search]);
 
   // Kept in sync on every render (not just inside effects) so rAF/timeout
   // callbacks elsewhere in this file (handleAddRow, the focusRowId effect)
@@ -2181,12 +2227,25 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
           ref={searchInputRef}
           className="search-input"
           type="search"
-          placeholder="Ieškoti visoje lentelėje… (Ctrl/Cmd+F)"
+          placeholder={searchTags.length > 0 ? 'Pridėti dar vieną žymą (Enter)…' : 'Ieškoti visoje lentelėje… (Ctrl/Cmd+F, Enter — pridėti žymą)'}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           onFocus={() => setSearchFocused(true)}
           onBlur={() => setSearchFocused(false)}
           onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              const trimmed = search.trim();
+              if (!trimmed) return;
+              // Case-insensitive de-dupe — pressing Enter twice on the
+              // same word (or retyping one that's already a tag) just
+              // clears the box back to "still filtering by that one"
+              // rather than adding a pointless duplicate chip.
+              if (!searchTags.some((t) => t.toLowerCase() === trimmed.toLowerCase())) {
+                setSearchTags((prev) => [...prev, trimmed]);
+              }
+              setSearch('');
+              return;
+            }
             if (e.key === 'Escape') e.currentTarget.blur();
           }}
         />
@@ -2365,6 +2424,27 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
           />
         )}
       </div>
+
+      {searchTags.length > 0 && (
+        <div className="search-tags-row">
+          {searchTags.map((tag) => (
+            <span key={tag} className="search-tag">
+              {tag}
+              <button
+                type="button"
+                className="search-tag-remove"
+                title="Pašalinti šią žymą"
+                onClick={() => setSearchTags((prev) => prev.filter((t) => t !== tag))}
+              >
+                ×
+              </button>
+            </span>
+          ))}
+          <button type="button" className="search-tags-clear" onClick={() => setSearchTags([])}>
+            Išvalyti visas
+          </button>
+        </div>
+      )}
 
       <FormulaBar selection={selection} columns={columns} rows={rows} />
 
@@ -2646,7 +2726,7 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
                         onExtend={(e) => handleCellMouseEnter(index, colIndex, e)}
                         onContextMenu={(e) => handleCellContextMenu(e, index, colIndex)}
                         onOpenEditor={(anchor) => openCellEditor(row.id, col.id, anchor)}
-                        highlightQuery={search.trim() || undefined}
+                        highlightQuery={activeHighlightQueries}
                         contactsRaw={contactColumn ? row.cells[contactColumn.id] : undefined}
                         activeDatePopover={
                           dateCellPopover && dateCellPopover.rowId === row.id && dateCellPopover.columnId === col.id

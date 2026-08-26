@@ -77,11 +77,23 @@ export function LinkedInView() {
   const [draft, setDraft] = useState<SettingsDraft | null>(null);
   const [subTab, setSubTab] = useState<SubTab>('campaigns');
 
+  // refreshStatus() deliberately does NOT run here — a real, reported
+  // problem: this component is mounted unconditionally the moment any
+  // table is open (App.tsx's own tab-panel comment explains why — it's
+  // account-level, not scoped to a specific table, same as Search), so
+  // auto-firing a status check on every mount meant checking LinkedIn
+  // connectivity — which calls getLinkedInPage() (browser.ts), opening a
+  // new Chrome tab/navigating to linkedin.com when none is already open —
+  // fired every single time the user opened or switched tables, making
+  // the automation Chrome window visibly pop up/activate with no action
+  // on the user's part. refreshActions/refreshSafety are plain DB-backed
+  // reads (no Chrome involved) and stay automatic; status is now only
+  // ever checked by the existing "↻ Atnaujinti" button below, which was
+  // already there but redundant while this ran on every mount anyway.
   useEffect(() => {
-    void refreshStatus();
     void refreshActions();
     void refreshSafety();
-  }, [refreshStatus, refreshActions, refreshSafety]);
+  }, [refreshActions, refreshSafety]);
 
   // Only seeds the draft the first time settings arrive (or after a save
   // resets it below) — an in-progress edit shouldn't get silently
@@ -181,7 +193,17 @@ export function LinkedInView() {
         <h2>LinkedIn</h2>
         <div className="linkedin-status-row">
           <span className={`linkedin-status linkedin-status-${status?.status ?? 'not_connected'}`}>
-            {statusLoading ? '⏳ Tikrinama…' : STATUS_LABEL[status?.status ?? 'not_connected']}
+            {statusLoading
+              ? '⏳ Tikrinama…'
+              : // `status === null` means "never checked this session" (see
+                // this file's own mount-effect comment for why that check
+                // is no longer automatic) — worth its own honest label
+                // rather than reusing not_connected's wording, which would
+                // otherwise read as "the connection is broken" when really
+                // nothing has looked yet.
+                status
+                ? STATUS_LABEL[status.status]
+                : '— Nepatikrinta'}
           </span>
           <button type="button" onClick={() => void refreshStatus()} disabled={statusLoading}>
             ↻ Atnaujinti
