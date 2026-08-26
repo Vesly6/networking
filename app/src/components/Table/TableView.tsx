@@ -2718,6 +2718,32 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
           const rowContactColumn = getColumnByType(columns, 'contact');
           const rowContactsRaw = rowContactColumn ? row.cells[rowContactColumn.id] : undefined;
           const statusColumn = columns.find((c) => c.isStatusColumn);
+          // Every mutation below reads the cell's value FRESH from the
+          // store at call time rather than closing over the `rawValue`
+          // computed above — a real, reported bug: ApolloContactSearchModal's
+          // "+ Pridėti" adds a contact via onAddContact, and when Apollo's
+          // phone number comes back *synchronously* in the very same
+          // response (a real, common fast path — see that component's own
+          // doc comment), it immediately calls onUpdateContact right after,
+          // in the same synchronous stretch of code, before React has
+          // re-rendered this component with a fresh `rawValue` that
+          // actually includes the contact just added. onUpdateContact's
+          // read-modify-write then ran against the *pre-add* rawValue,
+          // whose parsed contact array had no entry with the new id at
+          // all — updateContact()'s `.map()` silently no-ops (no matching
+          // id), and re-serializing that pre-add array back into the cell
+          // overwrote the just-added contact right out of it. Confirmed
+          // live: "+ Pridėti" on a person Apollo already had a phone
+          // number on file for reliably added-then-immediately-erased the
+          // contact; the async "poll for it later" path was fine, since by
+          // the time that resolves there's always been a re-render in
+          // between. Reading straight from useTableStore.getState() — the
+          // same fix addApolloToTable.ts's own addPerson() already uses
+          // for exactly this reason — makes every one of these callbacks
+          // always act on the row's current, real value regardless of
+          // whether this component has re-rendered since the cell last
+          // changed.
+          const currentCellValue = () => useTableStore.getState().rows.find((r) => r.id === row.id)?.cells[column.id] ?? '';
           return (
             <CellHoverEditor
               anchor={expandedCell.anchor}
@@ -2727,14 +2753,14 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
               contactsRaw={rowContactsRaw}
               statusOptionColors={statusColumn?.optionColors}
               highlightEntryId={highlightContactId}
-              onAddNoteEntry={(text) => updateCell(row.id, column.id, addNoteEntry(rawValue, text, currentUserName))}
-              onUpdateNoteEntry={(id, text) => updateCell(row.id, column.id, updateNoteEntry(rawValue, id, text))}
-              onRemoveNoteEntry={(id) => updateCell(row.id, column.id, removeNoteEntry(rawValue, id))}
-              onAddContact={(text, id) => updateCell(row.id, column.id, addContact(rawValue, text, id))}
-              onUpdateContact={(id, text) => updateCell(row.id, column.id, updateContact(rawValue, id, text))}
-              onRemoveContact={(id) => updateCell(row.id, column.id, removeContact(rawValue, id))}
+              onAddNoteEntry={(text) => updateCell(row.id, column.id, addNoteEntry(currentCellValue(), text, currentUserName))}
+              onUpdateNoteEntry={(id, text) => updateCell(row.id, column.id, updateNoteEntry(currentCellValue(), id, text))}
+              onRemoveNoteEntry={(id) => updateCell(row.id, column.id, removeNoteEntry(currentCellValue(), id))}
+              onAddContact={(text, id) => updateCell(row.id, column.id, addContact(currentCellValue(), text, id))}
+              onUpdateContact={(id, text) => updateCell(row.id, column.id, updateContact(currentCellValue(), id, text))}
+              onRemoveContact={(id) => updateCell(row.id, column.id, removeContact(currentCellValue(), id))}
               onSetContactSocialNotFound={(id, platform) =>
-                updateCell(row.id, column.id, markSocialLookupNotFound(rawValue, id, platform))
+                updateCell(row.id, column.id, markSocialLookupNotFound(currentCellValue(), id, platform))
               }
               onClose={() => {
                 setExpandedCell(null);
