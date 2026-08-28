@@ -18,7 +18,7 @@ import {
   recordMessageSent,
   setPaused,
 } from './safety.js';
-import { sendConnectionRequest, sendMessage, withdrawConnectionRequest } from './page.js';
+import { sendConnectionRequest, sendMessage, withdrawConnectionRequest, ALREADY_CONNECTED_ERROR } from './page.js';
 
 const DAY_MS = 86_400_000;
 
@@ -49,9 +49,14 @@ function isCircuitBreakerCondition(err: unknown): boolean {
  * error" — see findDueActions()'s use of this below for why a false
  * positive here (treating a different failure as terminal) is worse than a
  * false negative (retrying a genuinely-terminal one a few more times before
- * it's noticed). */
+ * it's noticed). Also matches page.ts's ALREADY_CONNECTED_ERROR — the
+ * "Remove Connection" seen inside the "···" More menu — the same terminal
+ * "already connected" outcome, just detected a different way. */
 function isNoConnectButtonError(detail: string | null): boolean {
-  return detail === 'No "Connect" button found on this profile — may already be connected/pending, or the page layout changed.';
+  return (
+    detail === 'No "Connect" button found on this profile — may already be connected/pending, or the page layout changed.' ||
+    detail === ALREADY_CONNECTED_ERROR
+  );
 }
 
 export interface DueAction {
