@@ -5,18 +5,22 @@ import { confirmDeleteTable } from '../../utils/confirmDeleteTable';
 import { countRowsForTable } from '../../db/db';
 import { BrandLogo } from '../BrandLogo';
 import { ThemeToggle } from '../ThemeToggle';
+import { Package } from 'lucide-react';
 
 interface WorkspaceViewProps {
   onOpenTable: (id: string) => void;
-  /** Threaded from App.tsx — "Darbuotojai"/"API raktai" are only reachable
-   * from this screen (moved out of the in-table nav — see AppScreen's own
-   * doc comment in App.tsx for the layout bug that motivated this: both
-   * screens used to render underneath SheetTabs' fixed bottom bar, which
-   * visually overlapped their own scrolled content). Omitted entirely for
-   * workers (see canManageTables below — same role gate). */
+  /** Threaded from App.tsx — "Darbuotojai" is only reachable from this
+   * screen (moved out of the in-table nav — see AppScreen's own doc
+   * comment in App.tsx for the layout bug that motivated this: the screen
+   * used to render underneath SheetTabs' fixed bottom bar, which visually
+   * overlapped its own scrolled content). Omitted entirely for workers
+   * (see canManageTables below — same role gate) and whenever the
+   * super-admin has hidden the 'workers' feature for this company. There
+   * is no self-service "API raktai" entry point anymore at all — every
+   * company's keys are managed exclusively through the independent
+   * /supersuperadmin dashboard now. */
   onOpenWorkers?: () => void;
-  onOpenIntegrations?: () => void;
-  /** "Naujienos" — unlike Workers/Integrations this isn't an admin-only
+  /** "Naujienos" — unlike Workers this isn't an admin-only
    * screen (no secrets, nothing to manage that affects other users), so
    * it's shown to every user including workers whenever the company has
    * it configured (App.tsx gates the prop itself on
@@ -33,13 +37,25 @@ interface WorkspaceViewProps {
    * worker whose visibleTabs excludes lessons doesn't gain access to it
    * just because this second entry point exists. */
   onOpenLessons?: () => void;
+  /** A company's own view of their flagged tables' daily backups
+   * (OwnBackupsView) — same role gate as onOpenWorkers (canManageTables:
+   * not a worker), since deciding what gets backed up/restored is
+   * workspace-level management, not a per-table content edit. */
+  onOpenBackups?: () => void;
 }
 
-export function WorkspaceView({ onOpenTable, onOpenWorkers, onOpenIntegrations, onOpenNews, onOpenLessons }: WorkspaceViewProps) {
+export function WorkspaceView({
+  onOpenTable,
+  onOpenWorkers,
+  onOpenNews,
+  onOpenLessons,
+  onOpenBackups,
+}: WorkspaceViewProps) {
   const tables = useWorkspaceStore((s) => s.tables);
   const createTable = useWorkspaceStore((s) => s.createTable);
   const renameTable = useWorkspaceStore((s) => s.renameTable);
   const deleteTable = useWorkspaceStore((s) => s.deleteTable);
+  const setTableBackupFlag = useWorkspaceStore((s) => s.setTableBackupFlag);
   const logout = useAuthStore((s) => s.logout);
   const currentUser = useAuthStore((s) => s.user);
   // A real, reported gap: this screen never checked role/permissions at
@@ -94,11 +110,6 @@ export function WorkspaceView({ onOpenTable, onOpenWorkers, onOpenIntegrations, 
               Darbuotojai
             </button>
           )}
-          {canManageTables && onOpenIntegrations && (
-            <button type="button" onClick={onOpenIntegrations}>
-              API raktai
-            </button>
-          )}
           {onOpenNews && (
             <button type="button" onClick={onOpenNews}>
               Naujienos
@@ -107,6 +118,11 @@ export function WorkspaceView({ onOpenTable, onOpenWorkers, onOpenIntegrations, 
           {onOpenLessons && (
             <button type="button" onClick={onOpenLessons}>
               Pamokos
+            </button>
+          )}
+          {onOpenBackups && (
+            <button type="button" onClick={onOpenBackups}>
+              Duomenys
             </button>
           )}
           {canManageTables && (
@@ -148,6 +164,17 @@ export function WorkspaceView({ onOpenTable, onOpenWorkers, onOpenIntegrations, 
               <div className="table-card-meta">Eilučių: {rowCounts[t.id] ?? '…'}</div>
               {canManageTables && (
                 <div className="table-card-actions">
+                  <button
+                    type="button"
+                    className={`table-card-backup-toggle ${t.dailyBackupEnabled ? 'active' : ''}`}
+                    title={t.dailyBackupEnabled ? 'Kasdienė kopija įjungta — spauskite, kad išjungtumėte' : 'Įjungti kasdienę kopiją'}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setTableBackupFlag(t.id, !t.dailyBackupEnabled);
+                    }}
+                  >
+                    <Package className="icon" size={14} />
+                  </button>
                   <button
                     type="button"
                     onClick={(e) => {

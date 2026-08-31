@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { localApiRequest } from '../utils/localApi';
 import { getAuthToken, setAuthToken, setUnauthorizedHandler } from '../utils/authToken';
 
-export type Role = 'owner' | 'super_admin' | 'worker';
+export type Role = 'super_admin' | 'worker';
 
 export interface UserPermissions {
   canDeleteRows: boolean;
@@ -36,9 +36,9 @@ export interface AuthUser {
   firstName: string;
   lastName: string;
   role: Role;
-  /** null for owner/super_admin — they always see every tab their
-   * company's enabledFeatures has; only a worker's tab set is ever
-   * restricted further. See App.tsx's tab-bar filtering. */
+  /** null for super_admin — they always see every tab their company's
+   * enabledFeatures has; only a worker's tab set is ever restricted
+   * further. See App.tsx's tab-bar filtering. */
   visibleTabs: string[] | null;
   permissions: UserPermissions;
   company: { id: string; name: string; enabledFeatures: string[] } | null;

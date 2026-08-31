@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import { useIntegrationsStore, NON_SECRET_INTEGRATION_FIELDS, type IntegrationField } from '../../store/useIntegrationsStore';
 import { useToastStore } from '../../store/useToastStore';
 import { confirmDialog } from '../../store/useConfirmStore';
-import { Check, X, Save } from 'lucide-react';
+import { LOCAL_API_BASE } from '../../utils/localApi';
+import { Check, X, Save, Copy } from 'lucide-react';
 
 interface FieldDef {
   field: IntegrationField;
@@ -25,7 +26,7 @@ interface GroupDef {
 const GROUPS: GroupDef[] = [
   {
     title: 'Zadarma (Skambučiai)',
-    hint: 'Raktas ir paslaptis abu būtini — skiltis „Skambučiai" atsiranda tik kai užpildyti abu laukai.',
+    hint: 'Raktas ir paslaptis abu būtini, kad skiltis „Skambučiai" realiai veiktų — įjunkite ją atskirai skiltyje „Funkcijos".',
     fields: [
       { field: 'zadarmaApiKey', label: 'API raktas' },
       { field: 'zadarmaApiSecret', label: 'API paslaptis' },
@@ -42,7 +43,7 @@ const GROUPS: GroupDef[] = [
   },
   {
     title: 'Serper',
-    hint: 'Papildo skiltį „Paieška" — pati skiltis atsiranda nuo Apollo rakto, šis tik praplečia jos galimybes.',
+    hint: 'Papildo skiltį „Paieška" (Apollo raktas) ir gali savarankiškai įjungti skiltį „Naujienos" (žr. „Funkcijos").',
     fields: [{ field: 'serperApiKey', label: 'API raktas' }],
   },
   {
@@ -68,17 +69,29 @@ const GROUPS: GroupDef[] = [
 
 const NON_SECRET = new Set<IntegrationField>(NON_SECRET_INTEGRATION_FIELDS);
 
-/** Self-service "API raktai" screen — a company's own super-admin (or the
- * owner, for their own company) pastes in whichever integrations they
- * actually use. Replaces the earlier owner-only "Įmonės" cross-tenant
- * panel: a tab's visibility is now computed server-side from which keys
- * THIS company has configured (see accounts/db.ts's
- * computeAvailableFeatures), not something set on another company's
- * behalf — so there's nothing left to toggle here beyond the keys
- * themselves. Reachable both from the Workspace screen (App.tsx, before
- * any table exists) and from inside an open table's nav (next to
- * "Darbuotojai") — same super_admin/owner gate as both entry points. */
-export function IntegrationsView() {
+interface IntegrationsViewProps {
+  /** Required — this only ever renders from the independent super-admin
+   * dashboard now, managing one specific company at a time. There is no
+   * self-service "manage my own company's keys" usage anymore (removed on
+   * explicit request — see the doc comment below). */
+  companyId: string;
+}
+
+/** Super-admin only, entirely — no company account of any role sees "API
+ * raktai" self-service anymore (on explicit request: previously any
+ * super-admin pasted in their own company's keys and a tab appeared
+ * automatically — see accounts/db.ts's now-removed
+ * computeAvailableFeatures; later, briefly, an "owner" role had its own
+ * quick path to just their own company's keys — that's gone too, on
+ * request that the super-admin identity be fully independent of any
+ * regular company login). Every company's integrations, including what
+ * used to be "the owner's own," are now managed exclusively through this
+ * one screen, reached only via the independent /supersuperadmin
+ * dashboard. Which tabs a configured key actually unlocks is a *separate*,
+ * explicit choice in the Admin dashboard's own Funkcijos panel
+ * (updateCompanyFeatures) — configuring a key here never makes a tab
+ * auto-appear on its own. */
+export function IntegrationsView({ companyId }: IntegrationsViewProps) {
   const status = useIntegrationsStore((s) => s.status);
   const loading = useIntegrationsStore((s) => s.loading);
   const saving = useIntegrationsStore((s) => s.saving);
@@ -89,10 +102,17 @@ export function IntegrationsView() {
   const showToast = useToastStore((s) => s.show);
 
   const [draft, setDraft] = useState<Partial<Record<IntegrationField, string>>>({});
+  // Per-company webhook URL — see server/src/index.ts's POST
+  // /api/instantly/webhook/:companyId doc comment.
+  const instantlyWebhookUrl = `${LOCAL_API_BASE}/api/instantly/webhook/${companyId}`;
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    void load(companyId);
+    // Re-load whenever the owner switches which company they're viewing
+    // in the Admin dashboard — companyId is the one prop that can
+    // actually change across this component's lifetime (the no-arg
+    // "manage my own" usage never changes it at all).
+  }, [load, companyId]);
 
   useEffect(() => {
     if (error) showToast(error);
@@ -126,7 +146,7 @@ export function IntegrationsView() {
       return;
     }
     try {
-      await save(patch);
+      await save(patch, companyId);
       setDraft((prev) => {
         const next = { ...prev };
         for (const field of Object.keys(patch) as IntegrationField[]) {
@@ -147,7 +167,7 @@ export function IntegrationsView() {
     });
     if (!ok) return;
     try {
-      await clear(field);
+      await clear(field, companyId);
       setDraft((prev) => {
         const next = { ...prev };
         delete next[field];
@@ -170,8 +190,8 @@ export function IntegrationsView() {
   return (
     <div className="integrations-view">
       <p className="integrations-intro">
-        Kiekviena skiltis (Skambučiai, Paštas, Paieška, El. laiškų generatorius ir t. t.) atsiranda automatiškai, kai čia įvedamas jai
-        reikalingas raktas — atskirai jos įjungti nereikia.
+        Čia įvedami tik patys API raktai — kurios skiltys (Skambučiai, Paštas, Paieška ir t. t.) klientui matomos, nustatoma atskirai
+        skiltyje „Funkcijos".
       </p>
 
       {GROUPS.map((group) => (
@@ -210,6 +230,31 @@ export function IntegrationsView() {
               );
             })}
           </div>
+          {group.title === 'Instantly (Paštas)' && (
+            <div className="integrations-webhook-info">
+              <p className="integrations-hint">
+                Kad atsakymai patys atsirastų „Visi atsakymai" lentelėje (be rankinio paspaudimo Paštas skiltyje): šios įmonės
+                Instantly paskyroje → Integrations → Add Webhook → Event: Reply received → Campaigns: All → įklijuokite šią
+                nuorodą. Reikalingas Instantly Hyper Growth (ar aukštesnis) planas. Kiekvienai įmonei — sava, atskira nuoroda.
+              </p>
+              <div className="integrations-webhook-url-row">
+                <code>{instantlyWebhookUrl}</code>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(instantlyWebhookUrl);
+                      showToast('Nuoroda nukopijuota');
+                    } catch {
+                      showToast('Nepavyko nukopijuoti — nėra prieigos prie iškarpinės');
+                    }
+                  }}
+                >
+                  <Copy className="icon" size={14} /> Kopijuoti
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       ))}
 

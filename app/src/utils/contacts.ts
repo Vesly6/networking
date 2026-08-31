@@ -70,6 +70,40 @@ export function addContact(raw: string, text: string, id: string = randomUUID())
   return serializeContacts([...existing, { id, text: trimmed }]);
 }
 
+/** Batch version of addContact() for MergeContactsModal.tsx — appends
+ * several entries in one parse/serialize pass (avoids re-parsing the JSON
+ * array once per entry) and skips any incoming entry whose email already
+ * exists among the row's current contacts, so re-running the same merge
+ * (or two overlapping ones) doesn't pile up duplicate people. Matches by
+ * email specifically (not name) since it's the one field both a hand-typed
+ * contact and a CSV-derived one are likely to have written identically —
+ * a name has too many formatting variants to compare reliably. An entry
+ * with no detectable email is never treated as a duplicate of anything. */
+export function addContactsDedupByEmail(raw: string, newEntryTexts: string[]): { raw: string; added: number; skipped: number } {
+  const existing = parseContacts(raw);
+  const existingEmails = new Set(
+    existing
+      .map((e) => splitContactDisplayFields(e.text).find((f) => f.kind === 'email')?.value.toLowerCase())
+      .filter((v): v is string => !!v),
+  );
+  let added = 0;
+  let skipped = 0;
+  const toAdd: ContactEntry[] = [];
+  for (const text of newEntryTexts) {
+    const trimmed = text.trim();
+    if (!trimmed) continue;
+    const email = splitContactDisplayFields(trimmed).find((f) => f.kind === 'email')?.value.toLowerCase();
+    if (email && existingEmails.has(email)) {
+      skipped++;
+      continue;
+    }
+    if (email) existingEmails.add(email);
+    toAdd.push({ id: randomUUID(), text: trimmed });
+    added++;
+  }
+  return { raw: serializeContacts([...existing, ...toAdd]), added, skipped };
+}
+
 export function removeContact(raw: string, id: string): string {
   return serializeContacts(parseContacts(raw).filter((c) => c.id !== id));
 }

@@ -30,6 +30,12 @@ export interface TableMeta {
   id: string;
   name: string;
   columns: Column[];
+  /** The Workspace screen's per-table daily-backup toggle (Package icon) — see
+   * server/src/tableData/db.ts's own doc comment on why this is explicit
+   * opt-in, not automatic for every table. Optional purely because older
+   * cached/local shapes may not carry it; the server always sends a real
+   * boolean. */
+  dailyBackupEnabled?: boolean;
   createdAt: number;
   updatedAt: number;
 }

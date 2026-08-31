@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useAuthStore, type UserPermissions } from '../../store/useAuthStore';
+import type { UserPermissions } from '../../store/useAuthStore';
 import { useWorkersStore, type Worker, type WorkerActionLogEntry, type WorkerActionType } from '../../store/useWorkersStore';
 import { useToastStore } from '../../store/useToastStore';
 import { typeToConfirmDialog } from '../../store/useTypeToConfirmStore';
@@ -221,18 +221,34 @@ interface WorkersViewProps {
    * worker's logged actions can reference any table they've touched, not
    * just whatever happens to be open right now), so WorkersView doesn't
    * get to reuse the plain single-table callback every other jump-to-row
-   * caller in this app uses. */
-  onJumpToRow: (tableId: string, rowId: string) => void;
-  onJumpToContact: (tableId: string, rowId: string, columnId: string, contactId: string) => void;
+   * caller in this app uses. Optional — the owner's Admin-dashboard usage
+   * (viewing another company's workers) has no jump-to-row destination
+   * (no table open at all in that context) and simply doesn't show the
+   * activity panel these power (see activityOpenId below). */
+  onJumpToRow?: (tableId: string, rowId: string) => void;
+  onJumpToContact?: (tableId: string, rowId: string, columnId: string, contactId: string) => void;
+  /** The tab chips offered in "Matomos skiltys" when creating/editing a
+   * worker — always the TARGET company's own enabledFeatures, which is
+   * why this is a required prop rather than derived internally from
+   * useAuthStore (the logged-in user's own company is only the right
+   * answer when companyId below is omitted). */
+  companyTabs: string[];
+  /** Omitted: manage the caller's own company's workers (/api/workers) —
+   * a company's own super_admin, or the owner viewing their own company.
+   * Passed (only from the owner's Admin dashboard): manage an arbitrary
+   * client's workers (/api/admin/companies/:id/workers) instead. The
+   * per-worker "Veikla" activity panel is hidden in this mode — see its
+   * own note below on why that route isn't cross-company-capable yet. */
+  companyId?: string;
 }
 
 /** Super-admin (or owner, viewing their own company) manages the workers
  * under their own company — App.tsx only ever renders this tab's nav
  * button for those two roles (see AppScreen's own doc comment there for
  * why "manage workers" isn't a Tab/enabledFeatures-gated concept the same
- * way Calls/LinkedIn/Search are). */
-export function WorkersView({ onJumpToRow, onJumpToContact }: WorkersViewProps) {
-  const user = useAuthStore((s) => s.user);
+ * way Calls/LinkedIn/Search are). Also reused, with companyId set, by the
+ * owner's Admin dashboard to manage an arbitrary client's workers. */
+export function WorkersView({ onJumpToRow, onJumpToContact, companyTabs, companyId }: WorkersViewProps) {
   const workers = useWorkersStore((s) => s.workers);
   const loading = useWorkersStore((s) => s.loading);
   const error = useWorkersStore((s) => s.error);
@@ -253,8 +269,9 @@ export function WorkersView({ onJumpToRow, onJumpToContact }: WorkersViewProps) 
   const [passwordOpenId, setPasswordOpenId] = useState<string | null>(null);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    void load(companyId);
+    // Re-load when the owner switches which company they're viewing.
+  }, [load, companyId]);
 
   useEffect(() => {
     if (error) showToast(error);
@@ -264,15 +281,16 @@ export function WorkersView({ onJumpToRow, onJumpToContact }: WorkersViewProps) 
     if (actionsError) showToast(actionsError);
   }, [actionsError, showToast]);
 
-  const companyTabs = user?.company?.enabledFeatures ?? [];
-
   const handleCreate = async (tabs: string[], permissions: UserPermissions) => {
     if (!username.trim() || !password || !firstName.trim()) {
       showToast('Užpildykite vardą, slaptažodį ir vardą');
       return;
     }
     try {
-      await create({ username: username.trim(), password, firstName: firstName.trim(), lastName: lastName.trim(), visibleTabs: tabs, permissions });
+      await create(
+        { username: username.trim(), password, firstName: firstName.trim(), lastName: lastName.trim(), visibleTabs: tabs, permissions },
+        companyId,
+      );
       setUsername('');
       setPassword('');
       setFirstName('');
@@ -286,7 +304,7 @@ export function WorkersView({ onJumpToRow, onJumpToContact }: WorkersViewProps) 
 
   const handleUpdate = async (worker: Worker, tabs: string[], permissions: UserPermissions) => {
     try {
-      await update(worker.id, { visibleTabs: tabs, permissions });
+      await update(worker.id, { visibleTabs: tabs, permissions }, companyId);
       setEditingId(null);
       showToast('Išsaugota');
     } catch (err) {
@@ -296,7 +314,7 @@ export function WorkersView({ onJumpToRow, onJumpToContact }: WorkersViewProps) 
 
   const handlePasswordChange = async (worker: Worker, password: string) => {
     try {
-      await update(worker.id, { password });
+      await update(worker.id, { password }, companyId);
       setPasswordOpenId(null);
       showToast('Slaptažodis pakeistas');
     } catch (err) {
@@ -316,7 +334,7 @@ export function WorkersView({ onJumpToRow, onJumpToContact }: WorkersViewProps) 
     });
     if (!ok) return;
     try {
-      await remove(worker.id);
+      await remove(worker.id, companyId);
       showToast('Darbuotojas ištrintas');
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Nepavyko ištrinti');
@@ -376,9 +394,16 @@ export function WorkersView({ onJumpToRow, onJumpToContact }: WorkersViewProps) 
               <span className="worker-card-username">@{worker.username}</span>
             </div>
             <div className="worker-card-actions">
-              <button type="button" onClick={() => setActivityOpenId(activityOpenId === worker.id ? null : worker.id)}>
-                {activityOpenId === worker.id ? 'Uždaryti veiklą' : 'Veikla'}
-              </button>
+              {/* Only in the "manage my own company" mode — the underlying
+                  worker-actions route isn't cross-company-capable yet (see
+                  its own scope note in useWorkersStore.ts), so there's
+                  nothing correct to show here when the owner is viewing a
+                  different company's workers. */}
+              {!companyId && (
+                <button type="button" onClick={() => setActivityOpenId(activityOpenId === worker.id ? null : worker.id)}>
+                  {activityOpenId === worker.id ? 'Uždaryti veiklą' : 'Veikla'}
+                </button>
+              )}
               <button type="button" onClick={() => setEditingId(editingId === worker.id ? null : worker.id)}>
                 {editingId === worker.id ? 'Uždaryti' : 'Redaguoti'}
               </button>
@@ -409,7 +434,7 @@ export function WorkersView({ onJumpToRow, onJumpToContact }: WorkersViewProps) 
               <span>{(worker.visibleTabs ?? []).map((t) => TAB_LABELS[t] ?? t).join(', ') || 'Nėra matomų skilčių'}</span>
             </div>
           )}
-          {activityOpenId === worker.id && (
+          {activityOpenId === worker.id && onJumpToRow && onJumpToContact && (
             <WorkerActivityPanel worker={worker} onJumpToRow={onJumpToRow} onJumpToContact={onJumpToContact} />
           )}
         </div>

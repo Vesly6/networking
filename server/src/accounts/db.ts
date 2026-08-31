@@ -12,7 +12,7 @@ const DB_PATH = dataFilePath('accounts.sqlite');
 
 let db: Database.Database | null = null;
 
-export type Role = 'owner' | 'super_admin' | 'worker';
+export type Role = 'super_admin' | 'worker';
 
 function migrate(database: Database.Database): void {
   database.exec(`
@@ -114,6 +114,23 @@ function migrate(database: Database.Database): void {
       saved_at INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS news_saved_items_by_company ON news_saved_items(company_id);
+
+    -- Platform-wide login history for the owner's Admin dashboard ("who
+    -- connected when" — insert-only, one row per successful /api/auth/login,
+    -- across every company, not scoped/filtered the way worker_actions in
+    -- tableData/db.ts is to one company's own super-admin. username/role are
+    -- denormalized (captured at login time) so this stays readable even if
+    -- the user is later renamed or deleted.
+    CREATE TABLE IF NOT EXISTS login_log (
+      id TEXT PRIMARY KEY,
+      company_id TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL,
+      username TEXT NOT NULL,
+      role TEXT NOT NULL,
+      logged_in_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS login_log_by_company ON login_log(company_id, logged_in_at);
+    CREATE INDEX IF NOT EXISTS login_log_by_time ON login_log(logged_in_at);
   `);
   // Additive migration for databases created before these four existed —
   // CREATE TABLE IF NOT EXISTS above is a no-op against an already-existing
@@ -206,19 +223,41 @@ export function getCompany(id: string): Company | null {
   return row ? companyFromRow(row) : null;
 }
 
-/** `enabled_features` is written here only to satisfy the column's NOT
- * NULL constraint (kept in the schema rather than dropped, to avoid a
- * DROP COLUMN migration) — it's never read again. What tabs a company
- * actually has is now *computed* from computeAvailableFeatures() below,
- * driven by which integrations that company has actually configured, not
- * a value anyone sets directly. See CompaniesView's removal and
- * IntegrationsView's addition (this session's own history) for why. */
+/** A freshly registered company starts with zero owner-granted features
+ * (just the always-on table/calendar, added by companyWithFeatures() in
+ * index.ts — never stored here) — the owner grants everything else
+ * explicitly, company by company, via the Admin dashboard's Funkcijos
+ * panel (see updateCompanyFeatures below). This is a deliberate reversal
+ * of the brief "tabs auto-derive from configured integrations" era (see
+ * updateCompanyFeatures's own doc comment) — API keys are owner-managed
+ * now too, so there's no self-service moment for a feature to "just
+ * appear" from anymore. */
 export function createCompany(name: string): Company {
   const company: Company = { id: randomUUID(), name, enabledFeatures: [], createdAt: Date.now() };
   getDb()
     .prepare(`INSERT INTO companies (id, name, enabled_features, created_at) VALUES (?, ?, '[]', ?)`)
     .run(company.id, company.name, company.createdAt);
   return company;
+}
+
+/** Owner-only — the Admin dashboard's company list (Įmonės panel). No
+ * caller needed this across every company until the Admin dashboard, so
+ * it simply didn't exist before now (confirmed via grep). */
+export function listCompanies(): Company[] {
+  const rows = getDb().prepare(`SELECT * FROM companies ORDER BY created_at ASC`).all() as CompanyRow[];
+  return rows.map(companyFromRow);
+}
+
+/** Direct, owner-set replacement for the brief "derive tabs from which
+ * integrations are configured" era (computeAvailableFeatures, removed —
+ * see index.ts's own history) — reverted on explicit request now that the
+ * owner is also the one who sets up a client's integrations, so there's
+ * no self-service moment left for a feature to auto-appear from. A blind
+ * overwrite (not read-modify-write): the Funkcijos panel always sends the
+ * complete checked set, same "whole list, not a delta" shape as
+ * updateWorker's visibleTabs. */
+export function updateCompanyFeatures(companyId: string, features: string[]): void {
+  getDb().prepare(`UPDATE companies SET enabled_features = ? WHERE id = ?`).run(JSON.stringify(features), companyId);
 }
 
 // --- Per-company integration credentials ------------------------------
@@ -361,27 +400,14 @@ export function clearCompanyIntegrationField(companyId: string, field: keyof Com
   return getCompanyIntegrations(companyId)!;
 }
 
-/** The new replacement for the old owner-managed enabled_features
- * checkbox list — a tab is available the moment the integration it needs
- * is actually configured, nothing to toggle separately. table/calendar/
- * lessons need no external API at all, so they're always on. */
-export function computeAvailableFeatures(integrations: CompanyIntegrations | null): string[] {
-  const features = ['table', 'calendar', 'lessons'];
-  if (!integrations) return features;
-  if (integrations.zadarmaApiKey && integrations.zadarmaApiSecret) features.push('calls');
-  if (integrations.instantlyApiKey) features.push('instantly');
-  if (integrations.apolloApiKey) features.push('search');
-  if (integrations.anthropicApiKey) features.push('email');
-  if (integrations.linkedinCdpUrl) features.push('linkedin');
-  // A real, intentional behavior change, not an oversight: serper_api_key
-  // previously only *augmented* the Apollo-gated 'search' tab
-  // (searchSocialProfiles' diacritic-guess-free fallback) without gating
-  // anything on its own. The News tab is what makes it independently
-  // gate a tab for the first time — a company with Serper configured but
-  // not Apollo now sees "Naujienos" where it previously saw nothing.
-  if (integrations.serperApiKey) features.push('news');
-  return features;
-}
+/** The only two tabs that can never be turned off — the core CRM itself.
+ * Everything else (including 'lessons', which used to be hardcoded
+ * always-on here too) is now a real, owner-toggleable per-company feature
+ * — see updateCompanyFeatures above and index.ts's companyWithFeatures,
+ * which merges this constant into whatever the company's own
+ * enabledFeatures list holds so an owner can never accidentally lock a
+ * company out of the app entirely by leaving both unchecked. */
+export const ALWAYS_ON_FEATURES = ['table', 'calendar'];
 // ---------------------------------------------------------------------
 
 export interface NewsTopic {
@@ -868,26 +894,78 @@ export function deleteWorker(userId: string, companyId: string): void {
   getDb().prepare(`DELETE FROM users WHERE id = ? AND company_id = ? AND role = 'worker'`).run(userId, companyId);
 }
 
+// --- Login history (owner's Admin dashboard) --------------------------
+
+export interface LoginLogEntry {
+  id: string;
+  companyId: string;
+  userId: string;
+  username: string;
+  role: Role;
+  loggedInAt: number;
+}
+
+interface LoginLogRow {
+  id: string;
+  company_id: string;
+  user_id: string;
+  username: string;
+  role: string;
+  logged_in_at: number;
+}
+
+function loginLogFromRow(r: LoginLogRow): LoginLogEntry {
+  return { id: r.id, companyId: r.company_id, userId: r.user_id, username: r.username, role: r.role as Role, loggedInAt: r.logged_in_at };
+}
+
+/** Called from POST /api/auth/login on every successful login — never on
+ * a failed attempt (this is a "who's actually using the app" history, not
+ * a security/intrusion log). */
+export function recordLogin(user: User): void {
+  getDb()
+    .prepare(`INSERT INTO login_log (id, company_id, user_id, username, role, logged_in_at) VALUES (?, ?, ?, ?, ?, ?)`)
+    .run(randomUUID(), user.companyId, user.id, user.username, user.role, Date.now());
+}
+
+/** Owner-only. `companyId` omitted = every company (the Admin dashboard's
+ * default view); passed = one company's own history, same optional-filter
+ * shape as tableData/db.ts's listWorkerActions. */
+export function listLoginLog(companyId: string | undefined, limit: number): LoginLogEntry[] {
+  const rows = companyId
+    ? (getDb().prepare(`SELECT * FROM login_log WHERE company_id = ? ORDER BY logged_in_at DESC LIMIT ?`).all(companyId, limit) as LoginLogRow[])
+    : (getDb().prepare(`SELECT * FROM login_log ORDER BY logged_in_at DESC LIMIT ?`).all(limit) as LoginLogRow[]);
+  return rows.map(loginLogFromRow);
+}
+
 /** One-time startup bootstrap — if there are no users at all yet, this is
  * either a brand-new install or the very first boot after this
  * multi-tenant model replaced the old single-shared-account one. Either
- * way, today's AUTH_USERNAME/AUTH_PASSWORD becomes the 'owner' user of a
+ * way, today's AUTH_USERNAME/AUTH_PASSWORD becomes the first user of a
  * freshly created "Company #1", which is also what the pre-existing
  * table-data.sqlite rows get backfilled onto (see tableData/db.ts's own
  * backfillCompanyId, called right after this from index.ts's startup
- * sequence) — so the owner's existing ~7,500 real rows keep working
- * exactly as before, just now formally owned by that company. Returns the
- * owner's companyId either way (freshly created, or the existing one on
- * every later boot) so the caller can always backfill/verify against it. */
-export function bootstrapOwnerIfNeeded(): { companyId: string } {
+ * sequence) — so that account's existing real rows keep working exactly as
+ * before, just now formally owned by that company. Returns that company's
+ * id either way (freshly created, or the existing first one on every later
+ * boot) so the caller can always backfill/verify against it.
+ *
+ * Renamed from bootstrapOwnerIfNeeded() — the first company's own user
+ * used to be tagged `role: 'owner'`, giving it platform-wide admin powers
+ * just by virtue of being logged into that one specific account. On
+ * explicit request, admin access is now a fully independent identity (see
+ * requireSuperAdmin in auth.ts) with no per-user role at all, so the first
+ * company's own user is a completely ordinary 'super_admin' now — this
+ * function only ever ensures a first company/account exists, nothing
+ * about admin rights. */
+export function bootstrapFirstCompanyIfNeeded(): { companyId: string } {
   if (countUsers() > 0) {
-    const owner = getDb().prepare(`SELECT * FROM users WHERE role = 'owner'`).get() as UserRow | undefined;
-    if (owner) return { companyId: owner.company_id };
+    const companies = listCompanies();
+    if (companies.length > 0) return { companyId: companies[0].id };
   }
   const username = process.env.AUTH_USERNAME;
   const password = process.env.AUTH_PASSWORD;
   if (!username || !password) {
-    throw new Error('AUTH_USERNAME/AUTH_PASSWORD are not set — check server/.env (needed for the one-time owner bootstrap)');
+    throw new Error('AUTH_USERNAME/AUTH_PASSWORD are not set — check server/.env (needed for the one-time first-company bootstrap)');
   }
   const company = createCompany('Company #1');
   createUser({
@@ -896,7 +974,19 @@ export function bootstrapOwnerIfNeeded(): { companyId: string } {
     password,
     firstName: 'Owner',
     lastName: '',
-    role: 'owner',
+    role: 'super_admin',
   });
   return { companyId: company.id };
+}
+
+/** One-time migration, run once at every startup alongside
+ * bootstrapFirstCompanyIfNeeded() above — converts any pre-existing
+ * `role = 'owner'` row (the real account this app ran with before admin
+ * access became independent of any per-user role) into an ordinary
+ * `super_admin`, in place: same id, same company, same data, same
+ * login credentials, just no longer carrying special platform-wide
+ * powers. Idempotent — after the first successful run, no row ever
+ * matches 'owner' again, so this is a plain no-op on every later boot. */
+export function demoteOwnerUsers(): void {
+  getDb().prepare(`UPDATE users SET role = 'super_admin' WHERE role = 'owner'`).run();
 }

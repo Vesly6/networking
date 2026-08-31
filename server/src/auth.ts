@@ -142,6 +142,86 @@ export function requirePermission(flag: keyof User['permissions']) {
   };
 }
 
+// --- Super-admin (platform-wide, cross-company admin dashboard) ---
+//
+// Deliberately NOT layered on top of the normal per-user token system
+// above — on explicit request, the super-admin identity is fully
+// independent of any regular company login (no `users` row, no
+// companyId), not "a second password on top of an already-logged-in
+// owner account". A single fixed credential pair in server/.env, same
+// "one shared secret, not a DB row" shape as REGISTRATION_SECRET, checked
+// the same constant-time way for the same reason (a plain === would leak
+// how many leading characters matched through response timing).
+function getSuperAdminCredentials(): { username: string; password: string } {
+  const username = process.env.SUPERADMIN_USERNAME;
+  const password = process.env.SUPERADMIN_PASSWORD;
+  if (!username || !password) {
+    throw new AuthError('SUPERADMIN_USERNAME/SUPERADMIN_PASSWORD are not set — check server/.env');
+  }
+  return { username, password };
+}
+
+function timingSafeStringEqual(a: string, b: string): boolean {
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  return bufA.length === bufB.length && timingSafeEqual(bufA, bufB);
+}
+
+export function checkSuperAdminPassword(username: string, password: string): boolean {
+  const expected = getSuperAdminCredentials();
+  return timingSafeStringEqual(username, expected.username) && timingSafeStringEqual(password, expected.password);
+}
+
+// 12 hours, not the normal login's 30 days — this credential reaches
+// every company's API keys and worker roster, so it's deliberately
+// shorter-lived, matching the frontend's own choice to store it in
+// sessionStorage (cleared on tab close) rather than localStorage.
+const SUPERADMIN_TOKEN_TTL_MS = 12 * 60 * 60 * 1000;
+
+// A distinct payload shape ("superadmin.<expiry>...", never
+// "<userId>.<companyId>.<role>.<expiry>...") means a normal per-user
+// token and a super-admin token can never be mistaken for each other by
+// either verifier, even though both reuse the same sign() HMAC helper.
+export function issueSuperAdminToken(): string {
+  const expiry = Date.now() + SUPERADMIN_TOKEN_TTL_MS;
+  const payload = `superadmin.${expiry}`;
+  const signature = sign(payload);
+  return Buffer.from(`${payload}.${signature}`).toString('base64url');
+}
+
+function verifySuperAdminToken(token: string): boolean {
+  let decoded: string;
+  try {
+    decoded = Buffer.from(token, 'base64url').toString('utf8');
+  } catch {
+    return false;
+  }
+  const parts = decoded.split('.');
+  if (parts.length !== 3 || parts[0] !== 'superadmin') return false;
+  const [, expiryStr, signature] = parts;
+  const payload = `superadmin.${expiryStr}`;
+  const expected = sign(payload);
+  const a = Buffer.from(signature);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !timingSafeEqual(a, b)) return false;
+  const expiry = Number(expiryStr);
+  return Number.isFinite(expiry) && Date.now() < expiry;
+}
+
+/** Express middleware for every /api/admin/* route — a fully separate
+ * check from requireAuth above, not stacked on top of it: these routes
+ * sit *above* app.use(requireAuth) in index.ts's route order, so a
+ * regular company login's Bearer token is never even looked at here. */
+export function requireSuperAdmin(req: Request, res: Response, next: NextFunction) {
+  const header = req.headers.authorization;
+  const token = header?.startsWith('Bearer ') ? header.slice(7) : null;
+  if (!token || !verifySuperAdminToken(token)) {
+    res.status(401).json({ error: 'Neautentifikuota' });
+    return;
+  }
+  next();
+}
+
 declare global {
   namespace Express {
     interface Request {

@@ -129,6 +129,19 @@ export async function updateTableName(tableId: string, name: string): Promise<vo
   });
 }
 
+/** The Workspace screen's per-table daily-backup toggle (Package icon) —
+ * see server/src/tableData/db.ts's own doc comment on why this is explicit
+ * per-table opt-in. Same "table mutation, goes through db/db.ts like
+ * every other one" convention as updateTableName/updateTableColumns
+ * above. */
+export async function updateTableBackupFlag(tableId: string, enabled: boolean): Promise<void> {
+  await localApiRequest(`/api/tables/${encodeURIComponent(tableId)}/backup-flag`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  });
+}
+
 export async function countRowsForTable(tableId: string): Promise<number> {
   const { count } = await localApiRequest<{ count: number }>(`/api/tables/${encodeURIComponent(tableId)}/rows/count`);
   return count;

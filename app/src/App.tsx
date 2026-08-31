@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTableStore } from './store/useTableStore';
 import { useWorkspaceStore } from './store/useWorkspaceStore';
 import { useAuthStore } from './store/useAuthStore';
+import { useSuperAdminStore } from './store/useSuperAdminStore';
 import { usePendingPhoneSearchStore } from './store/usePendingPhoneSearchStore';
 import { useToastStore } from './store/useToastStore';
 import { useReminderStore } from './store/useReminderStore';
@@ -22,12 +23,15 @@ import { Softphone } from './components/Softphone';
 import { ThemeToggle } from './components/ThemeToggle';
 import { SheetTabs } from './components/SheetTabs';
 import { LoginScreen } from './components/LoginScreen';
+import { SuperAdminLoginScreen } from './components/SuperAdminLoginScreen';
 import { RegistrationView } from './components/RegistrationView';
 import { WorkersView } from './components/Workers/WorkersView';
-import { IntegrationsView } from './components/Integrations/IntegrationsView';
 import { NewsView } from './components/News/NewsView';
+import { AdminView } from './components/Admin/AdminView';
+import { OwnBackupsView } from './components/Workspace/OwnBackupsView';
 import { BrandLogo } from './components/BrandLogo';
 import { getNextActionColumn } from './utils/row';
+import { workerGrantableTabs } from './utils/tabLabels';
 import { isOverdue, isDueToday } from './utils/date';
 import { ArrowLeft, Clock, Bell, BellOff, Menu } from 'lucide-react';
 import './App.css';
@@ -55,6 +59,7 @@ function App() {
   const token = useAuthStore((s) => s.token);
   const user = useAuthStore((s) => s.user);
   const fetchMe = useAuthStore((s) => s.fetchMe);
+  const superAdminToken = useSuperAdminStore((s) => s.token);
 
   const workspaceReady = useWorkspaceStore((s) => s.ready);
   const workspaceInitError = useWorkspaceStore((s) => s.initError);
@@ -64,6 +69,7 @@ function App() {
   const activeTableId = useWorkspaceStore((s) => s.activeTableId);
   const setActiveTable = useWorkspaceStore((s) => s.setActiveTable);
   const renameTable = useWorkspaceStore((s) => s.renameTable);
+  const createEmptyTable = useWorkspaceStore((s) => s.createEmptyTable);
 
   const tableReady = useTableStore((s) => s.ready);
   const tableLoadError = useTableStore((s) => s.loadError);
@@ -73,12 +79,16 @@ function App() {
   const rows = useTableStore((s) => s.rows);
 
   const [tab, setTab] = useState<AppScreen>('table');
-  // Only meaningful while !activeTable — lets "Darbuotojai"/"API raktai"
-  // be reached from the Workspace screen itself (WorkspaceView.tsx's
-  // onOpenWorkers/onOpenIntegrations), which is now their only entry
-  // point (see the Tab/AppScreen comment above for why they were moved
-  // out of the in-table nav).
-  const [workspaceScreen, setWorkspaceScreen] = useState<'tables' | 'integrations' | 'workers' | 'news' | 'lessons'>('tables');
+  // Only meaningful while !activeTable — lets "Darbuotojai" be reached from
+  // the Workspace screen itself (WorkspaceView.tsx's onOpenWorkers), which
+  // is now its only entry point (see the Tab/AppScreen comment above for
+  // why it was moved out of the in-table nav). "API raktai" (self-service
+  // integrations) no longer exists at all — every company's keys are only
+  // ever managed through the independent /supersuperadmin dashboard now
+  // (see that URL check above this component's main return). The
+  // cross-company Admin dashboard itself deliberately does NOT live here
+  // either, for the same reason.
+  const [workspaceScreen, setWorkspaceScreen] = useState<'tables' | 'workers' | 'news' | 'lessons' | 'backups'>('tables');
   const [focusRowId, setFocusRowId] = useState<string | null>(null);
   const [focusContact, setFocusContact] = useState<{ rowId: string; columnId: string; contactId: string } | null>(null);
   const [editingTitle, setEditingTitle] = useState(false);
@@ -287,6 +297,32 @@ function App() {
     setPendingRowJump(null);
   }, [pendingRowJump, activeTableId, tableReady, handleJumpToRow, handleJumpToContact]);
 
+  // "Importuoti CSV" always creates a brand-new table now (on explicit
+  // request — an ordinary import used to write into whatever table
+  // happened to be open, which was a real, reported gotcha: importing a
+  // second, unrelated CSV while a table was open silently piled its rows
+  // on top of that table's own data). The new target table doesn't exist
+  // in useTableStore until its own loadTable() resolves after
+  // setActiveTable below triggers a remount (TableView is keyed by
+  // activeTableId) — so the parsed CSV is parked here, the same
+  // park-until-the-right-table-is-ready shape pendingRowJump above already
+  // uses, rather than trying to run the import against the *old*,
+  // still-mounted TableView instance (whose own useTableStore.tableId is
+  // about to change out from under it).
+  const [pendingImport, setPendingImport] = useState<{ tableId: string; headers: string[]; dataRows: string[][] } | null>(null);
+
+  const startCsvImport = useCallback(
+    async (headers: string[], dataRows: string[][], suggestedName: string) => {
+      const newId = await createEmptyTable(suggestedName);
+      if (!newId) return; // createEmptyTable's own actionError toast already covers the failure case
+      setPendingImport({ tableId: newId, headers, dataRows });
+      setActiveTable(newId);
+    },
+    [createEmptyTable, setActiveTable],
+  );
+
+  const tableViewPendingImport = pendingImport && pendingImport.tableId === activeTableId && tableReady ? pendingImport : null;
+
   // Checked before even the login gate below — a fixed, secret path
   // (app.serteo.lt/reg<SECRET>) only the owner ever knows exists (never
   // linked anywhere in this app's own nav/UI), matching whoever they hand
@@ -296,6 +332,48 @@ function App() {
   const registrationMatch = window.location.pathname.match(/^\/reg(.+)$/);
   if (registrationMatch) {
     return <RegistrationView secret={registrationMatch[1]} />;
+  }
+
+  // A real, separate URL (app.serteo.lt/supersuperadmin) with its own,
+  // completely independent login — on explicit request: "не хочу чтоб мой
+  // аккаунт был бы как-то связан с супер супер админом... супер супер
+  // админ должен быть независимым" (I don't want my account to be tied to
+  // the super-super-admin — it should be independent). Checked here,
+  // *before* the normal token/user gates below, same tier as
+  // registrationMatch above — reaching this screen needs zero regular
+  // company session at all, just the separate super-admin credential (see
+  // useSuperAdminStore.ts / server/src/auth.ts's requireSuperAdmin).
+  // Soft/Incoming-call widgets are deliberately NOT rendered on this
+  // screen — this is meant to read as a separate management tool, not a
+  // place calls ring through.
+  if (/^\/supersuperadmin\/?$/.test(window.location.pathname)) {
+    if (!superAdminToken) {
+      return <SuperAdminLoginScreen />;
+    }
+    return (
+      <div className="app">
+        <div className="workspace-view">
+          <div className="workspace-header">
+            <div className="brand">
+              <BrandLogo />
+              <h2>Valdymo skydas</h2>
+            </div>
+            <div className="workspace-header-actions">
+              <button type="button" onClick={() => (window.location.href = '/')}>
+                <ArrowLeft className="icon" size={16} /> Į pagrindinį puslapį
+              </button>
+              <button type="button" onClick={() => useSuperAdminStore.getState().logout()}>
+                Atsijungti
+              </button>
+            </div>
+          </div>
+          <AdminView />
+        </div>
+        <ConfirmDialog />
+        <TypeToConfirmDialog />
+        <Toast />
+      </div>
+    );
   }
 
   // Gated before workspace loading even starts — nothing in this app is
@@ -389,18 +467,18 @@ function App() {
       <TypeToConfirmDialog />
       {!activeTable ? (
         <div className="app">
-          {workspaceScreen === 'integrations' || workspaceScreen === 'workers' || workspaceScreen === 'news' || workspaceScreen === 'lessons' ? (
+          {workspaceScreen !== 'tables' ? (
             <div className="workspace-view">
               <div className="workspace-header">
                 <div className="brand">
                   <BrandLogo />
                   <h2>
-                    {workspaceScreen === 'integrations'
-                      ? 'API raktai'
-                      : workspaceScreen === 'workers'
-                        ? 'Darbuotojai'
-                        : workspaceScreen === 'news'
-                          ? 'Naujienos'
+                    {workspaceScreen === 'workers'
+                      ? 'Darbuotojai'
+                      : workspaceScreen === 'news'
+                        ? 'Naujienos'
+                        : workspaceScreen === 'backups'
+                          ? 'Duomenys'
                           : 'Pamokos'}
                   </h2>
                 </div>
@@ -410,12 +488,16 @@ function App() {
                   </button>
                 </div>
               </div>
-              {workspaceScreen === 'integrations' ? (
-                <IntegrationsView />
-              ) : workspaceScreen === 'workers' ? (
-                <WorkersView onJumpToRow={jumpToTableRow} onJumpToContact={jumpToTableContact} />
+              {workspaceScreen === 'workers' ? (
+                <WorkersView
+                  onJumpToRow={jumpToTableRow}
+                  onJumpToContact={jumpToTableContact}
+                  companyTabs={workerGrantableTabs(user.company?.enabledFeatures ?? [])}
+                />
               ) : workspaceScreen === 'news' ? (
                 <NewsView />
+              ) : workspaceScreen === 'backups' ? (
+                <OwnBackupsView />
               ) : (
                 <LessonsView />
               )}
@@ -423,10 +505,18 @@ function App() {
           ) : (
             <WorkspaceView
               onOpenTable={setActiveTable}
-              onOpenWorkers={user.role !== 'worker' ? () => setWorkspaceScreen('workers') : undefined}
-              onOpenIntegrations={user.role !== 'worker' ? () => setWorkspaceScreen('integrations') : undefined}
+              onOpenWorkers={
+                user.role !== 'worker' && (user.company?.enabledFeatures ?? []).includes('workers')
+                  ? () => setWorkspaceScreen('workers')
+                  : undefined
+              }
               onOpenNews={newsAvailable ? () => setWorkspaceScreen('news') : undefined}
               onOpenLessons={allowedTabs.has('lessons') ? () => setWorkspaceScreen('lessons') : undefined}
+              onOpenBackups={
+                user.role !== 'worker' && (user.company?.enabledFeatures ?? []).includes('backups')
+                  ? () => setWorkspaceScreen('backups')
+                  : undefined
+              }
             />
           )}
           <Toast />
@@ -673,6 +763,9 @@ function App() {
                   onFocusHandled={() => setFocusRowId(null)}
                   focusContact={focusContact}
                   onContactFocusHandled={() => setFocusContact(null)}
+                  pendingImport={tableViewPendingImport}
+                  onStartCsvImport={startCsvImport}
+                  onImportDone={() => setPendingImport(null)}
                 />
               ) : (
                 tableLoadingOrError

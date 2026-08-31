@@ -4,9 +4,13 @@ import compression from 'compression';
 import cors from 'cors';
 import { timingSafeEqual } from 'node:crypto';
 import {
-  bootstrapOwnerIfNeeded,
+  bootstrapFirstCompanyIfNeeded,
+  demoteOwnerUsers,
   getCompany,
   createCompany,
+  listCompanies,
+  updateCompanyFeatures,
+  ALWAYS_ON_FEATURES,
   createUser,
   getUserById,
   getUserByUsername,
@@ -16,7 +20,8 @@ import {
   getCompanyIntegrations,
   upsertCompanyIntegrations,
   clearCompanyIntegrationField,
-  computeAvailableFeatures,
+  recordLogin,
+  listLoginLog,
   listNewsTopics,
   createNewsTopic,
   deleteNewsTopic,
@@ -71,9 +76,28 @@ import {
   backfillCompanyId,
   listWorkerActions,
   findTimedNextActionRows,
+  setTableBackupFlag,
+  listBackupFlaggedTables,
+  latestBackupDateUtc,
+  createBackup,
+  listBackupsForCompany,
+  listAllBackups,
+  deleteBackup,
+  purgeOldBackups,
+  backupToCsvText,
+  restoreBackupAsNewTable,
   type WorkerRowRestriction,
 } from './tableData/db.js';
-import { AuthError, checkCredentials, issueToken, requireAuth, requirePermission } from './auth.js';
+import {
+  AuthError,
+  checkCredentials,
+  issueToken,
+  requireAuth,
+  requirePermission,
+  checkSuperAdminPassword,
+  issueSuperAdminToken,
+  requireSuperAdmin,
+} from './auth.js';
 import { ApolloApiError, searchPeople, searchCompanies, enrichPerson, pollWebhookResult } from './apollo.js';
 import {
   InstantlyApiError,
@@ -104,6 +128,7 @@ import {
   getUnreadCount,
   updateLeadInterestStatus,
 } from './instantly.js';
+import { syncInstantlyCampaignReplies } from './instantlyReplySync.js';
 import { LinkedInBrowserError, humanDelay } from './linkedin/browser.js';
 import { LinkedInPageError, getLinkedInStatus, sendConnectionRequest, replyInThread, searchLeads } from './linkedin/page.js';
 import { logAction, getRecentActions } from './linkedin/db.js';
@@ -209,10 +234,18 @@ function asyncHandler(fn: (req: Request, res: Response) => Promise<void>) {
 // regardless of whether it was actually set up for them.
 class IntegrationNotConfiguredError extends Error {}
 
+// Every one of these messages used to say "enter it yourself in API
+// raktai" — no longer universally true now that API-key management moved
+// to owner-only (a company's own super_admin/worker can't reach that
+// screen at all anymore, see WorkspaceView.tsx's own doc comment). Says
+// "susisiekite su administratoriumi" instead, which is accurate
+// regardless of who's actually seeing the error.
+const NOT_CONFIGURED_HINT = 'susisiekite su administratoriumi, kad sukonfigūruotų API raktą.';
+
 function requireZadarmaCreds(companyId: string): { key: string; secret: string } {
   const integrations = getCompanyIntegrations(companyId);
   if (!integrations?.zadarmaApiKey || !integrations?.zadarmaApiSecret) {
-    throw new IntegrationNotConfiguredError('Zadarma dar nesukonfigūruota — įveskite API raktą „API raktai" skiltyje.');
+    throw new IntegrationNotConfiguredError(`Zadarma dar nesukonfigūruota — ${NOT_CONFIGURED_HINT}`);
   }
   return { key: integrations.zadarmaApiKey, secret: integrations.zadarmaApiSecret };
 }
@@ -220,7 +253,7 @@ function requireZadarmaCreds(companyId: string): { key: string; secret: string }
 function requireInstantlyKey(companyId: string): string {
   const integrations = getCompanyIntegrations(companyId);
   if (!integrations?.instantlyApiKey) {
-    throw new IntegrationNotConfiguredError('Instantly dar nesukonfigūruota — įveskite API raktą „API raktai" skiltyje.');
+    throw new IntegrationNotConfiguredError(`Instantly dar nesukonfigūruota — ${NOT_CONFIGURED_HINT}`);
   }
   return integrations.instantlyApiKey;
 }
@@ -228,7 +261,7 @@ function requireInstantlyKey(companyId: string): string {
 function requireApolloKey(companyId: string): string {
   const integrations = getCompanyIntegrations(companyId);
   if (!integrations?.apolloApiKey) {
-    throw new IntegrationNotConfiguredError('Apollo dar nesukonfigūruota — įveskite API raktą „API raktai" skiltyje.');
+    throw new IntegrationNotConfiguredError(`Apollo dar nesukonfigūruota — ${NOT_CONFIGURED_HINT}`);
   }
   return integrations.apolloApiKey;
 }
@@ -236,7 +269,7 @@ function requireApolloKey(companyId: string): string {
 function requireSerperKey(companyId: string): string {
   const integrations = getCompanyIntegrations(companyId);
   if (!integrations?.serperApiKey) {
-    throw new IntegrationNotConfiguredError('Serper dar nesukonfigūruota — įveskite API raktą „API raktai" skiltyje.');
+    throw new IntegrationNotConfiguredError(`Serper dar nesukonfigūruota — ${NOT_CONFIGURED_HINT}`);
   }
   return integrations.serperApiKey;
 }
@@ -244,7 +277,7 @@ function requireSerperKey(companyId: string): string {
 function requireOpenaiKey(companyId: string): string {
   const integrations = getCompanyIntegrations(companyId);
   if (!integrations?.openaiApiKey) {
-    throw new IntegrationNotConfiguredError('OpenAI dar nesukonfigūruota — įveskite API raktą „API raktai" skiltyje.');
+    throw new IntegrationNotConfiguredError(`OpenAI dar nesukonfigūruota — ${NOT_CONFIGURED_HINT}`);
   }
   return integrations.openaiApiKey;
 }
@@ -259,7 +292,7 @@ function optionalOpenaiKey(companyId: string): string | undefined {
 function requireAnthropicKey(companyId: string): string {
   const integrations = getCompanyIntegrations(companyId);
   if (!integrations?.anthropicApiKey) {
-    throw new IntegrationNotConfiguredError('Anthropic dar nesukonfigūruota — įveskite API raktą „API raktai" skiltyje.');
+    throw new IntegrationNotConfiguredError(`Anthropic dar nesukonfigūruota — ${NOT_CONFIGURED_HINT}`);
   }
   return integrations.anthropicApiKey;
 }
@@ -267,7 +300,7 @@ function requireAnthropicKey(companyId: string): string {
 function requireElevenlabsKey(companyId: string): string {
   const integrations = getCompanyIntegrations(companyId);
   if (!integrations?.elevenlabsApiKey) {
-    throw new IntegrationNotConfiguredError('ElevenLabs dar nesukonfigūruota — įveskite API raktą „API raktai" skiltyje.');
+    throw new IntegrationNotConfiguredError(`ElevenLabs dar nesukonfigūruota — ${NOT_CONFIGURED_HINT}`);
   }
   return integrations.elevenlabsApiKey;
 }
@@ -282,15 +315,19 @@ app.get('/health', (_req, res) => {
 // there was exactly one account); userToPublic() below is what both this
 // route and /api/auth/me return, so the frontend hydrates identically
 // whichever one it came from.
-// enabledFeatures is no longer a stored value (see accounts/db.ts's
-// createCompany — the column is written as '[]' and never read back) —
-// it's computed fresh from whichever integrations this company has
-// actually configured, every time. Same shape (`Company & {enabledFeatures}`)
-// as before, so AuthUser/App.tsx's allowedTabs logic needs no changes.
-function companyWithComputedFeatures(companyId: string) {
+// enabledFeatures is a real, owner-set value again (see accounts/db.ts's
+// updateCompanyFeatures — this replaced the brief "derive tabs from which
+// integrations are configured" era, computeAvailableFeatures, now removed
+// entirely). table/calendar are merged in unconditionally so an owner can
+// never accidentally lock a company out of the app just by leaving both
+// unchecked in the Funkcijos panel. Same shape (`Company &
+// {enabledFeatures}`) as before, so AuthUser/App.tsx's allowedTabs logic
+// needs no changes.
+function companyWithFeatures(companyId: string) {
   const company = getCompany(companyId);
   if (!company) return null;
-  return { ...company, enabledFeatures: computeAvailableFeatures(getCompanyIntegrations(companyId)) };
+  const merged = new Set([...ALWAYS_ON_FEATURES, ...company.enabledFeatures]);
+  return { ...company, enabledFeatures: [...merged] };
 }
 
 function userToPublic(user: NonNullable<ReturnType<typeof checkCredentials>>) {
@@ -303,7 +340,7 @@ function userToPublic(user: NonNullable<ReturnType<typeof checkCredentials>>) {
     role: user.role,
     visibleTabs: user.visibleTabs,
     permissions: user.permissions,
-    company: companyWithComputedFeatures(user.companyId),
+    company: companyWithFeatures(user.companyId),
   };
 }
 
@@ -317,6 +354,7 @@ app.post(
       res.status(401).json({ error: 'Neteisingas vartotojo vardas arba slaptažodis' });
       return;
     }
+    recordLogin(user);
     res.json({ token: issueToken(user), user: userToPublic(user) });
   }),
 );
@@ -371,11 +409,11 @@ app.post(
       res.status(400).json({ error: 'Toks vartotojo vardas jau užimtas' });
       return;
     }
-    // No starter feature set to pass anymore — a freshly-registered
-    // company starts with zero integrations configured, so
-    // computeAvailableFeatures() (accounts/db.ts) naturally shows just the
-    // always-on table/calendar/lessons until its own super-admin visits
-    // "API raktai" and fills something in.
+    // A freshly-registered company starts with zero owner-granted features
+    // (just the always-on table/calendar — see ALWAYS_ON_FEATURES) until
+    // the owner visits the Admin dashboard's Funkcijos panel and grants it
+    // integrations/tabs directly — see accounts/db.ts's createCompany doc
+    // comment for why this is no longer self-service.
     const company = createCompany(companyName.trim());
     const user = createUser({
       companyId: company.id,
@@ -385,6 +423,7 @@ app.post(
       lastName: lastName.trim(),
       role: 'super_admin',
     });
+    recordLogin(user);
     res.json({ token: issueToken(user), user: userToPublic(user) });
   }),
 );
@@ -507,6 +546,354 @@ app.post('/api/zadarma/sms-webhook', (req, res) => {
   res.status(200).json({ ok: true });
 });
 
+// Public, same reasoning as every other webhook route in this file —
+// Instantly calls this directly, can't carry a session token. Registered
+// manually in Instantly's own dashboard (Integrations → Add Webhook —
+// there's no API to register it the way setup-sms-webhook does for
+// Zadarma), requires Instantly's Hyper Growth plan or above.
+//
+// Per-company via the :companyId path segment — on explicit request, once
+// the owner started onboarding real *client* companies (each with their
+// own separate Instantly account/API key, via the Admin dashboard's
+// per-company Integrations panel) rather than just running this for their
+// own account. Instantly's own webhook payload has no field of ours to
+// route by (its `workspace` is Instantly's own internal name, not
+// anything we control), so the company has to be identified by the URL
+// itself — same "company's own id, already an unguessable UUID, as the
+// path segment" precedent already used elsewhere (e.g. backups). Each
+// company gets its own distinct URL to paste into *their* Instantly
+// dashboard; IntegrationsView.tsx shows it right next to where that
+// company's Instantly API key is entered.
+//
+// The exact payload shape beyond Instantly's own documented base fields
+// (timestamp, event_type, campaign_id, campaign_name, workspace) isn't
+// verifiable without a real event actually firing — same situation as the
+// Zadarma SMS webhook above, so this is built the same defensive way:
+// always logs the raw body, never rejects on an unexpected shape, and
+// treats the webhook purely as a "go re-sync this campaign now" trigger
+// rather than trying to extract a full reply record from the event
+// payload itself (which may not even carry the reply's own body text) —
+// syncInstantlyCampaignReplies re-derives the authoritative truth from a
+// real Instantly API call afterward.
+const instantlyWebhookState = new Map<string, { running: boolean; rerunPending: boolean }>();
+
+async function runInstantlyWebhookSync(companyId: string, campaignId: string) {
+  const key = `${companyId}:${campaignId}`;
+  const state = instantlyWebhookState.get(key) ?? { running: false, rerunPending: false };
+  instantlyWebhookState.set(key, state);
+  if (state.running) {
+    // A sync for this exact company+campaign is already in flight (e.g.
+    // several replies landed within seconds of each other) — same
+    // don't-run-two-overlapping-passes reasoning as the LinkedIn
+    // scheduler's own tickInProgress lock (see its doc comment: a real,
+    // reproduced "4 duplicate log rows" bug from exactly this class of
+    // race). Marking rerunPending instead of starting a second pass means
+    // whatever arrived mid-run still gets picked up, just after the
+    // current pass finishes rather than concurrently with it.
+    state.rerunPending = true;
+    return;
+  }
+  state.running = true;
+  try {
+    const apiKey = getCompanyIntegrations(companyId)?.instantlyApiKey ?? undefined;
+    if (!apiKey) {
+      console.warn('[instantly-webhook] no Instantly API key configured for company', companyId, '— skipping sync');
+      return;
+    }
+    const result = await syncInstantlyCampaignReplies(companyId, apiKey, campaignId, 'Visi atsakymai');
+    console.log('[instantly-webhook] synced campaign', campaignId, 'for company', companyId, result);
+  } catch (err) {
+    console.error('[instantly-webhook] sync failed for campaign', campaignId, 'company', companyId, err);
+  } finally {
+    state.running = false;
+    if (state.rerunPending) {
+      state.rerunPending = false;
+      void runInstantlyWebhookSync(companyId, campaignId);
+    }
+  }
+}
+
+app.post('/api/instantly/webhook/:companyId', (req, res) => {
+  const { companyId } = req.params;
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  console.log('[instantly-webhook] POST received', { companyId, body });
+  const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : null);
+  const eventType = str(body.event_type);
+  const campaignId = str(body.campaign_id);
+  // Always ack quickly — Instantly retries 3x within 30s on a failed/slow
+  // response, and syncInstantlyCampaignReplies can take a while (paced,
+  // rate-limited, paginated real API calls), so the actual sync runs as a
+  // fire-and-forget background call rather than blocking this response.
+  res.status(200).json({ ok: true });
+  if (eventType !== 'reply_received' || !campaignId) {
+    console.log('[instantly-webhook] ignored (not a reply_received event, or missing campaign_id)', { companyId, eventType, campaignId });
+    return;
+  }
+  void runInstantlyWebhookSync(companyId, campaignId);
+});
+
+// --- Independent super-admin (platform-wide admin dashboard) ---------
+// Deliberately public/pre-auth, same tier as /api/auth/login above — on
+// explicit request, the super-admin identity is NOT tied to any regular
+// company login at all ("не хочу чтоб мой аккаунт был бы как-то связан с
+// супер супер админом"), so it needs its own, completely independent
+// credential check rather than requiring a normal session first. See
+// auth.ts's own doc comment on requireSuperAdmin/issueSuperAdminToken for
+// why this is a fixed env-var pair (SUPERADMIN_USERNAME/PASSWORD), not a
+// `users` table row.
+app.post(
+  '/api/superadmin/login',
+  asyncHandler(async (req, res) => {
+    const { username, password } = req.body ?? {};
+    if (typeof username !== 'string' || typeof password !== 'string' || !checkSuperAdminPassword(username, password)) {
+      res.status(401).json({ error: 'Neteisingas vartotojo vardas arba slaptažodis' });
+      return;
+    }
+    res.json({ token: issueSuperAdminToken() });
+  }),
+);
+
+// Every /api/admin/* route below is requireSuperAdmin-gated (not
+// requireAuth+requireOwner — see requireSuperAdmin's own doc comment for
+// why these sit up here, above the normal-session gate, rather than
+// stacked on top of it) — the platform-wide view the account owner asked
+// for ("CEO/founder... full control over the app and its clients"): every
+// company, every company's own workers (add/remove/reset password), every
+// company's integrations, per-company feature toggles, and a cross-company
+// login history. Deliberately thin wrappers around the exact same
+// accounts/db.ts functions the per-company routes elsewhere already use —
+// a worker/integration/feature CRUD function was already scoped by an
+// explicit companyId parameter, never implicitly req.auth!.companyId, so
+// nothing in accounts/db.ts itself needed to change to support "any
+// company," only which companyId gets passed in.
+
+app.get(
+  '/api/admin/companies',
+  requireSuperAdmin,
+  asyncHandler(async (_req, res) => {
+    res.json({ companies: listCompanies() });
+  }),
+);
+
+app.get(
+  '/api/admin/companies/:id/workers',
+  requireSuperAdmin,
+  asyncHandler(async (req, res) => {
+    res.json({ workers: listWorkers(req.params.id) });
+  }),
+);
+
+app.post(
+  '/api/admin/companies/:id/workers',
+  requireSuperAdmin,
+  asyncHandler(async (req, res) => {
+    const { username, password, firstName, lastName, visibleTabs, permissions } = req.body ?? {};
+    if (
+      typeof username !== 'string' ||
+      !username.trim() ||
+      typeof password !== 'string' ||
+      !password ||
+      typeof firstName !== 'string' ||
+      !firstName.trim() ||
+      typeof lastName !== 'string'
+    ) {
+      res.status(400).json({ error: 'Užpildykite visus laukus' });
+      return;
+    }
+    if (getUserByUsername(username.trim())) {
+      res.status(400).json({ error: 'Toks vartotojo vardas jau užimtas' });
+      return;
+    }
+    const worker = createUser({
+      companyId: req.params.id,
+      username: username.trim(),
+      password,
+      firstName: firstName.trim(),
+      lastName: lastName.trim(),
+      role: 'worker',
+      visibleTabs: Array.isArray(visibleTabs) ? visibleTabs : [],
+      permissions: permissions && typeof permissions === 'object' ? permissions : undefined,
+    });
+    res.json(worker);
+  }),
+);
+
+app.patch(
+  '/api/admin/companies/:id/workers/:userId',
+  requireSuperAdmin,
+  asyncHandler(async (req, res) => {
+    const { visibleTabs, permissions, password } = req.body ?? {};
+    if (password !== undefined && (typeof password !== 'string' || !password)) {
+      res.status(400).json({ error: 'Slaptažodis negali būti tuščias' });
+      return;
+    }
+    const worker = updateWorker(req.params.userId, req.params.id, {
+      visibleTabs: Array.isArray(visibleTabs) ? visibleTabs : undefined,
+      permissions: permissions && typeof permissions === 'object' ? permissions : undefined,
+      password: typeof password === 'string' ? password : undefined,
+    });
+    if (!worker) {
+      res.status(404).json({ error: 'Worker not found' });
+      return;
+    }
+    res.json(worker);
+  }),
+);
+
+app.delete(
+  '/api/admin/companies/:id/workers/:userId',
+  requireSuperAdmin,
+  asyncHandler(async (req, res) => {
+    deleteWorker(req.params.userId, req.params.id);
+    res.json({ ok: true });
+  }),
+);
+
+app.get(
+  '/api/admin/companies/:id/integrations',
+  requireSuperAdmin,
+  asyncHandler(async (req, res) => {
+    res.json(integrationsStatus(req.params.id));
+  }),
+);
+
+app.patch(
+  '/api/admin/companies/:id/integrations',
+  requireSuperAdmin,
+  asyncHandler(async (req, res) => {
+    patchIntegrations(req.params.id, (req.body ?? {}) as Record<string, unknown>);
+    res.json({ ok: true });
+  }),
+);
+
+app.post(
+  '/api/admin/companies/:id/integrations/clear',
+  requireSuperAdmin,
+  asyncHandler(async (req, res) => {
+    const { field } = req.body ?? {};
+    if (typeof field !== 'string' || !(INTEGRATION_FIELDS as readonly string[]).includes(field)) {
+      res.status(400).json({ error: 'Invalid "field"' });
+      return;
+    }
+    clearCompanyIntegrationField(req.params.id, field as (typeof INTEGRATION_FIELDS)[number]);
+    res.json({ ok: true });
+  }),
+);
+
+// Mirrors app/src/utils/tabLabels.ts's ALL_TABS exactly — the full set of
+// values updateCompanyFeatures will actually accept. Filtered against
+// (unrecognized strings silently dropped) rather than rejecting the whole
+// request, so a future tab added on one side without the other fails
+// soft instead of blocking every other checkbox in the same save. 'workers'/
+// 'backups' added on explicit request — the super-admin can now hide/show
+// worker management and the backups panel per company, the same way every
+// other tab already works, not just tabs in the literal top nav.
+const VALID_FEATURES = new Set([
+  'table',
+  'calendar',
+  'calls',
+  'search',
+  'linkedin',
+  'instantly',
+  'email',
+  'lessons',
+  'news',
+  'workers',
+  'backups',
+]);
+
+// The full merged list (ALWAYS_ON_FEATURES + whatever's stored) — same
+// shape /api/auth/me's `company.enabledFeatures` already returns, so the
+// Funkcijos panel can pre-check the exact same set that field drives.
+app.get(
+  '/api/admin/companies/:id/features',
+  requireSuperAdmin,
+  asyncHandler(async (req, res) => {
+    const company = companyWithFeatures(req.params.id);
+    if (!company) {
+      res.status(404).json({ error: 'Company not found' });
+      return;
+    }
+    res.json({ enabledFeatures: company.enabledFeatures });
+  }),
+);
+
+app.put(
+  '/api/admin/companies/:id/features',
+  requireSuperAdmin,
+  asyncHandler(async (req, res) => {
+    const { enabledFeatures } = req.body ?? {};
+    if (!Array.isArray(enabledFeatures) || !enabledFeatures.every((f) => typeof f === 'string')) {
+      res.status(400).json({ error: 'Invalid "enabledFeatures"' });
+      return;
+    }
+    updateCompanyFeatures(req.params.id, enabledFeatures.filter((f) => VALID_FEATURES.has(f)));
+    res.json(companyWithFeatures(req.params.id));
+  }),
+);
+
+app.get(
+  '/api/admin/login-log',
+  requireSuperAdmin,
+  asyncHandler(async (req, res) => {
+    const { companyId, limit } = req.query;
+    const parsedLimit = typeof limit === 'string' ? Number(limit) : NaN;
+    const effectiveLimit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? Math.min(parsedLimit, 1000) : 300;
+    res.json({ entries: listLoginLog(typeof companyId === 'string' ? companyId : undefined, effectiveLimit) });
+  }),
+);
+
+// Every company's backups, for the super-admin's oversight — download/
+// delete/restore are separate routes below (not the same
+// /api/backups/:id/* set the per-company routes use) because those are
+// hardcoded to req.auth!.companyId; the super-admin needs the *backup's
+// own* company, which tableData/db.ts's functions resolve automatically
+// when companyId is omitted (see backupToCsvText/deleteBackup/
+// restoreBackupAsNewTable's own doc comments).
+app.get(
+  '/api/admin/backups',
+  requireSuperAdmin,
+  asyncHandler(async (_req, res) => {
+    res.json({ backups: listAllBackups() });
+  }),
+);
+
+// Plain JSON — see /api/backups/:id/csv's own doc comment above for why.
+app.get(
+  '/api/admin/backups/:id/csv',
+  requireSuperAdmin,
+  asyncHandler(async (req, res) => {
+    const result = backupToCsvText(req.params.id);
+    if (!result) {
+      res.status(404).json({ error: 'Backup not found' });
+      return;
+    }
+    res.json(result);
+  }),
+);
+
+app.delete(
+  '/api/admin/backups/:id',
+  requireSuperAdmin,
+  asyncHandler(async (req, res) => {
+    deleteBackup(req.params.id);
+    res.json({ ok: true });
+  }),
+);
+
+app.post(
+  '/api/admin/backups/:id/restore',
+  requireSuperAdmin,
+  asyncHandler(async (req, res) => {
+    const table = restoreBackupAsNewTable(req.params.id);
+    if (!table) {
+      res.status(404).json({ error: 'Backup not found' });
+      return;
+    }
+    res.json(table);
+  }),
+);
+
 // Everything below requires a valid session token — a visitor who never
 // loads the frontend at all (hits these routes directly) is blocked here
 // too, not just by the login screen.
@@ -536,7 +923,7 @@ app.get(
       role: user.role,
       visibleTabs: user.visibleTabs,
       permissions: user.permissions,
-      company: companyWithComputedFeatures(user.companyId),
+      company: companyWithFeatures(user.companyId),
     });
   }),
 );
@@ -649,11 +1036,16 @@ app.get(
   }),
 );
 
-// Self-service API credentials — replaced the old owner-managed "Įmonės"
-// feature-toggle panel (see accounts/db.ts's computeAvailableFeatures for
-// why a tab's visibility is now *computed* from these, not set directly).
-// Same requireNotWorker gate as /api/workers — a company's own super-admin
-// (or the owner, for their own company) manages this, never a worker.
+// Super-admin (platform-wide, independent login — see requireSuperAdmin in
+// auth.ts) only, entirely — no company account of any role, including the
+// former "owner," self-manages its own keys anymore (previously
+// requireNotWorker, then later requireOwner tied to one specific company's
+// login; now genuinely independent of every company). Every company's
+// integrations, including what used to be "the owner's own," are managed
+// exclusively through the Admin dashboard's Integracijos panel (see
+// /api/admin/companies/:id/integrations, registered above app.use(requireAuth)
+// since it needs no regular company session at all) — there is no
+// self-service /api/integrations route anymore.
 const INTEGRATION_FIELDS = [
   'zadarmaApiKey',
   'zadarmaApiSecret',
@@ -672,52 +1064,26 @@ const INTEGRATION_FIELDS = [
 // pre-filled, same as any other settings form field.
 const NON_SECRET_INTEGRATION_FIELDS = new Set(['zadarmaCallerNumber', 'linkedinCdpUrl']);
 
-app.get(
-  '/api/integrations',
-  requireNotWorker,
-  asyncHandler(async (req, res) => {
-    const integrations = getCompanyIntegrations(req.auth!.companyId);
-    const status: Record<string, boolean | string | null> = {};
-    for (const field of INTEGRATION_FIELDS) {
-      const value = integrations?.[field] ?? null;
-      status[field] = NON_SECRET_INTEGRATION_FIELDS.has(field) ? value : !!value;
-    }
-    res.json(status);
-  }),
-);
+// Shared by the /api/admin/companies/:id/integrations routes (registered
+// above app.use(requireAuth), see their own doc comment) for every company.
+function integrationsStatus(companyId: string): Record<string, boolean | string | null> {
+  const integrations = getCompanyIntegrations(companyId);
+  const status: Record<string, boolean | string | null> = {};
+  for (const field of INTEGRATION_FIELDS) {
+    const value = integrations?.[field] ?? null;
+    status[field] = NON_SECRET_INTEGRATION_FIELDS.has(field) ? value : !!value;
+  }
+  return status;
+}
 
-app.patch(
-  '/api/integrations',
-  requireNotWorker,
-  asyncHandler(async (req, res) => {
-    const body = (req.body ?? {}) as Record<string, unknown>;
-    const patch: Record<string, string> = {};
-    for (const field of INTEGRATION_FIELDS) {
-      const value = body[field];
-      if (typeof value === 'string' && value.trim()) patch[field] = value.trim();
-    }
-    upsertCompanyIntegrations(req.auth!.companyId, patch);
-    res.json({ ok: true });
-  }),
-);
-
-// The "✕ Išvalyti" action per field — distinct from PATCH above, which
-// treats an *omitted* field as "leave unchanged" (necessary since a saved
-// secret is never redisplayed, so an empty form field can't be trusted to
-// mean "clear this" the way it normally would).
-app.post(
-  '/api/integrations/clear',
-  requireNotWorker,
-  asyncHandler(async (req, res) => {
-    const { field } = req.body ?? {};
-    if (typeof field !== 'string' || !(INTEGRATION_FIELDS as readonly string[]).includes(field)) {
-      res.status(400).json({ error: 'Invalid "field"' });
-      return;
-    }
-    clearCompanyIntegrationField(req.auth!.companyId, field as (typeof INTEGRATION_FIELDS)[number]);
-    res.json({ ok: true });
-  }),
-);
+function patchIntegrations(companyId: string, body: Record<string, unknown>): void {
+  const patch: Record<string, string> = {};
+  for (const field of INTEGRATION_FIELDS) {
+    const value = body[field];
+    if (typeof value === 'string' && value.trim()) patch[field] = value.trim();
+  }
+  upsertCompanyIntegrations(companyId, patch);
+}
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
 
@@ -893,7 +1259,7 @@ app.post(
     const creds = requireZadarmaCreds(req.auth!.companyId);
     const from = getCompanyIntegrations(req.auth!.companyId)?.zadarmaCallerNumber;
     if (!from) {
-      res.status(409).json({ error: 'Skambinančio numerio dar nesukonfigūruota — įveskite jį „API raktai" skiltyje.' });
+      res.status(409).json({ error: `Skambinančio numerio dar nesukonfigūruota — ${NOT_CONFIGURED_HINT}` });
       return;
     }
     const result = await requestCallback({ from, to }, creds);
@@ -2415,6 +2781,24 @@ app.patch(
   }),
 );
 
+// The Workspace screen's "📦" per-table daily-backup toggle — same
+// requireNotWorker gate as the other table-management routes just above
+// (a company's own super_admin decides which of their tables get backed
+// up; not a worker's call). See tableData/db.ts's own doc comment on why
+// this is explicit opt-in, not automatic for every table.
+app.post(
+  '/api/tables/:id/backup-flag',
+  requireNotWorker,
+  asyncHandler(async (req, res) => {
+    if (typeof req.body?.enabled !== 'boolean') {
+      res.status(400).json({ error: 'Invalid "enabled"' });
+      return;
+    }
+    setTableBackupFlag(req.params.id, req.auth!.companyId, req.body.enabled);
+    res.json({ ok: true });
+  }),
+);
+
 // Deleting an entire table is workspace/company-level management, same
 // requireNotWorker gate as create/duplicate/rename above — reused to be
 // can_delete_rows-gated instead at first (deleting a table being "a strict
@@ -2442,6 +2826,66 @@ app.get(
   '/api/tables/:id/rows/count',
   asyncHandler(async (req, res) => {
     res.json({ count: countRowsForTable(req.params.id, req.auth!.companyId) });
+  }),
+);
+
+// --- Daily backups (a company's own view — see /api/admin/backups for
+// the owner's cross-company one) ---------------------------------------
+// Same requireNotWorker gate as every other table-management route
+// above — a company's own super_admin manages/downloads/restores their
+// own backups, never a worker.
+
+app.get(
+  '/api/backups',
+  requireNotWorker,
+  asyncHandler(async (req, res) => {
+    res.json({ backups: listBackupsForCompany(req.auth!.companyId) });
+  }),
+);
+
+app.delete(
+  '/api/backups/:id',
+  requireNotWorker,
+  asyncHandler(async (req, res) => {
+    deleteBackup(req.params.id, req.auth!.companyId);
+    res.json({ ok: true });
+  }),
+);
+
+// Plain JSON, not a Content-Disposition file response — a browser
+// navigation/plain <a href> download can't carry the Authorization
+// header requireAuth needs, and this route is behind it like everything
+// else in this app. The frontend instead fetches this via the normal
+// authenticated localApiRequest() and triggers the actual save with the
+// existing client-side downloadCsv() (utils/csv.ts), same blob-download
+// mechanism every other CSV export in this app already uses.
+app.get(
+  '/api/backups/:id/csv',
+  requireNotWorker,
+  asyncHandler(async (req, res) => {
+    const result = backupToCsvText(req.params.id, req.auth!.companyId);
+    if (!result) {
+      res.status(404).json({ error: 'Backup not found' });
+      return;
+    }
+    res.json(result);
+  }),
+);
+
+// Creates a brand-new table from this backup — current data is never
+// touched (see restoreBackupAsNewTable's own doc comment). The frontend
+// must have already shown a confirm dialog, same as every other
+// real-world action in this app.
+app.post(
+  '/api/backups/:id/restore',
+  requireNotWorker,
+  asyncHandler(async (req, res) => {
+    const table = restoreBackupAsNewTable(req.params.id, req.auth!.companyId);
+    if (!table) {
+      res.status(404).json({ error: 'Backup not found' });
+      return;
+    }
+    res.json(table);
   }),
 );
 
@@ -2625,27 +3069,34 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
 });
 
 // One-time bootstrap, run synchronously before the server starts
-// accepting requests — see accounts/db.ts's bootstrapOwnerIfNeeded doc
-// comment for the full story. On a fresh install this creates "Company
-// #1" + today's AUTH_USERNAME/AUTH_PASSWORD as its owner; on every boot
-// after the first it's a no-op that just returns the existing owner's
-// companyId. Either way, backfillCompanyId() assigns that id to any
-// pre-existing tables/rows still carrying the ALTER TABLE's temporary ''
-// placeholder (see tableData/db.ts) — real on the very first boot after
-// this multi-tenant model shipped, a no-op forever after.
-const { companyId: ownerCompanyId } = bootstrapOwnerIfNeeded();
-backfillCompanyId(ownerCompanyId);
+// accepting requests — see accounts/db.ts's bootstrapFirstCompanyIfNeeded
+// doc comment for the full story. On a fresh install this creates "Company
+// #1" + today's AUTH_USERNAME/AUTH_PASSWORD as its first (ordinary
+// super_admin) user; on every boot after the first it's a no-op that just
+// returns the existing first company's id. Either way, backfillCompanyId()
+// assigns that id to any pre-existing tables/rows still carrying the ALTER
+// TABLE's temporary '' placeholder (see tableData/db.ts) — real on the
+// very first boot after this multi-tenant model shipped, a no-op forever
+// after. demoteOwnerUsers() runs right alongside it — a separate,
+// independently-idempotent migration converting any pre-existing
+// `role = 'owner'` row (this app's real account, before admin access
+// became a fully independent login — see auth.ts's requireSuperAdmin) into
+// an ordinary super_admin, in place.
+demoteOwnerUsers();
+const { companyId: firstCompanyId } = bootstrapFirstCompanyIfNeeded();
+backfillCompanyId(firstCompanyId);
 
 // One-time seed, same "idempotent, real on the very first boot after this
 // shipped, a no-op forever after" shape as backfillCompanyId above — moves
-// the owner's own already-working credentials (today's server/.env/Render
-// values) into company_integrations, so the owner's real account keeps
-// working with zero manual re-entry the moment per-company credentials
-// replace the old single-shared-env-var model. Every route from here on
-// reads from the DB, never process.env directly, so without this seed the
-// owner's own integrations would all silently stop working on first boot.
-if (!getCompanyIntegrations(ownerCompanyId)) {
-  upsertCompanyIntegrations(ownerCompanyId, {
+// the first company's own already-working credentials (today's
+// server/.env/Render values) into company_integrations, so that real
+// account keeps working with zero manual re-entry the moment per-company
+// credentials replace the old single-shared-env-var model. Every route
+// from here on reads from the DB, never process.env directly, so without
+// this seed those integrations would all silently stop working on first
+// boot.
+if (!getCompanyIntegrations(firstCompanyId)) {
+  upsertCompanyIntegrations(firstCompanyId, {
     zadarmaApiKey: process.env.ZADARMA_API_KEY,
     zadarmaApiSecret: process.env.ZADARMA_API_SECRET,
     zadarmaCallerNumber: process.env.ZADARMA_CALLER_NUMBER,
@@ -2707,7 +3158,7 @@ setInterval(() => {
   // Resolved fresh on every tick, not captured once at startup — lets a
   // key added/changed later via the Integrations UI take effect on the
   // very next automatic tick rather than needing a server restart.
-  const openaiApiKey = getCompanyIntegrations(ownerCompanyId)?.openaiApiKey ?? undefined;
+  const openaiApiKey = getCompanyIntegrations(firstCompanyId)?.openaiApiKey ?? undefined;
   runSchedulerTick(true, openaiApiKey)
     .then((result) => {
       if (result.autoExecuted > 0 || result.circuitBreakerTripped || result.errors > 0) {
@@ -2726,3 +3177,29 @@ setInterval(() => {
     })
     .catch((err) => console.error('[linkedin/inbox] automatic sync failed:', err));
 }, INBOX_SYNC_INTERVAL_MS);
+
+// Daily table backups (see tableData/db.ts's own doc comments on the
+// backups table) — hourly polling, same lightweight shape as the two
+// intervals above, not a literal once-a-day cron: checks every flagged
+// table's own latestBackupDateUtc() against today's UTC date and only
+// actually snapshots the ones that haven't run yet today, so this stays
+// correct (no missed or duplicate days) across server restarts/redeploys
+// without needing precise time-of-day scheduling. purgeOldBackups runs
+// every tick too — cheap enough not to need its own separate timer.
+const BACKUP_TICK_INTERVAL_MS = 60 * 60 * 1000;
+const BACKUP_RETENTION_DAYS = 30;
+
+setInterval(() => {
+  try {
+    const todayUtc = new Date().toISOString().slice(0, 10);
+    let created = 0;
+    for (const table of listBackupFlaggedTables()) {
+      if (latestBackupDateUtc(table.id) === todayUtc) continue;
+      if (createBackup(table.id, table.companyId)) created++;
+    }
+    if (created > 0) console.log('[backups] automatic daily tick: created', created, 'backup(s).');
+    purgeOldBackups(BACKUP_RETENTION_DAYS);
+  } catch (err) {
+    console.error('[backups] automatic daily tick failed:', err);
+  }
+}, BACKUP_TICK_INTERVAL_MS);

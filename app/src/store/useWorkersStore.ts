@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { localApiRequest } from '../utils/localApi';
+import { superAdminApiRequest } from '../utils/superAdminApi';
 import type { AuthUser, UserPermissions } from './useAuthStore';
 
 export type Worker = Omit<AuthUser, 'company'>;
@@ -44,18 +45,40 @@ interface WorkersState {
   workers: Worker[];
   loading: boolean;
   error: string | null;
-  load: () => Promise<void>;
-  create: (input: CreateWorkerInput) => Promise<void>;
-  update: (id: string, input: UpdateWorkerInput) => Promise<void>;
-  remove: (id: string) => Promise<void>;
+  /** `companyId` optional on all four — omitted hits the caller's own
+   * company (/api/workers, unchanged, used by a company's own super_admin
+   * or the owner viewing their own company); passed (only ever from the
+   * owner's Admin dashboard) hits /api/admin/companies/:id/workers
+   * instead, targeting an arbitrary client — same "one store serves both
+   * cases" shape as useIntegrationsStore. */
+  load: (companyId?: string) => Promise<void>;
+  create: (input: CreateWorkerInput, companyId?: string) => Promise<void>;
+  update: (id: string, input: UpdateWorkerInput, companyId?: string) => Promise<void>;
+  remove: (id: string, companyId?: string) => Promise<void>;
 
   /** Company-wide when userId is omitted, one worker's own history
    * otherwise — WorkersView's activity-history section drives both from
-   * the same action, switching userId as the selected worker changes. */
+   * the same action, switching userId as the selected worker changes.
+   * Always the caller's own company — the owner's cross-company Admin
+   * dashboard doesn't surface this (see login_log for the owner's own,
+   * separate cross-company activity view). */
   actions: WorkerActionLogEntry[];
   actionsLoading: boolean;
   actionsError: string | null;
   loadActions: (userId?: string) => Promise<void>;
+}
+
+function workersPath(companyId: string | undefined, suffix = ''): string {
+  return companyId ? `/api/admin/companies/${companyId}/workers${suffix}` : `/api/workers${suffix}`;
+}
+
+/** companyId present = the independent super-admin dashboard, hitting a
+ * requireSuperAdmin-gated /api/admin/* route (see server/src/auth.ts) —
+ * needs the separate super-admin token, not the caller's own normal
+ * session, which that route never even looks at. companyId omitted = the
+ * caller's own company via the normal /api/workers route, unchanged. */
+function workersRequest<T>(companyId: string | undefined, path: string, init?: RequestInit): Promise<T> {
+  return companyId ? superAdminApiRequest<T>(path, init) : localApiRequest<T>(path, init);
 }
 
 /** Same "stores own data, components own side effects" convention as
@@ -66,18 +89,18 @@ export const useWorkersStore = create<WorkersState>((set, get) => ({
   loading: false,
   error: null,
 
-  load: async () => {
+  load: async (companyId) => {
     set({ loading: true, error: null });
     try {
-      const { workers } = await localApiRequest<{ workers: Worker[] }>('/api/workers');
+      const { workers } = await workersRequest<{ workers: Worker[] }>(companyId, workersPath(companyId));
       set({ workers, loading: false });
     } catch (err) {
       set({ loading: false, error: err instanceof Error ? err.message : 'Nepavyko įkelti darbuotojų' });
     }
   },
 
-  create: async (input) => {
-    const worker = await localApiRequest<Worker>('/api/workers', {
+  create: async (input, companyId) => {
+    const worker = await workersRequest<Worker>(companyId, workersPath(companyId), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input),
@@ -85,8 +108,8 @@ export const useWorkersStore = create<WorkersState>((set, get) => ({
     set({ workers: [...get().workers, worker] });
   },
 
-  update: async (id, input) => {
-    const worker = await localApiRequest<Worker>(`/api/workers/${encodeURIComponent(id)}`, {
+  update: async (id, input, companyId) => {
+    const worker = await workersRequest<Worker>(companyId, workersPath(companyId, `/${encodeURIComponent(id)}`), {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input),
@@ -94,8 +117,8 @@ export const useWorkersStore = create<WorkersState>((set, get) => ({
     set({ workers: get().workers.map((w) => (w.id === id ? worker : w)) });
   },
 
-  remove: async (id) => {
-    await localApiRequest(`/api/workers/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  remove: async (id, companyId) => {
+    await workersRequest(companyId, workersPath(companyId, `/${encodeURIComponent(id)}`), { method: 'DELETE' });
     set({ workers: get().workers.filter((w) => w.id !== id) });
   },
 

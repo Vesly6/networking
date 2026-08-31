@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { Column, Row, TableMeta } from '../types';
-import { deleteTableDB, getTable, loadRowsForTable, loadTables, saveRows, saveTable, updateTableName } from '../db/db';
+import { deleteTableDB, getTable, loadRowsForTable, loadTables, saveRows, saveTable, updateTableBackupFlag, updateTableName } from '../db/db';
 import { randomUUID } from '../utils/uuid';
 
 const LAST_ACTIVE_KEY = 'cold-crm:last-active-table';
@@ -85,6 +85,17 @@ interface WorkspaceState {
    * actionError) if either write fails, rather than throwing — see
    * actionError's own doc comment. */
   createTable: (name: string) => Promise<string | null>;
+  /** Like createTable above, but with zero seed columns/rows — used
+   * exclusively by TableView's "Importuoti CSV" flow (via App.tsx's
+   * startCsvImport), which always creates a brand-new table for a CSV
+   * import rather than writing into whatever table was open when the
+   * button was clicked. Seeding the usual 50 blank "Stulpelis N" columns
+   * first would pollute CsvImportMapping's "existing column" dropdown with
+   * 50 meaningless options before a single real CSV header has been
+   * mapped — the whole point of a fresh import target is that every
+   * header becomes a real, named, correctly-typed column through that
+   * mapping step. */
+  createEmptyTable: (name: string) => Promise<string | null>;
   /** Clones a table's columns and every row (fresh ids throughout, cell
    * keys remapped to the new column ids) into a brand-new table — used by
    * SheetTabs' right-click "Duplicate". Async because it has to read the
@@ -94,6 +105,11 @@ interface WorkspaceState {
   duplicateTable: (id: string) => Promise<string | null>;
   renameTable: (id: string, name: string) => void;
   deleteTable: (id: string) => void;
+  /** The Workspace screen's per-table daily-backup toggle (Package icon)
+   * — see server/src/tableData/db.ts's own doc comment on why this is explicit
+   * per-table opt-in rather than automatic. Same optimistic-update-then-
+   * persist shape as renameTable/deleteTable above. */
+  setTableBackupFlag: (id: string, enabled: boolean) => void;
   setActiveTable: (id: string | null) => void;
 }
 
@@ -146,6 +162,29 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     try {
       await saveTable(table);
       await saveRows(buildSeedRows(table.id));
+      set({ actionError: null });
+      return table.id;
+    } catch (err) {
+      set({
+        tables: get().tables.filter((t) => t.id !== table.id),
+        actionError: err instanceof Error ? `Nepavyko sukurti lentelės — ${err.message}` : 'Nepavyko sukurti lentelės serveryje',
+      });
+      return null;
+    }
+  },
+
+  createEmptyTable: async (name) => {
+    const now = Date.now();
+    const table: TableMeta = {
+      id: randomUUID(),
+      name: name.trim() || `Lentelė ${get().tables.length + 1}`,
+      columns: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+    set({ tables: [...get().tables, table] });
+    try {
+      await saveTable(table);
       set({ actionError: null });
       return table.id;
     } catch (err) {
@@ -257,6 +296,18 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       .catch((err) => {
         set({
           actionError: err instanceof Error ? `Nepavyko ištrinti lentelės — ${err.message}` : 'Nepavyko ištrinti lentelės serveryje',
+        });
+      });
+  },
+
+  setTableBackupFlag: (id, enabled) => {
+    const tables = get().tables.map((t) => (t.id === id ? { ...t, dailyBackupEnabled: enabled } : t));
+    set({ tables });
+    updateTableBackupFlag(id, enabled)
+      .then(() => set({ actionError: null }))
+      .catch((err) => {
+        set({
+          actionError: err instanceof Error ? `Nepavyko pakeisti kopijavimo — ${err.message}` : 'Nepavyko pakeisti kopijavimo nustatymo serveryje',
         });
       });
   },

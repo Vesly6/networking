@@ -3309,6 +3309,71 @@ tr.row-drop-end td {
   padding: 0.3em 0.6em;
 }
 
+/* The Workspace screen's per-table daily-backup toggle (Package icon) —
+   plain/muted until active, then a light accent tint, same "outline vs
+   filled" cue the rest of this app's toggle-style buttons already use
+   rather than inventing a new visual language for one button. */
+.table-card-backup-toggle {
+  padding: 0.3em 0.5em !important;
+  opacity: 0.5;
+}
+.table-card-backup-toggle.active {
+  opacity: 1;
+  background: var(--bg-alt);
+  border-color: var(--accent);
+}
+
+/* Owner's Admin dashboard (AdminView.tsx) — reuses .workspace-view/
+   .table-cards/.table-card/.worker-form-permission-list/
+   .integrations-intro from elsewhere in this file rather than a fresh
+   set of rules; only what's genuinely new to this screen lives here. */
+.admin-view {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.admin-features-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+.admin-backups-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+.admin-backups-table th {
+  text-align: left;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  padding: 0.4em 0.5em;
+  border-bottom: 1px solid var(--border);
+}
+.admin-backups-table td {
+  padding: 0.5em;
+  border-bottom: 1px solid var(--border);
+}
+.admin-backups-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+.admin-backups-actions button {
+  font-size: 0.78rem;
+  padding: 0.3em 0.6em;
+}
+
+.admin-login-log {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+.admin-login-log select {
+  align-self: flex-start;
+  padding: 0.4em 0.6em;
+}
+
 /* Calls tab (Zadarma statistics) */
 
 .calls-view {
@@ -5920,6 +5985,21 @@ tr.row-drop-end td {
   flex-direction: column;
   gap: 0.6rem;
 }
+/* A real, reported bug: MergeContactsModal.tsx reuses this class for its
+   map-fields step, which has more fields than LeadCsvImport.tsx's own
+   (short) form ever did — enough to grow taller than the modal's own
+   max-height (.modal, above), pushing the "Toliau" confirm button
+   completely out of view with no way to reach it. `overflow-y: auto`
+   alone is enough to fix this without an explicit `flex: 1; min-height: 0`
+   too — per the flexbox spec, setting `overflow` to anything but `visible`
+   on a flex item already changes its automatic minimum size to 0, which is
+   exactly what lets it shrink to fit the parent's max-height and scroll
+   instead of overflowing it (confirmed working here the same way
+   .csv-import-mapping-list below already relies on it). */
+.linkedin-csv-mapping {
+  overflow-y: auto;
+  padding-right: 0.2rem;
+}
 .linkedin-csv-mapping label {
   display: flex;
   flex-direction: column;
@@ -5934,6 +6014,98 @@ tr.row-drop-end td {
 
 .linkedin-search-import-modal {
   max-width: 560px;
+}
+
+/* MergeContactsModal.tsx — wider than the base .modal since its map-fields
+   step has more fields than most modals, and its review step's group rows
+   need real width for a company name + a select side by side. */
+.merge-contacts-modal {
+  max-width: 640px;
+}
+.merge-contacts-name-mode {
+  display: flex;
+  gap: 1rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+.merge-contacts-name-mode label {
+  flex-direction: row !important;
+  align-items: center;
+  gap: 0.35rem !important;
+}
+.merge-contacts-review {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  overflow-y: auto;
+}
+.merge-contacts-section-title {
+  margin: 0.4rem 0 0;
+  font-size: 0.85rem;
+}
+.merge-contacts-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.merge-contacts-section-header .merge-contacts-section-title {
+  margin: 0;
+}
+.merge-contacts-section-header button {
+  font-size: 0.75rem;
+  padding: 0.25em 0.6em;
+  flex-shrink: 0;
+}
+.merge-contacts-warning {
+  margin: 0;
+  padding: 0.5rem 0.7rem;
+  border-radius: 6px;
+  background: var(--danger-bg);
+  color: var(--danger);
+  font-size: 0.8rem;
+}
+.merge-contacts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  max-height: 260px;
+  overflow-y: auto;
+  padding-right: 0.2rem;
+}
+.merge-contacts-group {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 220px);
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.3rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.merge-contacts-group-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.merge-contacts-group-name {
+  font-size: 0.85rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.merge-contacts-group-meta {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+.merge-contacts-group select {
+  width: 100%;
+  font-size: 0.8rem;
+}
+.merge-contacts-toggle-matched {
+  align-self: flex-start;
+  font-size: 0.8rem;
+  color: var(--text-muted);
 }
 .linkedin-search-import-form {
   display: flex;
@@ -7100,6 +7272,27 @@ tr.row-drop-end td {
   display: flex;
   align-items: flex-end;
   gap: 0.6rem;
+}
+.integrations-webhook-info {
+  margin-top: 0.6rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--border);
+}
+.integrations-webhook-url-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.integrations-webhook-url-row code {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  white-space: nowrap;
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.3em 0.5em;
+  font-size: 0.75rem;
 }
 .integrations-field-row .popover-field {
   flex: 1;

@@ -21,6 +21,7 @@ import { CellHoverEditor } from './CellHoverEditor';
 import { ColumnMenu } from './ColumnMenu';
 import { AddColumnPopover } from './AddColumnPopover';
 import { CsvImportMapping } from './CsvImportMapping';
+import { MergeContactsModal, type MergeStats } from './MergeContactsModal';
 import { ColumnHeaderMenu } from './ColumnHeaderMenu';
 import { RowHeaderMenu } from './RowHeaderMenu';
 import { CellContextMenu } from './CellContextMenu';
@@ -51,7 +52,7 @@ import {
   RECENT_COLORS_KEY,
   TABLE_VIEW_STATE_KEY_PREFIX,
 } from '../../constants';
-import { MoreHorizontal, Undo2, Redo2, Lock, X, GripVertical, Hash, MoreVertical, ChevronUp, ChevronDown } from 'lucide-react';
+import { MoreHorizontal, Undo2, Redo2, Lock, X, GripVertical, Hash, MoreVertical, ChevronUp, ChevronDown, UserPlus } from 'lucide-react';
 
 interface TableViewProps {
   focusRowId: string | null;
@@ -62,6 +63,21 @@ interface TableViewProps {
    * own Phone column) drives this. */
   focusContact: { rowId: string; columnId: string; contactId: string } | null;
   onContactFocusHandled: () => void;
+  /** Non-null only once this is genuinely the just-created target table for
+   * an in-flight "Importuoti CSV" — parked and gated in App.tsx (see its
+   * own doc comment) since the table this import writes into doesn't exist
+   * in useTableStore until *after* the table-switch this same import
+   * triggers. Renders CsvImportMapping with `columns={[]}` — a table this
+   * import created a moment ago always starts with none. */
+  pendingImport: { headers: string[]; dataRows: string[][] } | null;
+  /** Parses a picked CSV file and hands it to App.tsx, which creates the
+   * brand-new target table and switches to it — see App.tsx's
+   * startCsvImport for why this can't just happen locally against the
+   * table that's open right now. */
+  onStartCsvImport: (headers: string[], dataRows: string[][], suggestedName: string) => void;
+  /** Called once the mapping modal for `pendingImport` is confirmed or
+   * cancelled, so App.tsx can clear it. */
+  onImportDone: () => void;
 }
 
 type SortDirection = 'asc' | 'desc';
@@ -230,7 +246,15 @@ function saveRecentColor(color: string) {
   return next;
 }
 
-export function TableView({ focusRowId, onFocusHandled, focusContact, onContactFocusHandled }: TableViewProps) {
+export function TableView({
+  focusRowId,
+  onFocusHandled,
+  focusContact,
+  onContactFocusHandled,
+  pendingImport,
+  onStartCsvImport,
+  onImportDone,
+}: TableViewProps) {
   const tableId = useTableStore((s) => s.tableId);
   const columns = useTableStore((s) => s.columns);
   const rows = useTableStore((s) => s.rows);
@@ -352,10 +376,11 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
     );
   };
   const [addColumnAnchor, setAddColumnAnchor] = useState<HTMLElement | null>(null);
-  // Set once a CSV file is parsed, holding the raw parse result until the
-  // user resolves the CsvImportMapping modal (confirm or cancel) — see
-  // handleFileChange/handleConfirmImport below.
-  const [pendingImport, setPendingImport] = useState<{ headers: string[]; dataRows: string[][] } | null>(null);
+  // Set while MergeContactsModal is open — see handleConfirmMerge below.
+  // Distinct from pendingImport: that one imports a fresh CSV into new
+  // columns; this one merges a second CSV's contacts into the already-open
+  // table's existing Contacts column, matched by website domain.
+  const [mergeContactsOpen, setMergeContactsOpen] = useState(false);
   const [columnContextMenu, setColumnContextMenu] = useState<{ x: number; y: number; targetIds: string[] } | null>(null);
   // Additive alongside sort (see NumericRangeFilterPopover's own doc
   // comment) — a map so several columns can each have their own active
@@ -2092,11 +2117,15 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
         showToast('Failas tuščias arba nepavyko jo nuskaityti');
         return;
       }
-      // Hand off to the CsvImportMapping modal rather than importing
-      // immediately — see its own doc comment for why every header needs an
-      // explicit column/type decision instead of the old auto-match-or-
-      // create-as-text behavior.
-      setPendingImport({ headers, dataRows });
+      // Always creates a brand-new table (App.tsx's startCsvImport) rather
+      // than importing into this one — on explicit request, after a real
+      // reported mixup where importing a second, unrelated CSV while a
+      // table was open silently piled its rows on top of that table's own
+      // data. The mapping step still happens (see CsvImportMapping's own
+      // doc comment for why every header needs an explicit decision), just
+      // against the fresh table once App.tsx has switched to it.
+      const suggestedName = file.name.replace(/\.csv$/i, '');
+      onStartCsvImport(headers, dataRows, suggestedName);
     } catch {
       showToast('Nepavyko importuoti failo');
     }
@@ -2105,7 +2134,7 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
   const handleConfirmImport = async (mapping: Record<string, ImportColumnMapping>) => {
     if (!pendingImport) return;
     const { headers, dataRows } = pendingImport;
-    setPendingImport(null);
+    onImportDone();
     // importCsvRows now streams rows in on-screen batches (see its own doc
     // comment in useTableStore.ts) — the first rows are visible almost
     // immediately, with the toolbar's progress bar (next to "🎨 Spalva")
@@ -2115,6 +2144,15 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
     const parts = [`Importuota eilučių: ${result.createdRows}`];
     if (result.createdColumns > 0) parts.push(`naujų stulpelių: ${result.createdColumns}`);
     if (result.truncatedCells > 0) parts.push(`apkarpytų langelių: ${result.truncatedCells}`);
+    showToast(parts.join(' · '));
+  };
+
+  const handleConfirmMerge = (updates: CellUpdate[], stats: MergeStats) => {
+    setMergeContactsOpen(false);
+    if (updates.length > 0) updateCells(updates);
+    const parts = [`Pridėta kontaktų: ${stats.addedContacts}`, `atnaujinta eilučių: ${stats.updatedRows}`];
+    if (stats.skippedDuplicates > 0) parts.push(`praleista dublikatų: ${stats.skippedDuplicates}`);
+    if (stats.skippedGroups > 0) parts.push(`praleista grupių: ${stats.skippedGroups}`);
     showToast(parts.join(' · '));
   };
 
@@ -2351,6 +2389,11 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
             <button type="button" onClick={handleExport}>
               Eksportuoti CSV
             </button>
+            {contactColumn && (
+              <button type="button" title="Pridėti kontaktus iš antro CSV failo, pagal svetainę" onClick={() => setMergeContactsOpen(true)}>
+                <UserPlus className="icon" size={14} /> Pridėti kontaktus
+              </button>
+            )}
           </>
         )}
         {pendingImport && (
@@ -2359,7 +2402,16 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
             dataRows={pendingImport.dataRows}
             columns={columns}
             onConfirm={handleConfirmImport}
-            onCancel={() => setPendingImport(null)}
+            onCancel={onImportDone}
+          />
+        )}
+        {mergeContactsOpen && contactColumn && (
+          <MergeContactsModal
+            columns={columns}
+            rows={rows}
+            contactColumnId={contactColumn.id}
+            onConfirm={handleConfirmMerge}
+            onCancel={() => setMergeContactsOpen(false)}
           />
         )}
         {columnContextMenu && (

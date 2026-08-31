@@ -10,7 +10,10 @@ import { getAuthToken, notifyUnauthorized } from './authToken';
 // only exposes env vars prefixed VITE_ to client code, and only bakes them
 // in at build time, so this needs to be set before `npm run build`, not
 // something the deployed app can read at runtime.
-const LOCAL_API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000';
+// Exported so any UI that needs to show the server's own public URL (e.g.
+// IntegrationsView's per-company Instantly webhook URL) can build off the
+// same base instead of re-deriving it.
+export const LOCAL_API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000';
 const IS_LOCAL_DEFAULT = !import.meta.env.VITE_API_BASE_URL;
 
 export async function localApiRequest<T>(path: string, init?: RequestInit): Promise<T> {

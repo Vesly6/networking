@@ -5,6 +5,23 @@ import { deleteRowDB, getTable, importRows, loadRowsForTable, saveRow, saveRows,
 import { randomUUID } from '../utils/uuid';
 import { addNoteEntry } from '../utils/noteHistory';
 import { useAuthStore } from './useAuthStore';
+import { PRESET_COLORS } from '../constants';
+
+// A real, reported pain: a CSV import that creates a brand-new `dropdown`
+// column (e.g. re-importing a table you'd previously exported, now that
+// "Importuoti CSV" always targets a new table — see App.tsx's
+// startCsvImport) used to leave that column with zero options and zero
+// colors, since CSV has nowhere to carry that metadata — every status had
+// to be retyped by hand and re-colored one at a time through the column's
+// own (⋮) menu. importCsvRows below now seeds a new dropdown column's
+// `options`/`optionColors` directly from the distinct values actually
+// found in the imported data, cycling through the same PRESET_COLORS the
+// rest of the app already uses for status badges — not a guarantee of the
+// *exact* original colors (CSV genuinely can't carry that), but real
+// options with real colors already in place instead of a blank slate.
+// Capped so a column mistakenly typed 'dropdown' against near-unique free
+// text doesn't spray dozens of one-off "options" into the column.
+const MAX_AUTO_DROPDOWN_OPTIONS = 30;
 
 export interface ImportResult {
   createdRows: number;
@@ -863,6 +880,22 @@ export const useTableStore = create<TableState>((set, get) => {
           continue;
         }
         const column: Column = { id: randomUUID(), name: header.trim() || 'Stulpelis', type: decision.columnType };
+        if (decision.columnType === 'dropdown') {
+          const headerIndex = headers.indexOf(header);
+          const seen = new Set<string>();
+          const distinct: string[] = [];
+          for (const dataRow of dataRows) {
+            const raw = (dataRow[headerIndex] ?? '').trim();
+            if (!raw || seen.has(raw)) continue;
+            seen.add(raw);
+            distinct.push(raw);
+            if (distinct.length >= MAX_AUTO_DROPDOWN_OPTIONS) break;
+          }
+          if (distinct.length > 0) {
+            column.options = distinct;
+            column.optionColors = Object.fromEntries(distinct.map((opt, i) => [opt, PRESET_COLORS[i % PRESET_COLORS.length]]));
+          }
+        }
         columns.push(column);
         createdColumns++;
         headerToColumnId.set(header, column.id);

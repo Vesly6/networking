@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import Papa from 'papaparse';
 import { randomUUID } from 'node:crypto';
 import { dataFilePath } from '../dataDir.js';
 
@@ -91,6 +92,39 @@ function migrate(database: Database.Database): void {
   }
   database.exec(`CREATE INDEX IF NOT EXISTS tables_by_company ON tables(company_id)`);
   database.exec(`CREATE INDEX IF NOT EXISTS rows_by_company ON rows(company_id)`);
+
+  // Explicit per-table opt-in for daily backups — NOT automatic for every
+  // table, on explicit request: a company can have 30 tables and only
+  // want 3 backed up, to keep storage/noise down (broader default
+  // coverage is an intentional later step, not this pass).
+  try {
+    database.exec(`ALTER TABLE tables ADD COLUMN daily_backup_enabled INTEGER NOT NULL DEFAULT 0`);
+  } catch {
+    // Column already exists — nothing to do.
+  }
+
+  database.exec(`
+    -- One row per daily snapshot of one flagged table. Stores the SAME
+    -- structural JSON the live table uses (columns_json/rows_json), not a
+    -- flattened CSV string — restoring from a lossy CSV round-trip is
+    -- exactly the type-guessing failure mode CLAUDE.md documents for
+    -- regular CSV import (a note/contact column's JSON-array cell value
+    -- reduces to unparseable garbage once it's been through a naive
+    -- CSV round-trip). The CSV a super-admin actually downloads is
+    -- rendered from this JSON on demand — see backupToCsvText below.
+    CREATE TABLE IF NOT EXISTS backups (
+      id TEXT PRIMARY KEY,
+      company_id TEXT NOT NULL,
+      table_id TEXT NOT NULL,
+      table_name TEXT NOT NULL,
+      columns_json TEXT NOT NULL,
+      rows_json TEXT NOT NULL,
+      row_count INTEGER NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS backups_by_company ON backups(company_id, created_at);
+    CREATE INDEX IF NOT EXISTS backups_by_table ON backups(table_id, created_at);
+  `);
 }
 
 /** Called once from index.ts's startup sequence, right after
@@ -131,6 +165,7 @@ export interface TableMeta {
   id: string;
   name: string;
   columns: unknown[]; // Column[] — opaque to this server, see note above
+  dailyBackupEnabled: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -139,6 +174,7 @@ interface TableRow {
   id: string;
   name: string;
   columns_json: string;
+  daily_backup_enabled: number;
   created_at: number;
   updated_at: number;
 }
@@ -148,6 +184,7 @@ function tableFromRow(r: TableRow): TableMeta {
     id: r.id,
     name: r.name,
     columns: JSON.parse(r.columns_json),
+    dailyBackupEnabled: r.daily_backup_enabled === 1,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -206,6 +243,17 @@ export function updateTableName(tableId: string, name: string, companyId: string
     | undefined;
   if (!existing) return;
   database.prepare(`UPDATE tables SET name = ?, updated_at = ? WHERE id = ? AND company_id = ?`).run(name, Date.now(), tableId, companyId);
+}
+
+/** The Workspace screen's per-table "📦 daily backup" toggle (a company's
+ * own super_admin — no owner gate needed here, unlike the Admin
+ * dashboard's own backup oversight). Does NOT bump updated_at — this
+ * isn't a content edit, and touching it shouldn't make an otherwise-
+ * untouched table look recently modified. */
+export function setTableBackupFlag(tableId: string, companyId: string, enabled: boolean): void {
+  getDb()
+    .prepare(`UPDATE tables SET daily_backup_enabled = ? WHERE id = ? AND company_id = ?`)
+    .run(enabled ? 1 : 0, tableId, companyId);
 }
 
 /** Rows cascade via the FK (ON DELETE CASCADE) — no separate row-deletion
@@ -747,4 +795,190 @@ export function saveRows(rows: Row[], companyId: string, workerRestriction?: Wor
 
 export function deleteRow(id: string, companyId: string): void {
   getDb().prepare(`DELETE FROM rows WHERE id = ? AND company_id = ?`).run(id, companyId);
+}
+
+// --- Daily backups (super-admin's Package-icon toggle + the owner Admin
+// dashboard's Duomenys panel) -------------------------------------------
+// Snapshots the SAME structural JSON the live table already stores
+// (columns + rows), not a flattened CSV — see the `backups` table's own
+// schema comment above for why. Nothing here reads/writes `tables`/`rows`
+// directly except createBackup (a plain snapshot-and-insert) and
+// restoreBackupAsNewTable (a plain snapshot-and-insert in the other
+// direction).
+
+export interface BackupSummary {
+  id: string;
+  companyId: string;
+  tableId: string;
+  tableName: string;
+  rowCount: number;
+  createdAt: number;
+}
+
+interface BackupSummaryRow {
+  id: string;
+  company_id: string;
+  table_id: string;
+  table_name: string;
+  row_count: number;
+  created_at: number;
+}
+
+function backupSummaryFromRow(r: BackupSummaryRow): BackupSummary {
+  return { id: r.id, companyId: r.company_id, tableId: r.table_id, tableName: r.table_name, rowCount: r.row_count, createdAt: r.created_at };
+}
+
+const BACKUP_SUMMARY_COLUMNS = `id, company_id, table_id, table_name, row_count, created_at`;
+
+/** Every table currently flagged for daily backup, across every company
+ * — the scheduler tick (index.ts) walks this list once per hour rather
+ * than looping every table in the system and checking a flag per row.
+ * Deliberately its own minimal shape, not TableMeta (which has no
+ * companyId field at all — see its own doc comment on staying opaque/
+ * company-agnostic elsewhere in this file) — the scheduler needs exactly
+ * id+companyId to call createBackup, nothing else. */
+export function listBackupFlaggedTables(): Array<{ id: string; companyId: string }> {
+  const rows = getDb().prepare(`SELECT id, company_id FROM tables WHERE daily_backup_enabled = 1`).all() as Array<{
+    id: string;
+    company_id: string;
+  }>;
+  return rows.map((r) => ({ id: r.id, companyId: r.company_id }));
+}
+
+/** UTC date string (YYYY-MM-DD) of this table's most recent backup, or
+ * null if it's never had one — the scheduler's "already ran today" check.
+ * UTC, not local time, matching this codebase's own established
+ * date-bucketing convention (see CLAUDE.md's addDays()/dayKeyUtc() notes)
+ * — a server that's normally UTC anyway (Render) has no reliable way to
+ * know any individual company's "local day" boundary. */
+export function latestBackupDateUtc(tableId: string): string | null {
+  const row = getDb().prepare(`SELECT created_at FROM backups WHERE table_id = ? ORDER BY created_at DESC LIMIT 1`).get(tableId) as
+    | { created_at: number }
+    | undefined;
+  return row ? new Date(row.created_at).toISOString().slice(0, 10) : null;
+}
+
+/** Snapshots `tableId` right now. Called only for tables already
+ * confirmed flagged (listBackupFlaggedTables) — no flag check here, so
+ * this can also be reused later for an on-demand "back this up now"
+ * button without re-deriving the flag state. */
+export function createBackup(tableId: string, companyId: string): BackupSummary | null {
+  const table = getTable(tableId, companyId);
+  if (!table) return null;
+  const rows = loadRowsForTable(tableId, companyId);
+  const id = randomUUID();
+  const createdAt = Date.now();
+  getDb()
+    .prepare(
+      `INSERT INTO backups (id, company_id, table_id, table_name, columns_json, rows_json, row_count, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(id, companyId, table.id, table.name, JSON.stringify(table.columns), JSON.stringify(rows), rows.length, createdAt);
+  return { id, companyId, tableId: table.id, tableName: table.name, rowCount: rows.length, createdAt };
+}
+
+export function listBackupsForCompany(companyId: string): BackupSummary[] {
+  const rows = getDb()
+    .prepare(`SELECT ${BACKUP_SUMMARY_COLUMNS} FROM backups WHERE company_id = ? ORDER BY created_at DESC`)
+    .all(companyId) as BackupSummaryRow[];
+  return rows.map(backupSummaryFromRow);
+}
+
+/** Owner-only (every company's backups, for oversight — see
+ * /api/admin/backups). */
+export function listAllBackups(): BackupSummary[] {
+  const rows = getDb().prepare(`SELECT ${BACKUP_SUMMARY_COLUMNS} FROM backups ORDER BY created_at DESC`).all() as BackupSummaryRow[];
+  return rows.map(backupSummaryFromRow);
+}
+
+/** `companyId` optional — omitted for the owner's cross-company Admin
+ * dashboard (any backup, any company), required for the per-company
+ * super_admin route so a request can't delete another company's backup
+ * by guessing/copying an id. */
+export function deleteBackup(id: string, companyId?: string): void {
+  if (companyId) {
+    getDb().prepare(`DELETE FROM backups WHERE id = ? AND company_id = ?`).run(id, companyId);
+  } else {
+    getDb().prepare(`DELETE FROM backups WHERE id = ?`).run(id);
+  }
+}
+
+/** Called once per scheduler tick (index.ts) — deletes anything older
+ * than `maxAgeDays`. Cheap enough to just run unconditionally every tick
+ * rather than tracking a separate "last purged at" marker. */
+export function purgeOldBackups(maxAgeDays: number): void {
+  const cutoff = Date.now() - maxAgeDays * 86_400_000;
+  getDb().prepare(`DELETE FROM backups WHERE created_at < ?`).run(cutoff);
+}
+
+/** `companyId` optional — omitted for the owner's cross-company Admin
+ * dashboard routes (download/restore), required for the per-company
+ * super_admin routes so a request can't reach into another company's
+ * backup by guessing/copying an id. */
+function getBackupFull(id: string, companyId?: string) {
+  const row = companyId
+    ? (getDb().prepare(`SELECT * FROM backups WHERE id = ? AND company_id = ?`).get(id, companyId) as
+        | (BackupSummaryRow & { columns_json: string; rows_json: string })
+        | undefined)
+    : (getDb().prepare(`SELECT * FROM backups WHERE id = ?`).get(id) as (BackupSummaryRow & { columns_json: string; rows_json: string }) | undefined);
+  if (!row) return null;
+  return { ...backupSummaryFromRow(row), columns: JSON.parse(row.columns_json) as Array<{ id: string; name: string }>, rows: JSON.parse(row.rows_json) as Row[] };
+}
+
+/** Renders a stored snapshot as CSV text on demand — same field/quoting
+ * logic as app/src/utils/csv.ts's exportRowsToCsv (Papa.unparse), ported
+ * server-side rather than hand-rolled, for the identical reason CLAUDE.md
+ * already documents against a naive split/join CSV serializer (embedded
+ * tabs/newlines/quotes in a cell need real RFC4180 quoting). */
+export function backupToCsvText(id: string, companyId?: string): { filename: string; csv: string } | null {
+  const backup = getBackupFull(id, companyId);
+  if (!backup) return null;
+  const fields = backup.columns.map((c) => c.name);
+  const data = backup.rows.map((row) => backup.columns.map((c) => row.cells[c.id] ?? ''));
+  const csv = Papa.unparse({ fields, data });
+  const date = new Date(backup.createdAt).toISOString().slice(0, 10);
+  return { filename: `${backup.tableName} (${date}).csv`, csv };
+}
+
+/** Creates a brand-new table from a stored snapshot — current data is
+ * never touched (this IS the "History"/day-level-restore feature, per
+ * the account owner's own explicit choice of a safe, non-destructive
+ * restore over overwriting live data). Column ids are kept exactly as
+ * they were in the snapshot (nothing else in this schema requires column
+ * ids to be globally unique — they're only ever looked up scoped to
+ * their own table's own columns_json), so only row ids need remapping;
+ * cells/colors are keyed by column id, which doesn't change, so they
+ * carry over unmodified.
+ *
+ * `companyId` optional — required for the per-company super_admin route
+ * (same "can't reach into another company's backup" reasoning as
+ * deleteBackup); omitted for the owner's cross-company Admin dashboard,
+ * where the new table is created under the backup's OWN company (read
+ * back from the backup record itself, via getBackupFull's unscoped
+ * lookup) — never the owner's own company, which would silently move a
+ * client's restored data into the owner's own workspace. */
+export function restoreBackupAsNewTable(id: string, companyId?: string): TableMeta | null {
+  const backup = getBackupFull(id, companyId);
+  if (!backup) return null;
+  const targetCompanyId = companyId ?? backup.companyId;
+  const now = Date.now();
+  const date = new Date(backup.createdAt).toISOString().slice(0, 10);
+  const newTable: TableMeta = {
+    id: randomUUID(),
+    name: `${backup.tableName} (kopija ${date})`,
+    columns: backup.columns,
+    dailyBackupEnabled: false,
+    createdAt: now,
+    updatedAt: now,
+  };
+  saveTable(newTable, targetCompanyId);
+  const remappedRows: Row[] = backup.rows.map((row) => ({
+    ...row,
+    id: randomUUID(),
+    tableId: newTable.id,
+    createdAt: now,
+    updatedAt: now,
+  }));
+  saveRows(remappedRows, targetCompanyId);
+  return newTable;
 }
