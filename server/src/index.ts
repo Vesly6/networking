@@ -822,14 +822,28 @@ app.post(
   }),
 );
 
-// The Notes tab's 🎤 voice-note button (CellHoverEditor.tsx) — records via
-// the browser's own MediaRecorder, base64-encodes the resulting audio, and
-// posts it here (reusing the existing express.json({limit:'50mb'}) parser
-// rather than standing up a separate multipart/raw-body route for what's
-// normally a short clip). Always Lithuanian ('lt'), on explicit request —
-// no language picker, unlike the call-transcription route above, since
-// this one only ever has a single, known intended language. Same
+// Shared by the Notes tab's 🎤 voice-note button (CellHoverEditor.tsx) and
+// the Email Generator's 🎤 dictation button (EmailGeneratorView.tsx) —
+// records via the browser's own MediaRecorder, base64-encodes the
+// resulting audio, and posts it here (reusing the existing
+// express.json({limit:'50mb'}) parser rather than standing up a separate
+// multipart/raw-body route for what's normally a short clip). Same
 // synchronous "transcribe and return the text" shape as /transcribe above.
+//
+// `lang` is optional: omitted (the Notes tab's own call, unchanged since
+// before this route took a language at all) still defaults to Lithuanian
+// ('lt'), on that feature's own explicit prior request — it only ever has
+// one known intended language, so a picker there would be pointless. The
+// Email Generator sends the literal string `'auto'` instead, which maps
+// to `undefined` here — passing no language hint to transcribeFromBuffer
+// is what actually triggers ElevenLabs Scribe's own language
+// auto-detection (see elevenlabs.ts's own doc comment), needed there
+// because an operator dictating that field genuinely switches between
+// Russian/Lithuanian/English call to call, and Web Speech API's
+// real-time browser recognizer (the previous approach) has no
+// multi-language auto-detect mode at all — it only ever listens for one
+// fixed language per session, which is why that field used to need an
+// explicit RU/LT toggle in the first place.
 app.post(
   '/api/notes/transcribe',
   asyncHandler(async (req, res) => {
@@ -839,8 +853,10 @@ app.post(
       res.status(400).json({ error: 'Trūksta įrašyto garso' });
       return;
     }
+    const rawLang = req.body?.lang;
+    const lang = rawLang === 'auto' ? undefined : typeof rawLang === 'string' ? rawLang : 'lt';
     const buffer = Buffer.from(audioBase64, 'base64');
-    const result = await transcribeFromBuffer(buffer, mimeType, requireElevenlabsKey(req.auth!.companyId), 'lt');
+    const result = await transcribeFromBuffer(buffer, mimeType, requireElevenlabsKey(req.auth!.companyId), lang);
     res.json(result);
   }),
 );

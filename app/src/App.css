@@ -17,8 +17,18 @@ svg.icon {
 .app-loading {
   height: 100%;
   display: flex;
+  flex-direction: column;
+  gap: 8px;
   align-items: center;
   justify-content: center;
+  color: var(--text-muted);
+}
+
+.calls-cold-start-hint {
+  margin: 0;
+  max-width: 320px;
+  font-size: 0.8rem;
+  text-align: center;
   color: var(--text-muted);
 }
 
@@ -6511,6 +6521,15 @@ tr.row-drop-end td {
   padding: 0.05em 0.35em;
   border-radius: 4px;
   background: var(--bg-alt);
+  /* Explicit, not inherited — the badge keeps its own light `--bg-alt`
+     background regardless of whether its parent button is .active, but
+     without this the badge's text color inherited the parent's, which
+     flips to --accent-contrast (light, meant for the blue --accent
+     background) the moment the button becomes selected — light text on
+     the badge's own light background, unreadable. A real, reported bug:
+     the LT/RU code badges went blank the instant their button was
+     selected. */
+  color: var(--text);
   border: 1px solid var(--border);
   vertical-align: 1px;
 }
@@ -6559,26 +6578,6 @@ tr.row-drop-end td {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-}
-.email-generator-form .mic-lang-select {
-  display: flex;
-  gap: 0.3rem;
-}
-.email-generator-form .mic-lang-select button {
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  padding: 0.25em 0.5em;
-  font-size: 0.76rem;
-  background: var(--bg);
-  color: var(--text);
-}
-.email-generator-form .mic-lang-select button.active {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--accent-contrast);
-}
-.email-generator-form .mic-lang-select button:disabled {
-  opacity: 0.6;
 }
 .email-generator-form .icon-btn {
   border: 1px solid var(--border);

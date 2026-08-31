@@ -20,15 +20,18 @@ async function blobToBase64(blob: Blob): Promise<string> {
 }
 
 /** Sends a recorded voice note (CellHoverEditor.tsx's 🎤 button, via
- * MediaRecorder) to server/src/index.ts's POST /api/notes/transcribe —
- * always Lithuanian, on explicit request (no language param to pick,
- * unlike call transcription elsewhere in this app). */
-export async function transcribeVoiceNote(audioBlob: Blob): Promise<string> {
+ * MediaRecorder) to server/src/index.ts's POST /api/notes/transcribe.
+ * `lang` defaults to omitted, which the server maps to Lithuanian — the
+ * Notes tab's own long-standing explicit choice (a single, known intended
+ * language, no picker needed). Pass `'auto'` (as EmailGeneratorView.tsx's
+ * dictation button does) to instead get ElevenLabs' real language
+ * auto-detection — see the server route's own doc comment. */
+export async function transcribeVoiceNote(audioBlob: Blob, lang?: string): Promise<string> {
   const audioBase64 = await blobToBase64(audioBlob);
   const { text } = await localApiRequest<{ text: string }>('/api/notes/transcribe', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ audioBase64, mimeType: audioBlob.type || 'audio/webm' }),
+    body: JSON.stringify({ audioBase64, mimeType: audioBlob.type || 'audio/webm', lang }),
   });
   return text;
 }

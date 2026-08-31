@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { generateEmail, type EmailLang, type EmailMode, type EmailModel } from '../../utils/emailApi';
+import { transcribeVoiceNote } from '../../utils/voiceNote';
 import { useToastStore } from '../../store/useToastStore';
 import { Mic, Circle, Check, Copy } from 'lucide-react';
 
@@ -21,53 +22,11 @@ const MODE_META: Record<EmailMode, { label: string; placeholder: string }> = {
   },
 };
 
-// The mic dictates in whichever spoken language the operator actually
-// talks in (not to be confused with `lang`/`setLang` below, which picks
-// the *generated email's* language) — separate because the Web Speech
-// API only ever listens for one language per session, so "recognize
-// Russian or Lithuanian" has to mean "let the operator pick which one",
-// not both at once.
-const MIC_LANG_OPTIONS: Array<{ value: string; code: string; label: string }> = [
-  { value: 'ru-RU', code: 'RU', label: 'Rusų' },
-  { value: 'lt-LT', code: 'LT', label: 'Lietuvių' },
-];
-
 const MODEL_OPTIONS: Array<{ value: EmailModel; label: string }> = [
   { value: 'claude-opus-5', label: 'Geriausia kokybė' },
   { value: 'claude-sonnet-5', label: 'Kainos ir kokybės balansas' },
   { value: 'claude-haiku-4-5-20251001', label: 'Greitai ir pigiai' },
 ];
-
-// Same minimal ambient typing this codebase already uses for another
-// browser-only API it doesn't control the shape of (see Softphone.tsx's
-// own `declare global` for window.zadarmaWidgetFn) — the Web Speech API
-// has no official TS lib entry, and only Chrome-family browsers implement
-// it at all (ported as-is from the original extension, which only ever
-// needed to run inside Chrome itself).
-interface SpeechRecognitionResultLike {
-  isFinal: boolean;
-  0: { transcript: string };
-}
-interface SpeechRecognitionEventLike {
-  resultIndex: number;
-  results: SpeechRecognitionResultLike[];
-}
-interface SpeechRecognitionLike extends EventTarget {
-  lang: string;
-  continuous: boolean;
-  interimResults: boolean;
-  start: () => void;
-  stop: () => void;
-  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
-  onerror: ((event: { error: string }) => void) | null;
-  onend: (() => void) | null;
-}
-declare global {
-  interface Window {
-    SpeechRecognition?: new () => SpeechRecognitionLike;
-    webkitSpeechRecognition?: new () => SpeechRecognitionLike;
-  }
-}
 
 /** Ported from a standalone Chrome extension (Desktop/Email-Extention,
  * "AI Email Generator") into a regular tab here — same three modes,
@@ -90,77 +49,86 @@ export function EmailGeneratorView() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [recording, setRecording] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [speechSupported, setSpeechSupported] = useState(true);
-  const [micLang, setMicLang] = useState('ru-RU');
 
-  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const outputRef = useRef<HTMLTextAreaElement>(null);
 
-  // Same lazy, once-per-mount setup as the original extension — Web
-  // Speech API recognizer objects are meant to be created once and
-  // reused across start()/stop() calls, not recreated per click.
+  // Record → transcribe (ElevenLabs Scribe, language auto-detect), not
+  // the browser's real-time Web Speech API this field used to use — that
+  // API only ever listens for one *fixed* language per session, which is
+  // why this field used to need an explicit RU/LT toggle next to the mic
+  // button. Removed on explicit request ("я хочу просто чтоб ничего не
+  // было бы... он сам определяет какой это язык"): an operator dictating
+  // here genuinely switches between Russian/Lithuanian/English call to
+  // call, and re-selecting a toggle before every recording was exactly
+  // the friction being asked to remove. Same record-then-send pattern
+  // already proven for the Notes tab's own voice-note button
+  // (CellHoverEditor.tsx) — see utils/voiceNote.ts and the server route's
+  // own doc comment for how `lang: 'auto'` maps to real auto-detection.
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const micStreamRef = useRef<MediaStream | null>(null);
+
+  // Releases a live mic if this view unmounts mid-recording (tab switch)
+  // — without this the browser's own "mic in use" indicator would stay
+  // lit with no way left to stop it.
   useEffect(() => {
-    const Ctor = window.SpeechRecognition ?? window.webkitSpeechRecognition;
-    if (!Ctor) {
-      setSpeechSupported(false);
-      return;
-    }
-    const recognition = new Ctor();
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.onresult = (event) => {
-      let finalChunk = '';
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const result = event.results[i];
-        if (result.isFinal) finalChunk += result[0].transcript;
-      }
-      if (finalChunk.trim()) {
-        setInstructions((prev) => {
-          const sep = prev && !prev.endsWith(' ') && !prev.endsWith('\n') ? ' ' : '';
-          return prev + sep + finalChunk.trim();
-        });
-      }
-    };
-    recognition.onerror = (event) => {
-      setRecording(false);
-      if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
-        setError('Prieiga prie mikrofono uždrausta. Leiskite naršyklei naudoti mikrofoną.');
-      } else if (event.error !== 'no-speech' && event.error !== 'aborted') {
-        setError('Balso atpažinimo klaida: ' + event.error);
-      }
-    };
-    recognition.onend = () => setRecording(false);
-    recognitionRef.current = recognition;
     return () => {
-      recognition.onresult = null;
-      recognition.onerror = null;
-      recognition.onend = null;
-      recognition.stop();
+      mediaRecorderRef.current?.stop();
+      micStreamRef.current?.getTracks().forEach((t) => t.stop());
     };
   }, []);
 
-  const toggleRecording = () => {
-    const recognition = recognitionRef.current;
-    if (!recognition) return;
+  const toggleRecording = async () => {
     if (recording) {
-      recognition.stop();
-      setRecording(false);
-    } else {
-      setError('');
-      // Set right before start(), not at construction — the recognizer
-      // object is created once per mount (see the effect above) and
-      // reused across calls, but .lang is only read when start() actually
-      // begins listening, so switching the toggle and pressing the mic
-      // again picks up the new language with no need to recreate anything.
-      recognition.lang = micLang;
-      try {
-        recognition.start();
-        setRecording(true);
-      } catch (err) {
-        setError('Nepavyko pradėti įrašymo: ' + (err instanceof Error ? err.message : String(err)));
-      }
+      mediaRecorderRef.current?.stop();
+      return;
     }
+    if (transcribing) return;
+    setError('');
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch {
+      setError('Prieiga prie mikrofono uždrausta. Leiskite naršyklei naudoti mikrofoną.');
+      return;
+    }
+    micStreamRef.current = stream;
+    audioChunksRef.current = [];
+    const recorder = new MediaRecorder(stream);
+    mediaRecorderRef.current = recorder;
+    recorder.ondataavailable = (e) => {
+      if (e.data.size > 0) audioChunksRef.current.push(e.data);
+    };
+    recorder.onstop = () => {
+      // Release the mic the instant recording stops, regardless of what
+      // happens to the transcription afterward — holding it open through
+      // the async transcribe call would leave the "mic in use" indicator
+      // lit for no reason.
+      stream.getTracks().forEach((t) => t.stop());
+      micStreamRef.current = null;
+      setRecording(false);
+      const blob = new Blob(audioChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
+      audioChunksRef.current = [];
+      if (blob.size === 0) return;
+      setTranscribing(true);
+      transcribeVoiceNote(blob, 'auto')
+        .then((text) => {
+          if (!text.trim()) {
+            setError('Nepavyko atpažinti kalbos — pabandykite dar kartą.');
+            return;
+          }
+          setInstructions((prev) => {
+            const sep = prev && !prev.endsWith(' ') && !prev.endsWith('\n') ? ' ' : '';
+            return prev + sep + text.trim();
+          });
+        })
+        .catch((err) => setError(err instanceof Error ? err.message : 'Nepavyko atpažinti balso įrašo.'))
+        .finally(() => setTranscribing(false));
+    };
+    recorder.start();
+    setRecording(true);
   };
 
   const showToast = useToastStore((s) => s.show);
@@ -271,28 +239,12 @@ export function EmailGeneratorView() {
           <div className="field-header">
             <label htmlFor="email-instructions">{meta.label}</label>
             <div className="mic-controls">
-              {speechSupported && (
-                <div className="mic-lang-select">
-                  {MIC_LANG_OPTIONS.map((opt) => (
-                    <button
-                      key={opt.value}
-                      type="button"
-                      className={micLang === opt.value ? 'active' : ''}
-                      disabled={recording}
-                      title="Kuria kalba diktuosite mikrofonui"
-                      onClick={() => setMicLang(opt.value)}
-                    >
-                      <span className="lang-code-badge">{opt.code}</span> {opt.label}
-                    </button>
-                  ))}
-                </div>
-              )}
               <button
                 type="button"
                 className={`icon-btn ${recording ? 'recording' : ''}`}
-                title={speechSupported ? 'Įrašyti balsu' : 'Balso įvedimas nepalaikomas šioje naršyklėje'}
-                disabled={!speechSupported}
-                onClick={toggleRecording}
+                title="Įrašyti balsu — kalba atpažįstama automatiškai"
+                disabled={transcribing}
+                onClick={() => void toggleRecording()}
               >
                 <Mic className="icon" size={16} />
               </button>
@@ -308,6 +260,11 @@ export function EmailGeneratorView() {
           {recording && (
             <div className="recording-indicator">
               <Circle className="icon" size={10} fill="currentColor" /> Vyksta įrašymas...
+            </div>
+          )}
+          {transcribing && (
+            <div className="recording-indicator">
+              <Circle className="icon" size={10} fill="currentColor" /> Atpažįstama kalba...
             </div>
           )}
         </div>

@@ -604,18 +604,6 @@ function App() {
                   DI
                 </button>
               )}
-              {allowedTabs.has('lessons') && (
-                <button
-                  type="button"
-                  className={tab === 'lessons' ? 'active' : ''}
-                  onClick={() => {
-                    setTab('lessons');
-                    setMobileNavOpen(false);
-                  }}
-                >
-                  Pamokos
-                </button>
-              )}
             </nav>
           </header>
 
@@ -676,11 +664,6 @@ function App() {
                 active table, so no tableReady gate or activeTableId key. */}
             <div className={`tab-panel ${tab === 'email' ? 'tab-panel-active' : ''}`}>
               <EmailGeneratorView />
-            </div>
-            {/* Same reasoning as Search/LinkedIn/Instantly above — static
-                reference content, not scoped to the active table. */}
-            <div className={`tab-panel ${tab === 'lessons' ? 'tab-panel-active' : ''}`}>
-              <LessonsView />
             </div>
             <div className={`tab-panel ${tab === 'table' ? 'tab-panel-active' : ''}`}>
               {tableReady ? (

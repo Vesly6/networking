@@ -54,6 +54,22 @@ export function CallsView({ onJumpToRow, onJumpToContact }: CallsViewProps) {
   const rows = useTableStore((s) => s.rows);
 
   const [view, setView] = useState<ViewMode>('list');
+  // Purely cosmetic — the load itself already fires automatically on
+  // mount (see hasAutoLoadedRef below), but a plain "Kraunama…" with no
+  // explanation read as a hang/bug the first time each day: server/ runs
+  // on Render's free tier, which sleeps after ~15 min idle and takes
+  // roughly 30-60s to wake on the very next request. Flips on only after
+  // a real delay (5s — any faster load never shows it at all), so this
+  // never appears during the ordinary, already-warm case.
+  const [slowLoad, setSlowLoad] = useState(false);
+  useEffect(() => {
+    if (ready) {
+      setSlowLoad(false);
+      return;
+    }
+    const timer = setTimeout(() => setSlowLoad(true), 5000);
+    return () => clearTimeout(timer);
+  }, [ready]);
 
   // Today only by default — checking in on today's calls is the actual
   // common case, and it's one fewer thing to reset before every "Load
@@ -208,6 +224,11 @@ export function CallsView({ onJumpToRow, onJumpToContact }: CallsViewProps) {
       {!ready ? (
         <div className="app-loading">
           <span>Kraunama…</span>
+          {slowLoad && (
+            <p className="calls-cold-start-hint">
+              Serveris kurį laiką buvo neaktyvus ir dabar „pabunda" — pirmasis įkėlimas per dieną gali užtrukti iki minutės.
+            </p>
+          )}
         </div>
       ) : calls.length === 0 ? (
         <div className="empty-state">{error ? error : 'Šiuo laikotarpiu skambučių nerasta.'}</div>
