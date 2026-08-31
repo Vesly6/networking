@@ -1,3 +1,19 @@
+/* lucide-react icon-set migration — icons render as an inline SVG element
+   sitting next to their label's plain text node (never a wrapper
+   component, matching how the emoji they replaced sat inline in the same
+   string before — JSX's own whitespace-preservation between `<Icon />` and
+   the following text already gives the normal space a label needs, no
+   margin rule required for that part). Unlike an emoji character, an SVG's
+   default baseline placement reads as visibly too high against surrounding
+   text — this one global rule fixes that everywhere at once rather than
+   needing per-component CSS. Only alignment, never color: every icon's
+   actual color comes from `currentColor` inheriting the surrounding text
+   color, so light/dark theming needs no extra work here. */
+svg.icon {
+  vertical-align: -3px;
+  flex-shrink: 0;
+}
+
 .app-loading {
   height: 100%;
   display: flex;
@@ -506,6 +522,23 @@
   visibility: visible;
   pointer-events: auto;
 }
+/* A real, live-caught bug: @xyflow/react (the LinkedIn campaign graph
+   editor, CampaignGraphEditor.tsx) sets an INLINE `visibility: visible`
+   style directly on each `.react-flow__node` once it's been measured
+   (its own technique for hiding not-yet-sized nodes during initial
+   layout) — inline styles win over an ancestor's stylesheet-level
+   `visibility: hidden` regardless of specificity, so once the graph
+   editor had been opened, its nodes stayed visibly rendered on TOP of
+   whatever tab was switched to next, confirmed live via a real screenshot
+   (Search tab, with "Pradžia"/"Connection request" boxes floating over
+   the filter form) and by inspecting computed styles down to the node
+   elements themselves. `!important` here is the one legitimate way to
+   win back against a plain (non-!important) inline style — scoped
+   narrowly to exactly this case so it can't mask a real visibility bug
+   anywhere else. */
+.tab-panel:not(.tab-panel-active) .react-flow__node {
+  visibility: hidden !important;
+}
 
 /* Toolbar */
 
@@ -701,6 +734,21 @@ table.sheet {
   width: 100%;
   font-size: 0.88rem;
   table-layout: fixed;
+  /* A real, live-caught dark-theme bug: this table and every ancestor up
+     to <html> were already fully transparent (confirmed via computed
+     styles), which is normally exactly right — everywhere else in this
+     app, a transparent element correctly lets the dark `html` background
+     show through with zero extra CSS needed. Tables are the one
+     exception: a <table> establishes its own background-painting context
+     (CSS2.1 §17.5.1) that real testing (live screenshots, both a
+     mid-session theme toggle AND a full page reload starting in dark
+     mode) showed painting solid white regardless of what the fully-
+     transparent cascade above it computed to. Setting the color
+     explicitly here, rather than relying on transparency to cascade
+     through the table's own special painting rules, is the fix — same
+     "always route through the CSS vars, never rely on an implicit
+     fallback" approach already used everywhere else in this app. */
+  background: var(--bg);
   /* Dragging across cells to range-select was also triggering the browser's
      native text-selection (the blue highlight-and-copy you'd get dragging
      across a paragraph on any web page) — since a drag-select gesture is
@@ -4301,11 +4349,10 @@ tr.row-drop-end td {
   gap: 1.25rem;
   padding: 1rem 1.25rem;
   overflow: auto;
-  /* Wider than Phase 0's original 640px — the leads table (Campaigns tab)
-     needs real room for 5 columns; the Testas/Nustatymai forms just sit
-     narrower than the full width, which reads fine since they're simple
-     stacked forms either way. */
-  max-width: 900px;
+  /* Wider than the original top-tab layout's 900px — the left sidebar
+     (.linkedin-sidebar) now also eats horizontal space, and the leads
+     table (Campaigns tab) needs real room for 5 columns regardless. */
+  max-width: 1120px;
 }
 
 .linkedin-header {
@@ -4329,14 +4376,41 @@ tr.row-drop-end td {
   background: var(--bg-alt);
 }
 .linkedin-status-connected {
-  color: #1b7a3d;
+  color: var(--success);
 }
 .linkedin-status-checkpoint {
   color: var(--danger);
 }
-.linkedin-status-logged_out,
+.linkedin-status-logged_out {
+  /* Was collapsed into the same muted gray as not_connected before this
+     migration — restoring a distinct color here (this app has no
+     dedicated "warning" token yet, so a plain amber literal) actually
+     matches the original 4-color intent (🟢⚪🟠🔴) more faithfully than
+     the CSS it's replacing did. */
+  color: #b5860a;
+}
 .linkedin-status-not_connected {
   color: var(--text-muted);
+}
+
+/* The colored-dot connection-status indicator (LinkedInView.tsx's
+   STATUS_META) — a single lucide Circle icon, filled via currentColor and
+   colored per status through these classes, replacing 4 separate colored
+   emoji (🟢⚪🟠🔴). */
+.linkedin-status-dot {
+  vertical-align: -1px;
+}
+.linkedin-status-dot-connected {
+  color: var(--success);
+}
+.linkedin-status-dot-muted {
+  color: var(--text-muted);
+}
+.linkedin-status-dot-warning {
+  color: #b5860a;
+}
+.linkedin-status-dot-danger {
+  color: var(--danger);
 }
 
 .linkedin-status-message {
@@ -4371,10 +4445,11 @@ tr.row-drop-end td {
 }
 
 .linkedin-action-entry {
+  /* Column, not row — this now wraps .linkedin-action-entry-row (the
+     original flat layout, moved to its own class) plus an optional
+     ConnectTimingBreakdown block underneath when expanded. */
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  align-items: baseline;
+  flex-direction: column;
   padding: 0.5em 0;
   border-top: 1px solid var(--border);
   font-size: 0.8rem;
@@ -4472,27 +4547,131 @@ tr.row-drop-end td {
   width: auto;
 }
 
-/* Sub-nav (Kampanijos | Testas | Nustatymai) — smaller cousin of
-   .app-tabs, same visual language (active = filled pill) but scoped
-   inside the LinkedIn tab's own content instead of the app's top nav. */
-.linkedin-subnav {
+/* Left-sidebar dashboard layout, replacing the old top .linkedin-subnav
+   tab bar — same "icon + label" convention as the rest of this app's
+   lucide-react migration. .linkedin-body is the row (sidebar + content);
+   .linkedin-sidebar/.linkedin-main are its two flex children, naturally
+   equal height via the row's default `align-items: stretch`. */
+.linkedin-body {
   display: flex;
-  gap: 0.4rem;
-  border-bottom: 1px solid var(--border);
-  padding-bottom: 0.6rem;
+  gap: 1.25rem;
+  align-items: flex-start;
 }
-.linkedin-subnav button {
+.linkedin-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  flex: 0 0 168px;
+  border-right: 1px solid var(--border);
+  padding-right: 1rem;
+  position: sticky;
+  top: 0;
+}
+.linkedin-sidebar button {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
   border: 1px solid transparent;
   background: transparent;
   border-radius: 6px;
-  padding: 0.35em 0.7em;
+  padding: 0.5em 0.7em;
   font-size: 0.85rem;
   color: var(--text-muted);
+  text-align: left;
 }
-.linkedin-subnav button.active {
+.linkedin-sidebar button.active {
   background: var(--bg-alt);
   color: var(--text);
   border-color: var(--border);
+  font-weight: 600;
+}
+.linkedin-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.linkedin-overview {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1rem;
+}
+.linkedin-overview-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.linkedin-overview-card h3 {
+  margin: 0;
+  font-size: 0.95rem;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.linkedin-overview-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+.linkedin-plan-progress-line {
+  margin: 0;
+  font-size: 0.85rem;
+}
+.linkedin-plan-progress-bar {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--bg-alt);
+  overflow: hidden;
+}
+.linkedin-plan-progress-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+
+.linkedin-action-entry-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: baseline;
+}
+.linkedin-action-expand-toggle {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+}
+.linkedin-action-expand-spacer {
+  display: inline-block;
+  width: 14px;
+}
+.linkedin-timing-breakdown {
+  margin: 0.5rem 0 0 1.3rem;
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.2rem 0.8rem;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+.linkedin-timing-breakdown dt {
+  font-weight: 600;
+  color: var(--text);
+}
+.linkedin-timing-breakdown dd {
+  margin: 0;
 }
 
 .linkedin-campaigns-panel {
@@ -5691,6 +5870,13 @@ tr.row-drop-end td {
   border-bottom: 1px solid var(--border);
 }
 
+.linkedin-lead-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.35em;
+  white-space: nowrap;
+}
+
 .linkedin-lead-remove {
   border: none;
   background: transparent;
@@ -5702,6 +5888,20 @@ tr.row-drop-end td {
 .linkedin-lead-remove:hover {
   color: var(--danger);
   background: var(--danger-bg);
+}
+
+.linkedin-lead-skip {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  line-height: 1;
+  padding: 0.3em 0.5em;
+  border-radius: 4px;
+}
+.linkedin-lead-skip:hover {
+  color: var(--text);
+  border-color: var(--text-muted);
 }
 
 .linkedin-csv-picker,
@@ -5772,76 +5972,139 @@ tr.row-drop-end td {
   margin: 0;
 }
 
-.linkedin-sequence-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-  counter-reset: linkedin-step;
-}
-.linkedin-sequence-step {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  padding: 0.4em 0.6em;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  font-size: 0.82rem;
-  counter-increment: linkedin-step;
-}
-.linkedin-sequence-step::before {
-  content: counter(linkedin-step);
-  flex: 0 0 auto;
-  width: 1.4em;
-  height: 1.4em;
-  border-radius: 999px;
-  background: var(--bg-alt);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 0.72rem;
-  font-weight: 600;
-  color: var(--text-muted);
-}
 .linkedin-sequence-step-type {
   font-weight: 600;
 }
-.linkedin-sequence-step-message {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-muted);
-  font-style: italic;
-}
 
-.linkedin-add-step {
-  display: flex;
-  align-items: flex-end;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-}
-.linkedin-add-step select,
-.linkedin-add-step input {
-  padding: 0.4em 0.6em;
-  font-size: 0.85rem;
-}
-.linkedin-add-step label {
+/* --- Campaign graph editor (CampaignGraphEditor.tsx, @xyflow/react) --- */
+.linkedin-graph-editor {
   display: flex;
   flex-direction: column;
-  gap: 0.2rem;
-  font-size: 0.75rem;
-  color: var(--text-muted);
+  gap: 0.6rem;
 }
-.linkedin-add-step input[type='text'] {
-  flex: 1;
-  min-width: 160px;
+.linkedin-graph-palette {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 1rem;
+}
+.linkedin-graph-palette-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+.linkedin-graph-palette-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-right: 0.2rem;
+}
+.linkedin-graph-palette-group button {
+  font-size: 0.78rem;
+  padding: 0.3em 0.6em;
+}
+.linkedin-graph-palette-group button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.linkedin-graph-canvas {
+  height: 480px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--bg-alt);
 }
 
-.linkedin-pending-approval,
+.linkedin-flow-node {
+  min-width: 190px;
+  max-width: 240px;
+  border: 1.5px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  padding: 0.5em 0.6em;
+  font-size: 0.78rem;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+.linkedin-flow-node-condition {
+  border-color: #b98900;
+  background: color-mix(in srgb, #f2c94c 12%, var(--bg));
+}
+.linkedin-flow-node-start {
+  border-style: dashed;
+  min-width: 120px;
+  text-align: center;
+  font-weight: 600;
+}
+.linkedin-flow-node-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+  font-weight: 600;
+  margin-bottom: 0.3rem;
+}
+.linkedin-flow-node-delete {
+  flex: 0 0 auto;
+  width: 1.4em;
+  height: 1.4em;
+  padding: 0;
+  border-radius: 999px;
+  line-height: 1;
+  font-size: 0.85rem;
+}
+.linkedin-flow-node-disabled {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  font-style: italic;
+  margin-bottom: 0.3rem;
+}
+.linkedin-flow-node-textarea {
+  width: 100%;
+  min-height: 3.2em;
+  font-size: 0.76rem;
+  padding: 0.3em;
+  resize: vertical;
+  box-sizing: border-box;
+}
+.linkedin-flow-node-days {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.74rem;
+  color: var(--text-muted);
+}
+.linkedin-flow-node-days input {
+  width: 4em;
+  font-size: 0.76rem;
+  padding: 0.2em 0.35em;
+}
+.linkedin-flow-node-branch-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.68rem;
+  font-weight: 600;
+  margin-top: 0.5rem;
+  padding: 0 0.5rem;
+}
+.linkedin-flow-branch-yes {
+  color: var(--success);
+}
+.linkedin-flow-branch-no {
+  color: var(--danger);
+}
+.linkedin-flow-handle-yes {
+  background: var(--success) !important;
+}
+.linkedin-flow-handle-no {
+  background: var(--danger) !important;
+}
+
+/* .linkedin-pending-* names predate the manual-review removal (they were
+   shared between the now-deleted PendingApprovalPanel and this stale-
+   invites panel) — kept as-is for StaleInvitesPanel.tsx rather than a
+   churny rename, same reasoning CLAUDE.md documents elsewhere for
+   CellHoverEditor's own name predating its click-based trigger. */
 .linkedin-stale-invites {
   border: 1px solid var(--accent);
   border-radius: 10px;
@@ -5875,36 +6138,6 @@ tr.row-drop-end td {
   flex: 1;
   min-width: 120px;
   font-weight: 600;
-}
-
-.linkedin-pending-row-wrap {
-  display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
-}
-
-.linkedin-pending-edit {
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-  padding: 0.5em 0.6em;
-  border: 1px dashed var(--accent);
-  border-radius: 8px;
-  background: var(--bg);
-}
-.linkedin-pending-edit textarea {
-  width: 100%;
-  min-height: 4.5em;
-  resize: vertical;
-  font-family: inherit;
-  font-size: 0.82rem;
-  padding: 0.4em 0.5em;
-}
-.linkedin-pending-edit-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.6rem;
 }
 
 .linkedin-inbox {
@@ -6265,6 +6498,21 @@ tr.row-drop-end td {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--accent-contrast);
+}
+/* Replaces flag emoji (🇷🇺🇱🇹🇬🇧) for language selection — a plain text
+   code badge rather than an icon, since flags render inconsistently
+   across platforms and aren't really "an icon" the same way the rest of
+   this app's icon set is. */
+.lang-code-badge {
+  display: inline-block;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  padding: 0.05em 0.35em;
+  border-radius: 4px;
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  vertical-align: 1px;
 }
 .email-model-select {
   margin-left: auto;
@@ -6873,4 +7121,276 @@ tr.row-drop-end td {
   color: var(--text-muted);
   font-size: 0.78rem;
   white-space: nowrap;
+}
+
+/* "Naujienos" (News) tab — lives on the Workspace screen, see App.tsx's
+   workspaceScreen. Reuses .search-tags-row/.search-tag/.search-tag-remove
+   as-is for the topic chips (same "removable text chip" shape). */
+.news-folders-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 1rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+.news-folder-tab {
+  font-size: 0.85rem;
+  padding: 0.35em 0.8em;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  cursor: pointer;
+}
+/* A folder tab that has its own "×" is rendered as two buttons sharing
+   one pill-shaped border, rather than a single tab with the "×" overlaid
+   via negative margin — the negative-margin version broke for any folder
+   name whose rendered width didn't match the hardcoded offset. */
+.news-folder-tab-wrap {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.news-folder-tab-wrap .news-folder-tab {
+  border: none;
+  border-radius: 0;
+}
+.news-folder-tab-wrap.active {
+  border-color: var(--accent);
+}
+.news-folder-tab-wrap.active .news-folder-tab {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+.news-folder-tab.active {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  border-color: var(--accent);
+}
+.news-folder-remove {
+  background: none;
+  border: none;
+  border-left: 1px solid var(--border);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.95rem;
+  line-height: 1;
+  padding: 0 0.55rem;
+}
+.news-folder-tab-wrap.active .news-folder-remove {
+  border-left-color: var(--accent);
+}
+.news-folder-new {
+  color: var(--text-muted);
+  border-style: dashed;
+}
+
+.news-saved-section {
+  margin-bottom: 1.5rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+.news-saved-section h4 {
+  margin: 0 0 0.6rem;
+  font-size: 0.95rem;
+}
+
+.news-saved-folder-select {
+  font-size: 0.75rem;
+  padding: 0.1rem 0.3rem;
+}
+
+.news-card-save,
+.news-card-remove {
+  font-size: 0.78rem;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.1rem 0.6rem;
+  cursor: pointer;
+  color: var(--text-muted);
+}
+.news-card-save:hover:not(:disabled),
+.news-card-remove:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.news-card-save:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.news-card-save-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.news-folder-picker {
+  position: absolute;
+  bottom: calc(100% + 0.3rem);
+  left: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  min-width: 8rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.news-folder-picker button {
+  text-align: left;
+  border: none;
+  border-radius: 0;
+  background: none;
+  padding: 0.4rem 0.7rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.news-folder-picker button:hover {
+  background: var(--bg-alt);
+}
+
+.news-topics-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1.25rem;
+}
+.news-topic-add {
+  display: flex;
+  gap: 0.4rem;
+}
+.news-topic-add input {
+  font-size: 0.85rem;
+  padding: 0.35em 0.6em;
+  width: 12rem;
+}
+
+.news-history-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 1rem;
+}
+.news-history-label {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+.news-history-chip {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.15rem 0.6rem;
+  cursor: pointer;
+}
+.news-history-chip:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.news-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.news-card {
+  display: flex;
+  gap: 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.75rem;
+  background: var(--bg);
+  text-decoration: none;
+  color: inherit;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.news-card:hover {
+  border-color: var(--accent);
+  box-shadow: var(--shadow);
+}
+
+.news-card-image {
+  width: 96px;
+  height: 96px;
+  object-fit: cover;
+  border-radius: 8px;
+  flex-shrink: 0;
+  background: var(--bg-alt);
+}
+
+.news-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.news-card-title {
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+
+.news-card-meta {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.news-card-snippet {
+  font-size: 0.85rem;
+  color: var(--text);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.news-card-footer {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+}
+
+.news-card-topic {
+  font-size: 0.72rem;
+  color: var(--accent);
+  background: var(--bg-alt);
+  border-radius: 999px;
+  padding: 0.1rem 0.55rem;
+}
+
+.news-card-seen-badge {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.1rem 0.55rem;
+}
+
+.news-card-link {
+  font-size: 0.78rem;
+  color: var(--accent);
+  white-space: nowrap;
+  margin-left: auto;
+}
+
+/* Full history is kept (not filtered out) once an article's been seen —
+   dimmed rather than removed, so a "Matyta" item is still there to revisit
+   but visually recedes behind whatever's actually new. */
+.news-card-seen {
+  opacity: 0.55;
+}
+.news-card-seen:hover {
+  opacity: 0.85;
 }

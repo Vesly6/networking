@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useIntegrationsStore, NON_SECRET_INTEGRATION_FIELDS, type IntegrationField } from '../../store/useIntegrationsStore';
 import { useToastStore } from '../../store/useToastStore';
 import { confirmDialog } from '../../store/useConfirmStore';
+import { Check, X, Save } from 'lucide-react';
 
 interface FieldDef {
   field: IntegrationField;
@@ -197,11 +198,11 @@ export function IntegrationsView() {
                   </label>
                   <div className="integrations-field-status">
                     <span className={configured ? 'integrations-badge-set' : 'integrations-badge-unset'}>
-                      {configured ? '✓ Sukonfigūruota' : '— Nenustatyta'}
+                      {configured ? <><Check className="icon" size={14} /> Sukonfigūruota</> : '— Nenustatyta'}
                     </span>
                     {configured && (
                       <button type="button" className="danger" onClick={() => void handleClear(field, label)}>
-                        ✕ Išvalyti
+                        <X className="icon" size={14} /> Išvalyti
                       </button>
                     )}
                   </div>
@@ -213,7 +214,7 @@ export function IntegrationsView() {
       ))}
 
       <button type="button" className="primary" disabled={saving} onClick={() => void handleSave()}>
-        {saving ? 'Saugoma…' : '💾 Išsaugoti'}
+        {saving ? 'Saugoma…' : <><Save className="icon" size={16} /> Išsaugoti</>}
       </button>
     </div>
   );

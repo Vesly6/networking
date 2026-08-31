@@ -30,6 +30,10 @@ export class LinkedInBrowserError extends Error {}
 const CDP_URL = process.env.LINKEDIN_CDP_URL || 'http://127.0.0.1:9222';
 
 let browser: Browser | null = null;
+// Tracks which contexts already got the navigator.webdriver patch below,
+// so getLinkedInPage() can call addInitScript() safely on every call
+// without stacking up duplicate init scripts on a long-lived context.
+const patchedContexts = new WeakSet<BrowserContext>();
 
 export async function getBrowser(): Promise<Browser> {
   if (browser?.isConnected()) return browser;
@@ -54,12 +58,78 @@ export async function getBrowser(): Promise<Browser> {
  * a new one on every call — closer to how a real person keeps the site
  * open in one tab, and avoids silently accumulating tabs across repeated
  * actions. */
-export async function getLinkedInPage(): Promise<Page> {
+// Overloaded so callers passing `requireExistingTab: true` are typed to
+// handle a `null` result, while every existing caller (which never passes
+// the new second argument) keeps the old guaranteed-Page return type
+// unchanged — no call site elsewhere in this codebase needed to change
+// just because this one gained a new mode.
+export async function getLinkedInPage(requireExistingTab?: false): Promise<Page>;
+export async function getLinkedInPage(requireExistingTab: true): Promise<Page | null>;
+export async function getLinkedInPage(requireExistingTab = false): Promise<Page | null> {
   const b = await getBrowser();
   const ctx: BrowserContext | undefined = b.contexts()[0];
   if (!ctx) throw new LinkedInBrowserError('Chrome is connected but has no open browser profile/context.');
+  // Real, standard-mandated tell, separate from anything about IP/fingerprint
+  // consistency: the W3C WebDriver spec requires navigator.webdriver to
+  // read `true` on any page a CDP session is actively driving — Chrome sets
+  // this itself, unconditionally, the instant a DevTools/WebDriver client
+  // attaches, regardless of how "warm" or real the underlying profile is.
+  // It's the single most basic, standard signal a site can check for "is
+  // this page under automation," and nothing in this module patched it
+  // before now. Patched on Navigator.prototype (not the `navigator`
+  // instance) so it reads as an inherited property, matching how a
+  // genuinely non-automated Chrome exposes it (absent on the instance,
+  // `undefined` when read) — patching only the instance would itself be a
+  // detectable inconsistency of exactly the kind documented elsewhere in
+  // this codebase for LinkedIn's own cross-attribute checks. Applied via
+  // addInitScript on the *context*, not a specific page, so it's in place
+  // before any script on any current or future tab (including a reused
+  // existing LinkedIn tab's next navigation) ever gets to read it.
+  if (!patchedContexts.has(ctx)) {
+    await ctx.addInitScript(() => {
+      // Cast through globalThis rather than referencing `Navigator`
+      // directly — this file's tsconfig has no `dom` lib (it's Node-only
+      // backend code), so the DOM type isn't declared even though this
+      // callback's body only ever actually runs in the browser, injected
+      // by Playwright before page scripts execute.
+      const g = globalThis as unknown as { Navigator: { prototype: Record<string, unknown> } };
+      Object.defineProperty(g.Navigator.prototype, 'webdriver', {
+        get: () => undefined,
+        configurable: true,
+      });
+    });
+    patchedContexts.add(ctx);
+  }
+  // ACCEPTED, UNMITIGATED RISK — documented here rather than "fixed,"
+  // because there is no real client-side fix: chromium.connectOverCDP()
+  // (getBrowser() above) necessarily sends a CDP `Runtime.enable` command
+  // to instrument the page, and that command has a well-documented,
+  // industry-wide detection side-effect (it changes how V8 reports certain
+  // runtime timing/error-stack behavior in a way a page can observe) —
+  // this affects every CDP-based automation tool (Playwright, Puppeteer,
+  // Selenium's CDP mode) equally, it is not something this codebase's
+  // implementation got wrong. Patching navigator.webdriver above closes
+  // one specific, checkable property; it does nothing about this. A real
+  // fix would mean not using CDP's Runtime domain at all, which would
+  // break Playwright's own instrumentation (locators, waitFor, console
+  // capture) — out of scope for this feature. Kept here as a durable note
+  // so a future reader never assumes "detection-resistant" just because
+  // *a* fingerprinting patch exists a few lines up.
   const existing = ctx.pages().find((p) => p.url().includes('linkedin.com'));
   if (existing) return existing;
+  // Real, live-diagnosed incident this session: the old unconditional
+  // version below (ctx.newPage() + goto) is exactly what made "the
+  // LinkedIn window keeps turning itself back on" — a background interval
+  // calling this every few minutes would silently recreate a tab the
+  // account owner had deliberately closed, with no way to tell "never had
+  // a tab" apart from "closed on purpose." `requireExistingTab: true`
+  // (used only by the automatic scheduler/inbox-sync intervals — see
+  // index.ts) makes that distinction explicit: no existing tab means
+  // nothing to do this cycle, not "open one anyway." Manual, human-clicked
+  // actions (the Testas tab, Pending Approval, "▶ Vykdyti dabar") keep the
+  // old default (`false`) — an explicit click opening a tab on demand is
+  // the normal, expected case that was never the actual problem.
+  if (requireExistingTab) return null;
   const page = await ctx.newPage();
   await page.goto('https://www.linkedin.com/feed/', { waitUntil: 'domcontentloaded' });
   return page;
@@ -89,11 +159,36 @@ export async function humanDelay(minMs: number, maxMs: number): Promise<void> {
   await sleep(ms);
 }
 
+// Best-effort tracking of where humanMouseMove last left the cursor —
+// Playwright exposes no getter for the CDP-side virtual mouse position, so
+// this is only as accurate as "every move went through this function."
+// Falls back to `target` (no deviation waypoint) the first time it's
+// unknown, which just degrades to the old straight-line behavior rather
+// than erroring.
+let lastKnownMousePos: { x: number; y: number } | null = null;
+
 /** Moves the mouse to `target` along a multi-step path instead of
- * Playwright's default instant jump — a real cursor doesn't teleport. */
+ * Playwright's default instant jump — a real cursor doesn't teleport.
+ * Security-tightening pass: a single linear interpolation start->target,
+ * however many steps, still traces a perfectly straight line — this
+ * session's own research into LinkedIn's pattern-based (not just
+ * volume-based) enforcement flagged "mathematical precision" like that as
+ * a real, named tell. Routes through one randomly-offset waypoint roughly
+ * midway first, then settles on the actual target, so the overall path
+ * bends slightly rather than being ruler-straight — cheap, and closer to
+ * how a real hand-drawn cursor path actually looks. */
 export async function humanMouseMove(page: Page, target: { x: number; y: number }): Promise<void> {
+  const start = lastKnownMousePos ?? target;
+  if (start.x !== target.x || start.y !== target.y) {
+    const waypoint = {
+      x: (start.x + target.x) / 2 + (Math.random() - 0.5) * 40,
+      y: (start.y + target.y) / 2 + (Math.random() - 0.5) * 40,
+    };
+    await page.mouse.move(waypoint.x, waypoint.y, { steps: 6 + Math.floor(Math.random() * 6) });
+  }
   const steps = 15 + Math.floor(Math.random() * 10);
   await page.mouse.move(target.x, target.y, { steps });
+  lastKnownMousePos = target;
 }
 
 /** Types with per-character delay variance instead of a fill()'s

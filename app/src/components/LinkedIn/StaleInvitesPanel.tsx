@@ -2,16 +2,17 @@ import { useEffect } from 'react';
 import { useLinkedInCampaignsStore } from '../../store/useLinkedInCampaignsStore';
 import { confirmDialog } from '../../store/useConfirmStore';
 import { useToastStore } from '../../store/useToastStore';
+import { Clock, RefreshCw, X } from 'lucide-react';
 
 /** Phase 3's "auto-withdraw stale invites" (TZ_LinkedIn_Automation.md
  * section 3) — deliberately NOT automatic despite the TZ's own naming:
  * this lists every connection request that's sat 'pending' too long with
  * no response, and withdrawing one is a real, explicit, confirmed click
- * per lead, same shape as the Pending Approval panel and never wired into
- * the background scheduler tick (see scheduler.ts's own doc comment on
- * why). A stale invite isn't urgent the way a due outreach step is, so
- * this reads from a manual "↻" refresh rather than polling on an
- * interval. */
+ * per lead, never wired into the background scheduler tick even with
+ * manual review removed everywhere else (see scheduler.ts's own doc
+ * comment on why). A stale invite isn't urgent the way a due outreach
+ * step is, so this reads from a manual "↻" refresh rather than polling on
+ * an interval. */
 export function StaleInvitesPanel() {
   const staleInvites = useLinkedInCampaignsStore((s) => s.staleInvites);
   const staleInvitesReady = useLinkedInCampaignsStore((s) => s.staleInvitesReady);
@@ -38,9 +39,9 @@ export function StaleInvitesPanel() {
   return (
     <div className="linkedin-stale-invites">
       <div className="linkedin-pending-approval-header">
-        <h4>🕐 Užstrigę kvietimai ({staleInvites.length})</h4>
+        <h4><Clock className="icon" size={18} /> Užstrigę kvietimai ({staleInvites.length})</h4>
         <button type="button" onClick={() => void refreshStaleInvites()}>
-          ↻
+          <RefreshCw className="icon" size={16} />
         </button>
       </div>
       <p className="linkedin-hint">
@@ -62,7 +63,7 @@ export function StaleInvitesPanel() {
               disabled={withdrawingKeys.has(s.leadId)}
               onClick={() => void handleWithdraw(s.leadId, label)}
             >
-              {withdrawingKeys.has(s.leadId) ? 'Atšaukiama…' : '✕ Atšaukti kvietimą'}
+              {withdrawingKeys.has(s.leadId) ? 'Atšaukiama…' : <><X className="icon" size={16} /> Atšaukti kvietimą</>}
             </button>
           </div>
         );

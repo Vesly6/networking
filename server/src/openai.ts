@@ -249,11 +249,13 @@ export interface LinkedInPersonalizeParams {
 }
 
 /** Cheap chat-completion, same model/cost tier as everything else in this
- * file. Called from a real "🤖 Personalizuoti" button in the Pending
- * Approval panel — the result lands back in an editable field for the
- * human to review/adjust before approving, never auto-applied straight
- * into a send (same "AI drafts, human reviews" pattern as the contact-
- * paste cleanup and the AI-suggested inbox replies below). */
+ * file. Called from scheduler.ts's executeAction() as an automatic
+ * pre-send step, gated by the auto_personalize_enabled setting — manual
+ * review was removed from the LinkedIn automation entirely, so there is
+ * no human-in-the-loop editable-field step here anymore (unlike the
+ * contact-paste cleanup and the AI-suggested inbox replies below, which
+ * still are). A failed call here always falls back to the plain
+ * placeholder-substituted template rather than blocking the send. */
 export async function personalizeLinkedInMessage(
   params: LinkedInPersonalizeParams,
   apiKey: string,
@@ -357,4 +359,98 @@ export async function suggestLinkedInReply(
   const text = json.choices?.[0]?.message?.content?.trim();
   if (!text) throw new LinkedInReplyError('AI service returned an empty result');
   return { text };
+}
+
+export class LinkedInScheduleSuggestError extends Error {}
+
+const LINKEDIN_SCHEDULE_MODEL = 'gpt-4o-mini';
+
+// This is the opt-in, experimental half of dailyPlan.ts's daily schedule —
+// the procedural generator (mulberry32 + triangular jitter) is what ships
+// enabled by default and is what actually guarantees every slot lands
+// inside work hours; this is something to compare against it, not a
+// replacement for that guarantee. dailyPlan.ts never trusts this output
+// directly — every proposed minute is re-validated (integer, in-range)
+// before use, and a response that doesn't clear a basic usability bar is
+// discarded wholesale in favor of the procedural generator for that day,
+// same "AI drafts, deterministic code owns the actual guarantee" split as
+// every other AI feature in this file.
+const LINKEDIN_SCHEDULE_SYSTEM_PROMPT = `You propose a natural, human-plausible daily schedule of times a person checks LinkedIn to send outreach connection requests, so the pattern doesn't look automated or scripted. You will be given: the exact number of check-ins to schedule today, the work-hours window as minutes-since-midnight, whether today is a weekday or weekend, and (optionally) actual times from a recent day for style reference. Propose exactly the requested number of times, each a distinct integer number of minutes-since-midnight strictly inside the given window. Vary the spacing and clustering the way a real person's day naturally does (e.g. a cluster around a lunch break, another after typical work hours) — do not space them evenly, do not place any exactly at the window's start or end. On a weekend, spread times more loosely across the day with no work-rhythm clustering. Output ONLY a JSON array of integers, nothing else — no explanation, no markdown code fences, no keys or objects.`;
+
+export interface LinkedInScheduleSuggestParams {
+  targetCount: number;
+  /** Work-hours window, in minutes-since-midnight, in the account's own
+   * configured timezone — the model reasons in this same unit so its
+   * output needs no unit conversion before validation. */
+  startMin: number;
+  endMin: number;
+  isWeekend: boolean;
+  /** Recent actual check-in times (minutes-since-midnight) from the last
+   * day or two, purely as style context — may be empty (a brand-new
+   * account with no history yet). */
+  recentActualMinutes: number[];
+}
+
+/** Returns whatever the model proposed, parsed into an array of numbers —
+ * NOT yet validated against the work-hours window or deduplicated; that's
+ * dailyPlan.ts's job (it already owns the equivalent clamping logic for
+ * the procedural path and is the single place both paths' output has to
+ * satisfy the same guarantee). Throws only on a request/parse-level
+ * failure (unreachable, non-JSON, empty) — a syntactically valid but
+ * substantively bad array (out-of-range numbers, wrong count) is
+ * deliberately NOT an error here, since "the model proposed something
+ * inconsistent with a still-valid JSON array" is exactly the case
+ * dailyPlan.ts's own validation exists to catch and discard. */
+export async function suggestDailyScheduleMinutes(params: LinkedInScheduleSuggestParams, apiKey: string): Promise<number[]> {
+  const input = [
+    `Check-ins to schedule today: ${params.targetCount}`,
+    `Work-hours window (minutes since midnight): ${params.startMin}-${params.endMin}`,
+    `Day type: ${params.isWeekend ? 'weekend' : 'weekday'}`,
+    `Recent actual times for style reference (minutes since midnight, may be empty): ${JSON.stringify(params.recentActualMinutes)}`,
+  ].join('\n');
+
+  let res: Response;
+  try {
+    res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: LINKEDIN_SCHEDULE_MODEL,
+        messages: [
+          { role: 'system', content: LINKEDIN_SCHEDULE_SYSTEM_PROMPT },
+          { role: 'user', content: input },
+        ],
+        temperature: 0.7,
+      }),
+    });
+  } catch {
+    throw new LinkedInScheduleSuggestError('Could not reach the AI service');
+  }
+
+  const json: any = await res.json().catch(() => null);
+  if (!res.ok || !json) {
+    throw new LinkedInScheduleSuggestError(json?.error?.message ?? `AI service request failed (HTTP ${res.status})`);
+  }
+  const text = json.choices?.[0]?.message?.content?.trim();
+  if (!text) throw new LinkedInScheduleSuggestError('AI service returned an empty result');
+
+  let parsed: unknown;
+  try {
+    // The model occasionally wraps its array in a markdown fence despite
+    // being told not to — stripped defensively rather than trusting the
+    // instruction held, since the cost of stripping when unnecessary is
+    // zero but the cost of a JSON.parse failure on an otherwise-good
+    // response is a wasted call.
+    const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '');
+    parsed = JSON.parse(cleaned);
+  } catch {
+    throw new LinkedInScheduleSuggestError('AI service returned non-JSON output');
+  }
+  if (!Array.isArray(parsed)) {
+    throw new LinkedInScheduleSuggestError('AI service returned a non-array result');
+  }
+  return parsed.filter((n): n is number => typeof n === 'number' && Number.isFinite(n));
 }

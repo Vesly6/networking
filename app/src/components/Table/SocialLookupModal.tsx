@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { findSocialProfiles, type SocialLookupResult } from '../../utils/contactsApi';
+import { Check, X, Search } from 'lucide-react';
 
 type Platform = 'instagram' | 'facebook';
 
@@ -71,13 +72,13 @@ export function SocialLookupModal({ firstName, lastName, company, onConfirm, onC
           <div className="social-lookup-decided">
             {url ? (
               <>
-                ✓ Pasirinkta:{' '}
+                <Check className="icon" size={14} /> Pasirinkta:{' '}
                 <a href={url} target="_blank" rel="noopener noreferrer">
                   {url}
                 </a>
               </>
             ) : (
-              '✕ Pažymėta: nerasta'
+              <><X className="icon" size={14} /> Pažymėta: nerasta</>
             )}
           </div>
         </div>
@@ -95,7 +96,7 @@ export function SocialLookupModal({ firstName, lastName, company, onConfirm, onC
                   {url}
                 </a>
                 <button type="button" className="primary" onClick={() => confirm(platform, url)}>
-                  ✓ Tai jis/ji
+                  <Check className="icon" size={14} /> Tai jis/ji
                 </button>
               </li>
             ))}
@@ -104,7 +105,7 @@ export function SocialLookupModal({ firstName, lastName, company, onConfirm, onC
           <div className="social-lookup-empty">Kandidatų nerasta.</div>
         )}
         <button type="button" className="social-lookup-not-found" onClick={() => confirm(platform, null)}>
-          ✕ Nerasta / nė vienas šitas nėra tas žmogus
+          <X className="icon" size={14} /> Nerasta / nė vienas šitas nėra tas žmogus
         </button>
       </div>
     );
@@ -114,9 +115,9 @@ export function SocialLookupModal({ firstName, lastName, company, onConfirm, onC
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal social-lookup-modal" onClick={(e) => e.stopPropagation()}>
         <div className="apollo-search-modal-header">
-          <h2>🔍 Instagram / Facebook (paieška)</h2>
+          <h2><Search className="icon" size={18} /> Instagram / Facebook (paieška)</h2>
           <button type="button" className="apollo-search-modal-close" onClick={onClose}>
-            ✕
+            <X className="icon" size={16} />
           </button>
         </div>
         <p className="apollo-search-modal-hint">

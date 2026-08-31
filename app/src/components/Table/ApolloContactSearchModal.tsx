@@ -17,6 +17,7 @@ import { joinContactFields, parseContacts, contactTextToFields } from '../../uti
 import { useToastStore } from '../../store/useToastStore';
 import { usePendingPhoneSearchStore } from '../../store/usePendingPhoneSearchStore';
 import { randomUUID } from '../../utils/uuid';
+import { Search, ChevronUp, ChevronDown, X, ArrowRight, ArrowLeft, Clock, Check } from 'lucide-react';
 
 interface ApolloContactSearchModalProps {
   /** The row's raw Company-column value — seeds the initial company-name
@@ -414,16 +415,16 @@ export function ApolloContactSearchModal({
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal apollo-search-modal" onClick={(e) => e.stopPropagation()}>
         <div className="apollo-search-modal-header">
-          <h2>🔍 Ieškoti kontaktų</h2>
+          <h2><Search className="icon" size={18} /> Ieškoti kontaktų</h2>
           <button
             type="button"
             className="apollo-search-modal-filters-toggle"
             onClick={() => setFiltersExpanded((v) => !v)}
           >
-            {filtersExpanded ? 'Slėpti filtrus ▲' : 'Filtrai ▼'}
+            {filtersExpanded ? <>Slėpti filtrus <ChevronUp className="icon" size={14} /></> : <>Filtrai <ChevronDown className="icon" size={14} /></>}
           </button>
           <button type="button" className="apollo-search-modal-close" onClick={onClose}>
-            ✕
+            <X className="icon" size={16} />
           </button>
         </div>
 
@@ -457,7 +458,7 @@ export function ApolloContactSearchModal({
                     </div>
                   </div>
                   <button type="button" className="cell-hover-apollo-result-add" onClick={() => void pickCompany(c)}>
-                    Pasirinkti →
+                    Pasirinkti <ArrowRight className="icon" size={14} />
                   </button>
                 </div>
               ))}
@@ -476,7 +477,7 @@ export function ApolloContactSearchModal({
                   setPeopleError('');
                 }}
               >
-                ← Keisti įmonę
+                <ArrowLeft className="icon" size={14} /> Keisti įmonę
               </button>
               <p className="apollo-search-modal-hint">
                 Pasirinkta įmonė: <strong>{selectedCompany.name}</strong>
@@ -498,7 +499,7 @@ export function ApolloContactSearchModal({
               {pendingPhoneCount > 0 && (
                 <div className="apollo-search-modal-bulk-row">
                   <span className="search-result-detail-muted">
-                    🕐 Ieškoma {pendingPhoneCount} telefono {pendingPhoneCount === 1 ? 'numerio' : 'numerių'} fone — galite tuo
+                    <Clock className="icon" size={14} /> Ieškoma {pendingPhoneCount} telefono {pendingPhoneCount === 1 ? 'numerio' : 'numerių'} fone — galite tuo
                     metu ieškoti ir spausti "+ Pridėti" toliau, kiekvienas ieškomas atskirai ir vienu metu
                   </span>
                 </div>
@@ -510,7 +511,7 @@ export function ApolloContactSearchModal({
                     <span className="cell-hover-apollo-result-name">
                       {[p.first_name, p.last_name_obfuscated].filter(Boolean).join(' ') || 'Nežinoma'}
                       {p.title && <span className="search-result-detail-muted"> — {p.title}</span>}
-                      {added && <span className="cell-hover-apollo-result-added-badge">✓ Jau pridėta</span>}
+                      {added && <span className="cell-hover-apollo-result-added-badge"><Check className="icon" size={12} /> Jau pridėta</span>}
                     </span>
                     <button
                       type="button"
@@ -536,7 +537,7 @@ export function ApolloContactSearchModal({
                     disabled={peopleLoading || peopleCurrentPage <= 1}
                     onClick={() => goToPeoplePage(peopleCurrentPage - 1)}
                   >
-                    ← Ankstesnis
+                    <ArrowLeft className="icon" size={14} /> Ankstesnis
                   </button>
                   <span className="search-result-detail-muted">
                     {peopleCurrentPage} / {peopleTotalPages} psl. ({peopleTotalEntries} viso)
@@ -547,7 +548,7 @@ export function ApolloContactSearchModal({
                     disabled={peopleLoading || peopleCurrentPage >= peopleTotalPages}
                     onClick={() => goToPeoplePage(peopleCurrentPage + 1)}
                   >
-                    Kitas →
+                    Kitas <ArrowRight className="icon" size={14} />
                   </button>
                 </div>
               )}

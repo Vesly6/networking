@@ -2,12 +2,14 @@ import {
   listCampaigns,
   listLeadsForCampaign,
   getCampaign,
-  listSequenceSteps,
-  getLastCompletedStepOrder,
+  getCampaignGraph,
+  getLastCompletedNodeId,
   getActionsForStep,
   getActionsSince,
   type Lead,
+  type SequenceNodeType,
 } from './db.js';
+import { findDueActions, isConditionNodeType } from './scheduler.js';
 
 export interface Funnel {
   totalLeads: number;
@@ -74,72 +76,75 @@ export function getAnalyticsSummary(): AnalyticsSummary {
 
 export interface StepBreakdown {
   stepId: string;
-  stepOrder: number;
-  type: 'connect' | 'message';
-  /** Leads whose next due step is this one, AND who are actually eligible
-   * for it right now (findDueActions()'s own gate) — haven't reached it
-   * yet, but nothing else is blocking it either. */
+  type: SequenceNodeType;
+  /** Leads for whom this exact node is what's actually due right now
+   * (findDueActions()'s own output — every gate, including a condition
+   * node's timeout, already applied). */
   waiting: number;
-  /** Correctly positioned for this step but NOT yet eligible — currently
-   * only possible for a 'message' step whose lead hasn't been promoted to
-   * 'connected' yet (findDueActions() requires that; a pending, not-yet-
-   * accepted invite means the follow-up simply can't fire regardless of
-   * sequencing). Without this split, a message step would misleadingly
-   * show these leads as "waiting for their follow-up" when in reality
-   * nothing will happen until they accept the connection — a real,
-   * found-on-review inaccuracy, not just a naming nicety. */
+  /** For a 'message' node only: leads who've completed the node
+   * immediately feeding into it but aren't 'connected' yet, so the
+   * message can't fire regardless of graph position — without this
+   * split, they'd misleadingly read as "waiting for their follow-up" when
+   * nothing will actually happen until they accept the connection. Only
+   * computed when this node has exactly one incoming 'default' edge (the
+   * overwhelmingly common shape); a message node reached some more exotic
+   * way in a hand-built graph just reports 0 here rather than guessing. */
   blocked: number;
-  /** Leads who've successfully completed this step (and moved past it). */
+  /** Leads who've successfully executed this exact node at least once. */
   completed: number;
-  /** Leads whose most recent attempt at this exact step failed and hasn't
+  /** Leads whose most recent attempt at this exact node failed and hasn't
    * succeeded since (a real, visible "stuck here" signal a lead-status
-   * funnel alone can't show — a failed step 2 and a not-yet-attempted
-   * step 2 both just look like "hasn't reached step 2" from lead.status). */
+   * funnel alone can't show). */
   failing: number;
 }
 
-/** Per-step funnel for one campaign — answers "where exactly are leads
- * dropping off," which the overall sent/accepted/replied funnel can't:
- * that funnel treats every non-'new' lead as "sent" regardless of which
- * step of a 3-step sequence they actually reached. Computed per-lead
- * (getLastCompletedStepOrder, already used by the Scheduler itself) rather
- * than a new bulk query — personal-scale lead counts (tens to low
- * hundreds per campaign) make the O(leads × steps) cost here negligible,
- * and it keeps this single source of truth for "what step is this lead
- * on" instead of a second, potentially-drifting computation. */
+/** Per-node funnel for one campaign's graph — answers "where exactly are
+ * leads dropping off," which the overall sent/accepted/replied funnel
+ * can't. Only action-type nodes are reported (wait/condition/end nodes
+ * are structural, not something a lead visibly "sits at" from a reporting
+ * standpoint). `waiting` comes straight from findDueActions() rather than
+ * re-deriving graph-position logic a second time here — same single-
+ * source-of-truth reasoning the old step_order version already followed,
+ * just pointed at the Scheduler's own real traversal instead of a
+ * simpler ordinal comparison that no longer applies to an arbitrary
+ * graph. */
 export function getCampaignStepBreakdown(campaignId: string): StepBreakdown[] {
-  const steps = listSequenceSteps(campaignId);
-  if (steps.length === 0) return [];
+  const { nodes, edges } = getCampaignGraph(campaignId);
+  const actionNodes = nodes.filter((n) => n.type !== 'wait' && n.type !== 'end' && !isConditionNodeType(n.type));
+  if (actionNodes.length === 0) return [];
+
   // 'withdrawn' leads (Phase 3) are excluded the same way 'skipped' ones
   // already are — the sequence has permanently ended for them either
-  // way, so counting them as "waiting" for their next step would be
-  // wrong (they'll never actually reach it).
+  // way, so counting them anywhere in this breakdown would be wrong
+  // (they'll never actually reach anything further).
   const leads = listLeadsForCampaign(campaignId).filter((l) => l.status !== 'skipped' && l.status !== 'withdrawn');
-  const lastStepOrderByLead = new Map(leads.map((l) => [l.id, getLastCompletedStepOrder(l.id)]));
+  const lastNodeIdByLead = new Map(leads.map((l) => [l.id, getLastCompletedNodeId(l.id)]));
 
-  return steps.map((step) => {
-    const positioned = leads.filter((l) => (lastStepOrderByLead.get(l.id) ?? -1) === step.stepOrder - 1);
-    // Same eligibility gate findDueActions() itself applies — a message
-    // step never becomes due for a lead that isn't 'connected' yet,
-    // regardless of sequence position.
-    const blocked = step.type === 'message' ? positioned.filter((l) => l.status !== 'connected').length : 0;
-    const waiting = positioned.length - blocked;
-    const completed = leads.filter((l) => (lastStepOrderByLead.get(l.id) ?? -1) >= step.stepOrder).length;
-    // "Failing" = currently sitting right before this step (hasn't
-    // completed it) but has at least one logged failed attempt at it —
-    // distinguishes "hasn't been tried yet" from "was tried and failed."
-    const actions = getActionsForStep(step.id);
-    const failedLeadIds = new Set(
-      actions.filter((a) => a.status === 'error' && a.leadId).map((a) => a.leadId as string),
-    );
-    const succeededLeadIds = new Set(
-      actions.filter((a) => a.status === 'success' && a.leadId).map((a) => a.leadId as string),
-    );
-    const failing = leads.filter(
-      (l) => (lastStepOrderByLead.get(l.id) ?? -1) === step.stepOrder - 1 && failedLeadIds.has(l.id) && !succeededLeadIds.has(l.id),
-    ).length;
+  const dueHere = new Map<string, number>();
+  for (const action of findDueActions()) {
+    if (action.campaignId !== campaignId) continue;
+    dueHere.set(action.stepId, (dueHere.get(action.stepId) ?? 0) + 1);
+  }
 
-    return { stepId: step.id, stepOrder: step.stepOrder, type: step.type, waiting, blocked, completed, failing };
+  return actionNodes.map((node) => {
+    const waiting = dueHere.get(node.id) ?? 0;
+
+    let blocked = 0;
+    if (node.type === 'message') {
+      const incoming = edges.filter((e) => e.toNodeId === node.id && e.branch === 'default');
+      if (incoming.length === 1 && incoming[0].fromNodeId) {
+        const priorNodeId = incoming[0].fromNodeId;
+        blocked = leads.filter((l) => lastNodeIdByLead.get(l.id) === priorNodeId && l.status !== 'connected').length;
+      }
+    }
+
+    const actions = getActionsForStep(node.id);
+    const succeededLeadIds = new Set(actions.filter((a) => a.status === 'success' && a.leadId).map((a) => a.leadId as string));
+    const completed = succeededLeadIds.size;
+    const failedLeadIds = new Set(actions.filter((a) => a.status === 'error' && a.leadId).map((a) => a.leadId as string));
+    const failing = leads.filter((l) => failedLeadIds.has(l.id) && !succeededLeadIds.has(l.id)).length;
+
+    return { stepId: node.id, type: node.type, waiting, blocked, completed, failing };
   });
 }
 

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useInstantlyCampaignsStore, type AnalyticsPeriod, type DateRange } from '../../store/useInstantlyCampaignsStore';
 import { useToastStore } from '../../store/useToastStore';
 import { CAMPAIGN_STATUS_LABELS, type InstantlyCampaignDailyAnalytics } from '../../utils/instantlyApi';
+import { Settings } from 'lucide-react';
 
 function formatCount(n: number): string {
   if (n >= 1000) return `${(n / 1000).toFixed(1).replace(/\.0$/, '')}K`;
@@ -231,7 +232,7 @@ function KpiFilterMenu({ visible, onToggle }: { visible: Set<KpiKey>; onToggle: 
   return (
     <div className="instantly-analytics-kpi-filter">
       <button type="button" onClick={() => setOpen((v) => !v)}>
-        ⚙️ Rodikliai
+        <Settings className="icon" size={16} /> Rodikliai
       </button>
       {open && (
         <div className="instantly-analytics-kpi-filter-menu">

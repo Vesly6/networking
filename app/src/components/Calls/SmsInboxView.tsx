@@ -6,6 +6,7 @@ import { getAllSmsLog, saveSmsLogEntry } from '../../db/db';
 import { phoneMatchKey } from '../../utils/phoneMatch';
 import { formatHistoryTimestamp } from '../../utils/date';
 import { randomUUID } from '../../utils/uuid';
+import { Mail, X, Building2, CornerUpLeft, RefreshCw, Settings } from 'lucide-react';
 
 const UNKNOWN_KEY = '__unknown__';
 
@@ -119,10 +120,10 @@ function SmsComposeForm({
       />
       <div className="sms-inbox-compose-actions">
         <button type="submit" className="primary" disabled={sending || !draft.trim() || !phoneDraft.trim()}>
-          {sending ? 'Siunčiama…' : '✉️ Siųsti'}
+          {sending ? 'Siunčiama…' : <><Mail className="icon" size={16} /> Siųsti</>}
         </button>
         <button type="button" onClick={onCancel}>
-          ✕ Atšaukti
+          <X className="icon" size={16} /> Atšaukti
         </button>
       </div>
     </form>
@@ -174,18 +175,18 @@ function ThreadCard({
                 className="sms-thread-jump"
                 onClick={() => onJumpToContact(matchedContact.rowId, matchedContact.columnId, matchedContact.contactId)}
               >
-                🏢 {matchedContact.label} →
+                <Building2 className="icon" size={14} /> {matchedContact.label}
               </button>
             ) : (
               matched && (
                 <button type="button" className="sms-thread-jump" onClick={() => onJumpToRow(matched.rowId)}>
-                  🏢 {matched.label} →
+                  <Building2 className="icon" size={14} /> {matched.label}
                 </button>
               )
             )}
             {!replying && thread.matchKey !== UNKNOWN_KEY && (
               <button type="button" onClick={() => setReplying(true)}>
-                ↩ Atsakyti
+                <CornerUpLeft className="icon" size={16} /> Atsakyti
               </button>
             )}
           </div>
@@ -332,10 +333,10 @@ export function SmsInboxView({ phoneToRow, phoneToContact, onJumpToRow, onJumpTo
     <div className="sms-inbox-view">
       <div className="calls-toolbar">
         <button type="button" onClick={load} disabled={loading}>
-          {loading ? 'Kraunama…' : '↻ Atnaujinti'}
+          {loading ? 'Kraunama…' : <><RefreshCw className="icon" size={16} /> Atnaujinti</>}
         </button>
         <button type="button" onClick={() => setComposingNew((v) => !v)}>
-          ✉️ Nauja SMS
+          <Mail className="icon" size={16} /> Nauja SMS
         </button>
         <button
           type="button"
@@ -343,7 +344,7 @@ export function SmsInboxView({ phoneToRow, phoneToContact, onJumpToRow, onJumpTo
           disabled={settingUpWebhook}
           title="Vienkartinis veiksmas — įjungia gaunamų SMS siuntimą į šio serverio adresą. Reikalauja PUBLIC_BASE_URL serverio nustatymuose."
         >
-          {settingUpWebhook ? 'Registruojama…' : '⚙️ Registruoti SMS webhook'}
+          {settingUpWebhook ? 'Registruojama…' : <><Settings className="icon" size={16} /> Registruoti SMS webhook</>}
         </button>
       </div>
 

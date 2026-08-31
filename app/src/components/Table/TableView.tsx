@@ -51,6 +51,7 @@ import {
   RECENT_COLORS_KEY,
   TABLE_VIEW_STATE_KEY_PREFIX,
 } from '../../constants';
+import { MoreHorizontal, Undo2, Redo2, Lock, X, GripVertical, Hash, MoreVertical, ChevronUp, ChevronDown } from 'lucide-react';
 
 interface TableViewProps {
   focusRowId: string | null;
@@ -2199,7 +2200,7 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
           title={toolbarExpanded ? 'Suskleisti įrankius' : 'Rodyti visus įrankius'}
           onClick={() => setToolbarExpanded((v) => !v)}
         >
-          ⋯
+          <MoreHorizontal className="icon" size={16} />
         </button>
         <input
           className="name-box"
@@ -2250,10 +2251,10 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
           }}
         />
         <button type="button" title="Anuliuoti (Ctrl+Z)" disabled={!canUndo} onClick={undo}>
-          ↶
+          <Undo2 className="icon" size={16} />
         </button>
         <button type="button" title="Grąžinti (Ctrl+Shift+Z)" disabled={!canRedo} onClick={redo}>
-          ↷
+          <Redo2 className="icon" size={16} />
         </button>
         <div className="toolbar-spacer" />
         {importProgress && (
@@ -2319,7 +2320,7 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
               setHiddenColumnsAnchor((prev) => (prev ? null : anchor));
             }}
           >
-            🔒 Paslėpta: {hiddenColumns.length}
+            <Lock className="icon" size={14} /> Paslėpta: {hiddenColumns.length}
           </button>
         )}
         {hiddenColumnsAnchor && (
@@ -2335,7 +2336,7 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
               setHiddenRowsAnchor((prev) => (prev ? null : anchor));
             }}
           >
-            🔒 Paslėpta eilučių: {hiddenRows.length}
+            <Lock className="icon" size={14} /> Paslėpta eilučių: {hiddenRows.length}
           </button>
         )}
         {hiddenRowsAnchor && (
@@ -2436,7 +2437,7 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
                 title="Pašalinti šią žymą"
                 onClick={() => setSearchTags((prev) => prev.filter((t) => t !== tag))}
               >
-                ×
+                <X className="icon" size={12} />
               </button>
             </span>
           ))}
@@ -2512,7 +2513,7 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
                         onDragEnd={handleColumnDragEnd}
                         title="Vilkite, kad pakeistumėte stulpelių tvarką"
                       >
-                        ⠿
+                        <GripVertical className="icon" size={14} />
                       </span>
                       <span
                         className="col-letter"
@@ -2568,7 +2569,7 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
                               setNumericFilterColumnId(col.id);
                             }}
                           >
-                            🔢
+                            <Hash className="icon" size={12} />
                           </span>
                         )}
                       </button>
@@ -2582,7 +2583,7 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
                             setOpenMenu((prev) => (prev?.columnId === col.id ? null : { columnId: col.id, anchor }));
                           }}
                         >
-                          ⋮
+                          <MoreVertical className="icon" size={14} />
                         </button>
                       )}
                       {canOpenColumnMenu && openMenu?.columnId === col.id && (
@@ -2647,7 +2648,7 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
                               setRowsHidden(hiddenBefore, false);
                             }}
                           >
-                            ▲
+                            <ChevronUp className="icon" size={14} />
                           </button>
                         )}
                         <span
@@ -2671,7 +2672,7 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
                           }}
                           title="Vilkite, kad pakeistumėte eilučių tvarką"
                         >
-                          ⠿
+                          <GripVertical className="icon" size={14} />
                         </span>
                         <span
                           className="row-number"
@@ -2696,7 +2697,7 @@ export function TableView({ focusRowId, onFocusHandled, focusContact, onContactF
                               setRowsHidden(hiddenAfter, false);
                             }}
                           >
-                            ▼
+                            <ChevronDown className="icon" size={14} />
                           </button>
                         )}
                       </div>

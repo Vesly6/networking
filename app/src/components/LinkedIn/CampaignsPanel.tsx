@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useLinkedInCampaignsStore } from '../../store/useLinkedInCampaignsStore';
 import { CampaignDetail } from './CampaignDetail';
-import { PendingApprovalPanel } from './PendingApprovalPanel';
 
 const STATUS_LABEL: Record<string, string> = {
   draft: 'Juodraštis',
@@ -10,11 +9,9 @@ const STATUS_LABEL: Record<string, string> = {
   completed: 'Baigta',
 };
 
-/** Campaign list + create + detail (leads/CSV import/sequence steps),
- * plus the Pending Approval queue (due sequence steps, shown here since
- * they're cross-campaign — not scoped to whichever campaign happens to
- * be open). Inbox, analytics, and stale-invite cleanup are their own
- * sibling subtabs (see LinkedInView.tsx). */
+/** Campaign list + create + detail (leads/CSV import/sequence steps).
+ * Inbox, analytics, and stale-invite cleanup are their own sibling
+ * subtabs (see LinkedInView.tsx). */
 export function CampaignsPanel() {
   const campaigns = useLinkedInCampaignsStore((s) => s.campaigns);
   const campaignsReady = useLinkedInCampaignsStore((s) => s.campaignsReady);
@@ -47,7 +44,6 @@ export function CampaignsPanel() {
 
   return (
     <div className="linkedin-campaigns-panel">
-      <PendingApprovalPanel />
       <form
         className="linkedin-new-campaign"
         onSubmit={(e) => {

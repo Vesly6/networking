@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { createPortal } from 'react-dom';
 import { parseCsvFile } from '../../utils/csv';
 import type { NewLead } from '../../utils/linkedinCampaignsApi';
+import { X } from 'lucide-react';
 
 const NONE = '__none__';
 
@@ -129,7 +130,7 @@ export function LeadCsvImport({ onConfirm, onCancel }: LeadCsvImportProps) {
         )}
         <div className="popover-footer">
           <button type="button" onClick={onCancel}>
-            ✕ Atšaukti
+            <X className="icon" size={16} /> Atšaukti
           </button>
           {headers && (
             <button type="button" className="primary" disabled={urlCol === NONE} onClick={handleConfirm}>

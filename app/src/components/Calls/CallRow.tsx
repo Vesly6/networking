@@ -3,6 +3,7 @@ import { useCallsStore } from '../../store/useCallsStore';
 import { useToastStore } from '../../store/useToastStore';
 import type { CallRecord } from '../../utils/callsApi';
 import { getCallDispositionLabel } from '../../utils/callDispositionLabels';
+import { Copy, Search, Building2, Play, FileText, ChevronUp, ChevronDown, Bot, RefreshCw } from 'lucide-react';
 
 function formatDuration(seconds: number): string {
   const m = Math.floor(seconds / 60);
@@ -86,7 +87,7 @@ export function CallRow({ call, cost, matchedRow, matchedContact, onJumpToRow, o
           <div className="calls-destination">
             {withLeadingPlus(call.otherParty)}
             <button type="button" className="calls-copy-btn" title="Kopijuoti numerį" onClick={() => void copy(withLeadingPlus(call.otherParty), 'Numeris')}>
-              📋 Kopijuoti
+              <Copy className="icon" size={14} /> Kopijuoti
             </button>
             <button
               type="button"
@@ -104,7 +105,7 @@ export function CallRow({ call, cost, matchedRow, matchedContact, onJumpToRow, o
                 }
               }}
             >
-              🔍 Ieškoti
+              <Search className="icon" size={14} /> Ieškoti
             </button>
             {matchedRow && (
               <button
@@ -113,7 +114,7 @@ export function CallRow({ call, cost, matchedRow, matchedContact, onJumpToRow, o
                 title="Atverti šią įmonę lentelėje"
                 onClick={() => onJumpToRow(matchedRow.rowId)}
               >
-                🏢 {matchedRow.label} →
+                <Building2 className="icon" size={14} /> {matchedRow.label}
               </button>
             )}
           </div>
@@ -128,13 +129,13 @@ export function CallRow({ call, cost, matchedRow, matchedContact, onJumpToRow, o
             <div className="calls-row-actions">
               <div className="calls-audio">
                 <button type="button" onClick={() => void fetchRecording(call.call_id)}>
-                  ▶ Įrašas
+                  <Play className="icon" size={14} /> Įrašas
                 </button>
                 {recordingLink && (
                   <>
                     <audio controls src={recordingLink} />
                     <a href={recordingLink} target="_blank" rel="noreferrer">
-                      Atverti įrašą ↗
+                      Atverti įrašą
                     </a>
                   </>
                 )}
@@ -143,7 +144,7 @@ export function CallRow({ call, cost, matchedRow, matchedContact, onJumpToRow, o
               <div className="calls-transcribe-group">
                 {!transcript && !transcribing && (
                   <button type="button" className="calls-transcribe-btn" onClick={() => void transcribe(call.call_id)}>
-                    📝 Transkribuoti
+                    <FileText className="icon" size={14} /> Transkribuoti
                   </button>
                 )}
                 {transcribing && (
@@ -153,7 +154,7 @@ export function CallRow({ call, cost, matchedRow, matchedContact, onJumpToRow, o
                 )}
                 {transcript && (
                   <button type="button" className="calls-transcribe-btn" onClick={() => setShowTranscript((v) => !v)}>
-                    {showTranscript ? '🔼 Slėpti nuorašą' : '🔽 Rodyti nuorašą'}
+                    {showTranscript ? <><ChevronUp className="icon" size={14} /> Slėpti nuorašą</> : <><ChevronDown className="icon" size={14} /> Rodyti nuorašą</>}
                   </button>
                 )}
                 {transcribeError && (
@@ -184,13 +185,13 @@ export function CallRow({ call, cost, matchedRow, matchedContact, onJumpToRow, o
               {transcript.summary && (
                 <div className="calls-summary-block">
                   <div className="calls-summary-label-row">
-                    <div className="calls-summary-label">🤖 Santrauka</div>
+                    <div className="calls-summary-label"><Bot className="icon" size={14} /> Santrauka</div>
                     <button
                       type="button"
                       className="calls-copy-btn"
                       onClick={() => void copy(transcript.summary!, 'Santrauka')}
                     >
-                      📋 Kopijuoti
+                      <Copy className="icon" size={14} /> Kopijuoti
                     </button>
                   </div>
                   {transcript.summary}
@@ -200,15 +201,15 @@ export function CallRow({ call, cost, matchedRow, matchedContact, onJumpToRow, o
               <div className="calls-transcript-actions">
                 {transcript.text && (
                   <button type="button" className="calls-copy-btn" onClick={() => void copy(transcript.text, 'Nuorašas')}>
-                    📋 Kopijuoti nuorašą
+                    <Copy className="icon" size={14} /> Kopijuoti nuorašą
                   </button>
                 )}
                 <button type="button" className="calls-transcribe-btn done" onClick={() => void transcribe(call.call_id)}>
-                  🔄 Transkribuoti iš naujo
+                  <RefreshCw className="icon" size={14} /> Transkribuoti iš naujo
                 </button>
                 {transcript.text && !summarizing && (
                   <button type="button" className="calls-transcribe-btn done" onClick={() => void summarize(call.call_id)}>
-                    {transcript.summary ? '🤖 Sukurti santrauką iš naujo' : '🤖 Santrauka'}
+                    <Bot className="icon" size={14} /> {transcript.summary ? 'Sukurti santrauką iš naujo' : 'Santrauka'}
                   </button>
                 )}
                 {summarizing && (
@@ -220,7 +221,7 @@ export function CallRow({ call, cost, matchedRow, matchedContact, onJumpToRow, o
                   <span className="calls-error">{summarizeError}</span>
                 )}
                 <button type="button" className="calls-transcribe-btn" onClick={() => setShowTranscript(false)}>
-                  🔼 Slėpti
+                  <ChevronUp className="icon" size={14} /> Slėpti
                 </button>
               </div>
             </div>

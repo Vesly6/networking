@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { searchCompanies } from '../../utils/apolloApi';
 import type { ApolloCompany } from '../../utils/apolloApi';
+import { Search } from 'lucide-react';
 
 interface CompanyLookupInputProps {
   value: string[];
@@ -104,7 +105,7 @@ export function CompanyLookupInput({ value, onChange }: CompanyLookupInputProps)
           disabled={loading || !text.trim()}
           title="Ieškoti šios įmonės (1 kreditas)"
         >
-          {loading ? '…' : '🔍'}
+          {loading ? '…' : <Search className="icon" size={16} />}
         </button>
       </div>
       {error && <div className="search-result-detail-error">{error}</div>}

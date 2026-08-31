@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useLinkedInInboxStore } from '../../store/useLinkedInInboxStore';
 import { confirmDialog } from '../../store/useConfirmStore';
 import { useToastStore } from '../../store/useToastStore';
+import { RefreshCw, Bot, ExternalLink } from 'lucide-react';
 
 /** Conversation list + one open thread + reply — reads serve from the
  * local DB (already synced by inbox.ts's background job, every 10 min),
@@ -85,7 +86,7 @@ export function InboxPanel() {
       <div className="linkedin-inbox-toolbar">
         <span className="linkedin-hint">{conversations.length} pokalbių</span>
         <button type="button" onClick={() => void syncNow()} disabled={syncing}>
-          {syncing ? 'Sinchronizuojama…' : '↻ Sinchronizuoti dabar'}
+          {syncing ? 'Sinchronizuojama…' : <><RefreshCw className="icon" size={16} /> Sinchronizuoti dabar</>}
         </button>
       </div>
 
@@ -115,7 +116,7 @@ export function InboxPanel() {
               <div className="linkedin-inbox-thread-header">
                 <strong>{openConversation.participantName || openConversation.participantUrl}</strong>
                 <a href={openConversation.participantUrl} target="_blank" rel="noopener noreferrer">
-                  profilis ↗
+                  profilis <ExternalLink className="icon" size={13} />
                 </a>
               </div>
               <div className="linkedin-inbox-messages">
@@ -139,7 +140,7 @@ export function InboxPanel() {
                     title="AI paruošia atsakymo juodraštį pagal pokalbio istoriją — peržiūrėkite ir pataisykite prieš siunčiant"
                     onClick={() => void handleSuggest()}
                   >
-                    {suggesting ? 'Generuojama…' : '🤖 Pasiūlyti atsakymą'}
+                    {suggesting ? 'Generuojama…' : <><Bot className="icon" size={16} /> Pasiūlyti atsakymą</>}
                   </button>
                   <button type="button" className="primary" disabled={sending || !draft.trim()} onClick={() => void handleSend()}>
                     {sending ? 'Siunčiama…' : '+ Siųsti'}

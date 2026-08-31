@@ -1,24 +1,53 @@
 import {
   listCampaigns,
   listLeadsForCampaign,
-  listSequenceSteps,
-  getLastCompletedStepOrder,
+  getCampaignGraph,
+  getLastCompletedNodeId,
   getLastActionTime,
   getLastActionForLeadStep,
   logAction,
   updateLeadStatus,
-  type SequenceStep,
+  type Lead,
+  type SequenceNode,
+  type SequenceEdge,
+  type SequenceNodeType,
 } from './db.js';
 import {
   getSafetySettings,
+  getSafetySnapshot,
   canSendConnect,
   recordConnectSent,
   recordConnectAttempt,
   canSendMessage,
   recordMessageSent,
   setPaused,
+  isPaused,
+  type SafetySettings,
 } from './safety.js';
-import { sendConnectionRequest, sendMessage, withdrawConnectionRequest, ALREADY_CONNECTED_ERROR } from './page.js';
+import { getOrCreateTodaysPlan, nextDueSlot } from './dailyPlan.js';
+import { getLinkedInPage } from './browser.js';
+import {
+  sendConnectionRequest,
+  sendMessage,
+  withdrawConnectionRequest,
+  viewProfile,
+  followProfile,
+  likeLatestPost,
+  ALREADY_CONNECTED_ERROR,
+} from './page.js';
+import { maybeRunHumanizePass } from './humanize.js';
+import { personalizeLinkedInMessage } from '../openai.js';
+
+// The LinkedIn feature is still single-tenant end to end (one shared
+// browser/session, no company_id column anywhere in linkedin.sqlite —
+// see this codebase's own notes on the deferred multi-company project).
+// dailyPlan.ts's persona-bias seeding takes a companyId purely so a
+// future multi-tenant version can vary it per account without touching
+// dailyPlan.ts itself; today there's only ever one real caller, so a
+// fixed constant is the correct, honest value rather than threading a
+// real company id through a feature that doesn't have per-company state
+// anywhere else yet.
+const SINGLE_TENANT_PLAN_ID = 'default';
 
 const DAY_MS = 86_400_000;
 
@@ -68,7 +97,7 @@ export interface DueAction {
   campaignId: string;
   campaignName: string;
   stepId: string;
-  stepType: SequenceStep['type'];
+  stepType: SequenceNodeType;
   messageTemplate: string | null;
 }
 
@@ -95,11 +124,129 @@ export function applyLeadPlaceholders(
     .replaceAll('{{company}}', lead.company ?? '');
 }
 
+// --- Graph traversal (the visual campaign builder) ---
+// Replaces the old flat "step_order + 1" logic. A campaign's graph is a
+// small set of nodes/edges (see db.ts's own schema comment) walked fresh
+// on every findDueActions() call, never cached — personal-scale campaigns
+// (a handful of nodes, hundreds of leads at most) make this cheap enough
+// that there's no reason to maintain a second, potentially-stale copy of
+// "where is this lead right now."
+
+const START_KEY = '__start__';
+const MAX_GRAPH_HOPS = 25;
+
+const CONDITION_TYPES = new Set<SequenceNodeType>([
+  'condition_connected',
+  'condition_replied',
+  'condition_followed_back',
+  'condition_profile_visited',
+  'condition_post_liked',
+  'condition_custom',
+]);
+
+/** Exported so analytics.ts's per-node breakdown can filter out structural
+ * (condition) nodes the same way this file does, without duplicating or
+ * drifting from this list. */
+export function isConditionNodeType(type: SequenceNodeType): boolean {
+  return CONDITION_TYPES.has(type);
+}
+
+type ConditionResult = 'yes' | 'no' | 'pending';
+
+/** Only the two condition types with real detection wired up today
+ * (lead.status is already tracked via inbox.ts's sync) resolve to
+ * anything other than 'pending' — the "coming soon" condition types
+ * (followed back / profile visited / post liked / custom) have no
+ * detection implemented yet, so a lead standing at one of them just never
+ * advances, rather than resolving based on a signal that was never
+ * actually checked. The frontend palette keeps those disabled for exactly
+ * this reason; this is the belt-and-suspenders backend half of that same
+ * guarantee, in case a graph ever contains one some other way. */
+function evaluateCondition(node: SequenceNode, lead: Lead, lastActionTime: number | null, now: number): ConditionResult {
+  const timeoutElapsed = lastActionTime !== null && now >= lastActionTime + (node.waitDays ?? 0) * DAY_MS;
+  if (node.type === 'condition_connected') {
+    if (lead.status === 'connected' || lead.status === 'replied') return 'yes';
+    return timeoutElapsed ? 'no' : 'pending';
+  }
+  if (node.type === 'condition_replied') {
+    if (lead.status === 'replied') return 'yes';
+    return timeoutElapsed ? 'no' : 'pending';
+  }
+  return 'pending';
+}
+
+/** Walks a lead's graph position forward from `lastNodeId` (the id of the
+ * most recently *completed* node — see getLastCompletedNodeId — or `null`
+ * for a lead that hasn't started at all, in which case the walk begins at
+ * the graph's own start edge) until it reaches a real action node (what's
+ * actually due right now), an 'end' node (sequence finished for this lead
+ * — returns null), or a node whose gate/condition isn't satisfied yet
+ * (also null — "not due yet", same meaning as the old model's dueAt-in-
+ * the-future case). 'wait' and condition nodes are purely structural —
+ * they're never themselves "due," the walk passes straight through them
+ * in the same call. Bounded by MAX_GRAPH_HOPS purely as a safety net
+ * against a malformed/cyclic hand-authored graph looping forever within
+ * one call — a well-formed graph never gets remotely close to that many
+ * hops in a single resolution. */
+function resolveNextNode(
+  nodesById: Map<string, SequenceNode>,
+  edgesFrom: Map<string, SequenceEdge[]>,
+  lead: Lead,
+  lastNodeId: string | null,
+  now: number,
+): SequenceNode | null {
+  const lastActionTime = getLastActionTime(lead.id);
+  let fromKey = lastNodeId ?? START_KEY;
+
+  for (let hop = 0; hop < MAX_GRAPH_HOPS; hop++) {
+    const candidates = edgesFrom.get(fromKey) ?? [];
+    if (candidates.length === 0) return null; // dead end — nothing wired here
+
+    let nextEdge: SequenceEdge | undefined;
+    if (fromKey === START_KEY) {
+      nextEdge = candidates[0];
+    } else {
+      const node = nodesById.get(fromKey);
+      if (!node) return null;
+      if (node.type === 'wait') {
+        // A fresh lead (no prior action at all) skips any wait gate
+        // unconditionally — matches the old model's own "a lead's first
+        // step is due immediately regardless of its configured delay"
+        // behavior exactly (getLastActionTime is null in precisely that
+        // case, by construction).
+        const satisfied = lastActionTime === null || now >= lastActionTime + (node.waitDays ?? 0) * DAY_MS;
+        if (!satisfied) return null;
+        nextEdge = candidates.find((e) => e.branch === 'default');
+      } else if (CONDITION_TYPES.has(node.type)) {
+        const result = evaluateCondition(node, lead, lastActionTime, now);
+        if (result === 'pending') return null;
+        nextEdge = candidates.find((e) => e.branch === result);
+      } else {
+        // A real action node (or, defensively, 'end' — though 'end' has no
+        // outgoing edges by construction) reached as fromKey only happens
+        // on the very first hop, when lastNodeId is itself a completed
+        // action. Its single outgoing edge is unconditional — any timing
+        // gate lives on a 'wait' node between it and whatever's next, not
+        // on the action node itself.
+        nextEdge = candidates.find((e) => e.branch === 'default') ?? candidates[0];
+      }
+    }
+    if (!nextEdge) return null;
+    const nextNode = nodesById.get(nextEdge.toNodeId);
+    if (!nextNode) return null;
+
+    if (nextNode.type === 'end') return null; // sequence finished for this lead
+    if (nextNode.type !== 'wait' && !CONDITION_TYPES.has(nextNode.type)) {
+      return nextNode; // a real action — this is what's due (subject to executeAction's own Safety Engine gating)
+    }
+    fromKey = nextNode.id; // wait/condition — keep walking transparently in this same call
+  }
+  console.warn('[linkedin/scheduler] graph walk exceeded', MAX_GRAPH_HOPS, 'hops for lead', lead.id, '— likely a cyclic graph, treating as not due this tick.');
+  return null;
+}
+
 /** Walks every *active* campaign's leads and figures out which ones are
- * due for their next sequence step right now — "due" meaning: the
- * previous step (if any) succeeded, and this step's own delayDays has
- * elapsed since then (or this is the lead's first step, which is due
- * immediately once the campaign is active). Read-only — doesn't execute
+ * due for their next graph node right now. Read-only — doesn't execute
  * or check the Safety Engine; see executeAction()/runSchedulerTick()
  * below for that. */
 export function findDueActions(now = Date.now()): DueAction[] {
@@ -107,8 +254,17 @@ export function findDueActions(now = Date.now()): DueAction[] {
   const campaigns = listCampaigns().filter((c) => c.status === 'active');
 
   for (const campaign of campaigns) {
-    const steps = listSequenceSteps(campaign.id);
-    if (steps.length === 0) continue;
+    const { nodes, edges } = getCampaignGraph(campaign.id);
+    if (nodes.length === 0) continue;
+
+    const nodesById = new Map(nodes.map((n) => [n.id, n]));
+    const edgesFrom = new Map<string, SequenceEdge[]>();
+    for (const e of edges) {
+      const key = e.fromNodeId ?? START_KEY;
+      const arr = edgesFrom.get(key);
+      if (arr) arr.push(e);
+      else edgesFrom.set(key, [e]);
+    }
 
     // 'withdrawn' (Phase 3): a lead whose invite was pulled back should
     // never come up as due for anything else either — same reasoning as
@@ -118,20 +274,18 @@ export function findDueActions(now = Date.now()): DueAction[] {
     );
 
     for (const lead of leads) {
-      const lastStepOrder = getLastCompletedStepOrder(lead.id);
-      const nextStep = steps.find((s) => s.stepOrder === lastStepOrder + 1);
-      if (!nextStep) continue; // sequence finished (or never started with a step 0 that exists) for this lead
+      const lastNodeId = getLastCompletedNodeId(lead.id);
+      const nextNode = resolveNextNode(nodesById, edgesFrom, lead, lastNodeId, now);
+      if (!nextNode) continue;
 
-      // A message step only makes sense once the lead is actually
-      // connected — nothing in this codebase yet detects an accepted
-      // invite automatically (that needs the Inbox/reply-watcher piece,
-      // not built yet), so a message step simply never becomes due until
-      // a lead's status is set to 'connected' some other way (manually,
-      // for now). Documented as a known gap rather than silently
-      // attempting to message a non-connection.
-      if (nextStep.type === 'message' && lead.status !== 'connected') continue;
+      // Defensive fallback gate — a well-authored graph places a
+      // 'condition_connected' node before any 'message' node, but a
+      // simple/malformed graph might not; this catches that case
+      // regardless of graph shape, same safety net the old model applied
+      // unconditionally.
+      if (nextNode.type === 'message' && lead.status !== 'connected') continue;
 
-      // A connect step whose most recent attempt for THIS lead already
+      // A connect node whose most recent attempt for THIS lead already
       // confirmed "no Connect button" (see isNoConnectButtonError above) is
       // terminal — the person is already connected/pending, and retrying
       // won't change that. Without this, a lead in that state would come
@@ -144,14 +298,10 @@ export function findDueActions(now = Date.now()): DueAction[] {
       // ever starts firing for an unrelated reason (a future selector
       // break, which has already happened twice this session for other
       // selectors).
-      if (nextStep.type === 'connect') {
-        const lastAttempt = getLastActionForLeadStep(lead.id, nextStep.id);
+      if (nextNode.type === 'connect') {
+        const lastAttempt = getLastActionForLeadStep(lead.id, nextNode.id);
         if (lastAttempt?.status === 'error' && isNoConnectButtonError(lastAttempt.detail)) continue;
       }
-
-      const lastActionTime = getLastActionTime(lead.id);
-      const dueAt = lastActionTime === null ? now : lastActionTime + nextStep.delayDays * DAY_MS;
-      if (now < dueAt) continue;
 
       due.push({
         leadId: lead.id,
@@ -161,9 +311,9 @@ export function findDueActions(now = Date.now()): DueAction[] {
         leadCompany: lead.company,
         campaignId: campaign.id,
         campaignName: campaign.name,
-        stepId: nextStep.id,
-        stepType: nextStep.type,
-        messageTemplate: nextStep.messageTemplate,
+        stepId: nextNode.id,
+        stepType: nextNode.type,
+        messageTemplate: nextNode.messageTemplate,
       });
     }
   }
@@ -181,27 +331,114 @@ export interface ExecuteResult {
   circuitBreakerTripped?: boolean;
 }
 
+/** Shared "run the Playwright call, log the outcome either way, trip the
+ * circuit breaker on a session-level failure" wrapper — every action type
+ * below goes through this so that behavior (and the log shape) stays
+ * identical regardless of which graph node type triggered it. Pre-checks
+ * (Safety Engine caps) and post-success side effects (counters, lead
+ * status transitions) that differ per type stay in each type's own call
+ * site, not folded in here. */
+async function runAndLog(action: DueAction, actionType: string, fn: () => Promise<unknown>): Promise<ExecuteResult> {
+  const startedAt = Date.now();
+  try {
+    const timing = await fn();
+    logAction({
+      leadId: action.leadId,
+      stepId: action.stepId,
+      actionType,
+      status: 'success',
+      targetUrl: action.leadUrl,
+      detail: null,
+      executedAt: startedAt,
+      responseTimeMs: Date.now() - startedAt,
+      timingJson: timing ? JSON.stringify(timing) : null,
+    });
+    return { ok: true };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : `Failed to execute ${actionType}`;
+    logAction({
+      leadId: action.leadId,
+      stepId: action.stepId,
+      actionType,
+      status: 'error',
+      targetUrl: action.leadUrl,
+      detail: message,
+      executedAt: startedAt,
+      responseTimeMs: Date.now() - startedAt,
+    });
+    // Auto-pause on a checkpoint/logged-out/unreachable-Chrome condition —
+    // this is the durable, server-side circuit breaker: it doesn't depend
+    // on anyone (human or AI) watching a dashboard or a chat session
+    // staying alive. The next scheduler tick sees `paused` and stops
+    // considering anything due at all until a human explicitly resumes.
+    if (isCircuitBreakerCondition(err)) {
+      setPaused(true);
+      return { ok: false, error: message, circuitBreakerTripped: true };
+    }
+    return { ok: false, error: message };
+  }
+}
+
+/** Automatic pre-send personalization step — folded directly into
+ * executeAction() below now that nothing waits for a human to review a
+ * send first (see safety.ts's auto_personalize_enabled doc comment for
+ * why this replaced the old Pending Approval panel's manual "🤖
+ * Personalizuoti" button). Off (default) or no key configured: returns
+ * the plain placeholder-substituted text unchanged. On: asks OpenAI for a
+ * light rewrite and uses that instead — but never lets a failed AI call
+ * block a send, since the plain-substitution text is always a safe
+ * fallback and this step is a nice-to-have, not a requirement. */
+async function resolveOutgoingText(
+  placeholderText: string,
+  action: DueAction,
+  settings: SafetySettings,
+  openaiApiKey: string | undefined,
+  isConnectNote: boolean,
+): Promise<string> {
+  if (!settings.autoPersonalizeEnabled || !openaiApiKey || !placeholderText) return placeholderText;
+  try {
+    const nameParts = action.leadName?.trim().split(/\s+/) ?? [];
+    const result = await personalizeLinkedInMessage(
+      {
+        template: action.messageTemplate ?? '',
+        firstName: nameParts[0] ?? null,
+        lastName: nameParts.slice(1).join(' ') || null,
+        title: action.leadTitle,
+        company: action.leadCompany,
+        isConnectNote,
+      },
+      openaiApiKey,
+    );
+    return result.text;
+  } catch (err) {
+    console.error(
+      '[linkedin/personalize] auto-personalize failed for lead',
+      action.leadId,
+      '— falling back to plain template:',
+      err instanceof Error ? err.message : err,
+    );
+    return placeholderText;
+  }
+}
+
 /** Actually performs one due action — the Safety Engine check happens
  * here, immediately before the real Playwright call, not earlier in
  * findDueActions() (state can change between "found due" and "about to
  * execute," e.g. another action in the same tick already used up the
- * daily cap). Logs the outcome either way.
- *
- * `overrideMessage`, when given, replaces the step's own (placeholder-
- * substituted) template entirely — this is what lets the Pending Approval
- * panel's "🤖 Personalizuoti" flow (a human reviews/edits an AI-suggested
- * rewrite before approving) actually change what gets sent, rather than
- * only ever being able to preview a suggestion that then gets silently
- * discarded at send time. Without an override, `{{firstName}}` etc. still
- * get substituted from the lead's own fields (applyLeadPlaceholders) even
- * with zero AI involvement — a free personalization floor every send
- * gets, not just the ones someone clicked "personalize" on. */
-export async function executeAction(action: DueAction, overrideMessage?: string): Promise<ExecuteResult> {
-  const startedAt = Date.now();
-  const resolvedText = (
-    overrideMessage?.trim() ||
-    applyLeadPlaceholders(action.messageTemplate ?? '', { name: action.leadName, title: action.leadTitle, company: action.leadCompany })
-  ).trim();
+ * daily cap). Logs the outcome either way. `openaiApiKey`, when supplied
+ * (runSchedulerTick passes the owner company's own configured key — see
+ * that function's doc comment on why this file otherwise stays
+ * company-agnostic), only ever affects resolveOutgoingText() above. */
+export async function executeAction(action: DueAction, openaiApiKey?: string): Promise<ExecuteResult> {
+  const settings = getSafetySettings();
+  // {{firstName}}/{{title}}/{{company}} substituted from the lead's own
+  // fields — a free personalization floor every send gets, independent of
+  // resolveOutgoingText()'s optional AI rewrite on top of it.
+  const placeholderText = applyLeadPlaceholders(action.messageTemplate ?? '', {
+    name: action.leadName,
+    title: action.leadTitle,
+    company: action.leadCompany,
+  }).trim();
 
   if (action.stepType === 'connect') {
     const check = canSendConnect();
@@ -212,119 +449,62 @@ export async function executeAction(action: DueAction, overrideMessage?: string)
     // See canSendConnect()'s own doc comment on why the success-only caps
     // alone weren't enough.
     recordConnectAttempt();
-    try {
-      // The connect step's own messageTemplate doubles as the optional
-      // "Add a note" text (LinkedIn's connect flow, not a separate DM) —
-      // an earlier version of this call passed no note at all, so every
-      // connection request went out blank regardless of what a connect
-      // step's template field held.
-      await sendConnectionRequest(action.leadUrl, resolvedText || undefined);
+    // The connect node's own messageTemplate doubles as the optional
+    // "Add a note" text (LinkedIn's connect flow, not a separate DM).
+    const resolvedText = await resolveOutgoingText(placeholderText, action, settings, openaiApiKey, true);
+    const result = await runAndLog(action, 'connect', () => sendConnectionRequest(action.leadUrl, resolvedText || undefined, action.leadName));
+    if (result.ok) {
       recordConnectSent();
-      logAction({
-        leadId: action.leadId,
-        stepId: action.stepId,
-        actionType: 'connect',
-        status: 'success',
-        targetUrl: action.leadUrl,
-        detail: null,
-        executedAt: startedAt,
-        responseTimeMs: Date.now() - startedAt,
-      });
       updateLeadStatus(action.leadId, 'pending');
-      return { ok: true };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to send connection request';
-      logAction({
-        leadId: action.leadId,
-        stepId: action.stepId,
-        actionType: 'connect',
-        status: 'error',
-        targetUrl: action.leadUrl,
-        detail: message,
-        executedAt: startedAt,
-        responseTimeMs: Date.now() - startedAt,
-      });
-      // Auto-pause on a checkpoint/logged-out/unreachable-Chrome condition
-      // — this is the durable, server-side circuit breaker: it doesn't
-      // depend on anyone (human or AI) watching a dashboard or a chat
-      // session staying alive. The next scheduler tick sees `paused` and
-      // stops considering anything due at all (canSendConnect/
-      // canSendMessage's own pause check) until a human explicitly resumes.
-      if (isCircuitBreakerCondition(err)) {
-        setPaused(true);
-        return { ok: false, error: message, circuitBreakerTripped: true };
-      }
-      return { ok: false, error: message };
     }
+    return result;
   }
 
-  // message
-  const check = canSendMessage();
-  if (!check.allowed) return { ok: false, error: check.reason };
-  const text = resolvedText;
-  if (!text) return { ok: false, error: 'This step has no message template set.' };
-  try {
-    await sendMessage(action.leadUrl, text);
-    recordMessageSent();
-    logAction({
-      leadId: action.leadId,
-      stepId: action.stepId,
-      actionType: 'message',
-      status: 'success',
-      targetUrl: action.leadUrl,
-      detail: null,
-      executedAt: startedAt,
-      responseTimeMs: Date.now() - startedAt,
-    });
-    return { ok: true };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : 'Failed to send message';
-    logAction({
-      leadId: action.leadId,
-      stepId: action.stepId,
-      actionType: 'message',
-      status: 'error',
-      targetUrl: action.leadUrl,
-      detail: message,
-      executedAt: startedAt,
-      responseTimeMs: Date.now() - startedAt,
-    });
-    if (isCircuitBreakerCondition(err)) {
-      setPaused(true);
-      return { ok: false, error: message, circuitBreakerTripped: true };
-    }
-    return { ok: false, error: message };
+  if (action.stepType === 'message') {
+    const check = canSendMessage();
+    if (!check.allowed) return { ok: false, error: check.reason };
+    if (!placeholderText) return { ok: false, error: 'This step has no message template set.' };
+    const resolvedText = await resolveOutgoingText(placeholderText, action, settings, openaiApiKey, false);
+    const result = await runAndLog(action, 'message', () => sendMessage(action.leadUrl, resolvedText));
+    if (result.ok) recordMessageSent();
+    return result;
   }
-}
 
-/** Re-verifies the action is *still* due right now before executing it —
- * the frontend's Pending Approval list was built from a possibly-stale
- * findDueActions() snapshot (another tab, a background tick, or another
- * approval in the same batch could have already changed things), so this
- * never trusts a client-supplied action payload directly. `overrideMessage`
- * (optional — the Pending Approval panel's edited/AI-personalized text, if
- * the user used it) passes straight through to executeAction(); omitted,
- * this sends the plain placeholder-substituted template exactly as before. */
-export async function approveAction(leadId: string, stepId: string, overrideMessage?: string): Promise<ExecuteResult> {
-  const match = findDueActions().find((a) => a.leadId === leadId && a.stepId === stepId);
-  if (!match) return { ok: false, error: 'This action is no longer due (already handled, or conditions changed).' };
-  return executeAction(match, overrideMessage);
-}
+  if (action.stepType === 'withdraw') {
+    if (isPaused()) return { ok: false, error: 'Automation is paused (stop switch is on).' };
+    const result = await runAndLog(action, 'withdraw', () => withdrawConnectionRequest(action.leadUrl));
+    if (result.ok) updateLeadStatus(action.leadId, 'withdrawn');
+    return result;
+  }
 
-/** Resolves one due action's lead/step details for the personalize route —
- * re-checks it's still due for the same stale-snapshot reason
- * approveAction() does, so a personalize request against a lead that just
- * got skipped (or whose sequence moved on) fails clearly instead of
- * quietly generating a suggestion for an action that will be rejected the
- * moment it's actually approved. */
-export function findDueAction(leadId: string, stepId: string): DueAction | null {
-  return findDueActions().find((a) => a.leadId === leadId && a.stepId === stepId) ?? null;
+  if (action.stepType === 'view_profile') {
+    if (isPaused()) return { ok: false, error: 'Automation is paused (stop switch is on).' };
+    return runAndLog(action, 'view_profile', () => viewProfile(action.leadUrl));
+  }
+
+  if (action.stepType === 'follow') {
+    if (isPaused()) return { ok: false, error: 'Automation is paused (stop switch is on).' };
+    return runAndLog(action, 'follow', () => followProfile(action.leadUrl));
+  }
+
+  if (action.stepType === 'like_post') {
+    if (isPaused()) return { ok: false, error: 'Automation is paused (stop switch is on).' };
+    return runAndLog(action, 'like_post', () => likeLatestPost(action.leadUrl));
+  }
+
+  // 'wait'/'end'/condition_* node types are never returned as a DueAction
+  // by findDueActions() (they're resolved transparently or terminate the
+  // walk — see resolveNextNode above), and the "coming soon" action types
+  // (inmail/endorse/find_email) have no implementation to call yet — the
+  // frontend palette keeps those disabled, so reaching here means either a
+  // hand-crafted API call or a genuine bug; fail clearly rather than
+  // silently no-opping.
+  return { ok: false, error: `No execution handler for node type "${action.stepType}".` };
 }
 
 export interface SchedulerTickResult {
   due: number;
   autoExecuted: number;
-  pendingApproval: number;
   errors: number;
   /** True when this tick stopped early because a checkpoint/logged-out/
    * unreachable-Chrome condition tripped the circuit breaker — the
@@ -336,6 +516,21 @@ export interface SchedulerTickResult {
   /** True when this call was a no-op because another tick was already
    * running — see the module-level lock below. */
   skippedConcurrent?: boolean;
+  /** True when there *were* due actions but today's human-paced plan
+   * (dailyPlan.ts) says it isn't time for the next one yet, or today's
+   * randomized target has already been reached —
+   * distinct from `due === 0` (nothing needs doing at all) and from
+   * `skippedConcurrent` (a different tick is already running). This is the
+   * normal, expected result most ticks return once the plan is wired in —
+   * "there's due work, but not right now" is the whole point. */
+  waitingForNextSlot?: boolean;
+  /** True when an automatic tick found due work and its slot but skipped
+   * anyway because no LinkedIn tab is currently open in the automation
+   * Chrome — see browser.ts's getLinkedInPage(requireExistingTab) doc
+   * comment for the real incident this prevents (auto-recreating a tab
+   * the account owner deliberately closed). Never set on a manual tick,
+   * which still opens a tab on demand as before. */
+  noTabOpen?: boolean;
 }
 
 // Real, live-reproduced race found this session: the background interval
@@ -373,48 +568,109 @@ let tickInProgress = false;
 // out across many ticks (hours) instead of burning through it in minutes.
 const MAX_ATTEMPTS_PER_TICK = 5;
 
-/** The background tick (called on an interval from index.ts, and
- * on-demand via POST /api/linkedin/scheduler/run). When manual review is
- * ON (the default — see safety.ts's manualReviewEnabled), this never
- * executes anything itself: it just leaves the due actions for
- * findDueActions() to report, and the frontend's Pending Approval list
- * is what actually triggers executeAction() per item, one explicit click
- * at a time. Manual review OFF is what makes this genuinely autonomous —
- * a deliberate, understood step down from the safer default, not
- * something that happens by accident.
+/** The background tick — called on-demand via POST
+ * /api/linkedin/scheduler/run (`isAutomatic = false`, the default) and,
+ * separately, on index.ts's own background interval (`isAutomatic = true`
+ * — see that call site's own doc comment for why the interval was safe to
+ * bring back). Manual review was removed from this codebase entirely (on
+ * explicit request — "Убрать совсем из кода"): a due action always
+ * executes here, gated only by the Safety Engine's own caps/pause/work-
+ * hours/warm-up ramp inside executeAction(), the same gate that already
+ * governed every send even when manual review was on. There is no queue
+ * for a human to review first — this is meant to "work on its own,
+ * without stopping."
  *
- * With manual review off, this loop is the only thing standing between
- * "rate-limited autonomous sending" (the intended behavior, same operating
- * model as commercial LinkedIn automation tools) and "kept hammering a
- * broken session for however long nobody noticed" — so it stops at the
- * *first* circuit-breaker condition (checkpoint/logged-out/Chrome
- * unreachable), or after MAX_ATTEMPTS_PER_TICK attempts total, rather than
- * working through the rest of `due` in one go. */
-export async function runSchedulerTick(): Promise<SchedulerTickResult> {
+ * `openaiApiKey`, when supplied by the caller (index.ts resolves the
+ * owner company's own configured key), passes straight through to
+ * executeAction() for the optional auto-personalize step — see
+ * resolveOutgoingText()'s own doc comment. Omitted or no key configured:
+ * plain placeholder substitution only, same as always.
+ *
+ * `isAutomatic` controls two things a *manual* "▶ Vykdyti dabar" click
+ * deliberately skips (a human clicking that button is already a
+ * supervised, deliberate action — the pacing below exists specifically
+ * for the unattended path):
+ * - the daily plan gate (dailyPlan.ts) — paces *when* a tick is allowed to
+ *   act at all, separate from the existing per-action canSendConnect()
+ *   Safety Engine check inside executeAction(), which still governs
+ *   *whether* a specific send is allowed once a slot's time has come.
+ *   Without this, an automatic tick fired every due lead back-to-back the
+ *   instant it found them (confirmed live this session) — functionally
+ *   within the caps, but a pattern that reads as scripted rather than a
+ *   person working through their day.
+ * - the per-tick execution cap: automatic ticks process at most ONE due
+ *   action (once the plan says a slot is actually due), not up to
+ *   MAX_ATTEMPTS_PER_TICK — the plan's whole premise is one paced action
+ *   per due moment, not a burst; a manual click keeps the original
+ *   up-to-MAX_ATTEMPTS_PER_TICK behavior, since a human explicitly asking
+ *   to "run now" reasonably means "work through what's due," and stops at
+ *   the *first* circuit-breaker condition (checkpoint/logged-out/Chrome
+ *   unreachable) either way. */
+export async function runSchedulerTick(isAutomatic = false, openaiApiKey?: string): Promise<SchedulerTickResult> {
   if (tickInProgress) {
-    return { due: 0, autoExecuted: 0, pendingApproval: 0, errors: 0, circuitBreakerTripped: false, skippedConcurrent: true };
+    return { due: 0, autoExecuted: 0, errors: 0, circuitBreakerTripped: false, skippedConcurrent: true };
   }
   tickInProgress = true;
   try {
-    const due = findDueActions();
-    const manualReview = getSafetySettings().manualReviewEnabled;
-    if (manualReview || due.length === 0) {
-      return { due: due.length, autoExecuted: 0, pendingApproval: manualReview ? due.length : 0, errors: 0, circuitBreakerTripped: false };
+    // Feed-activity "texture" (humanize.ts) is independent of whether any
+    // connect is due — a real person checks their own feed regardless of
+    // whether they happen to have someone to connect with today.
+    // Automatic ticks only (a manual "run now" click has no business also
+    // triggering unrelated feed activity), and only when a LinkedIn tab is
+    // already open — same root-cause tab-existence rule every other
+    // automatic action in this feature follows, so this can never be the
+    // thing that reopens a deliberately-closed Chrome tab.
+    // maybeRunHumanizePass() has its own internal pause/work-hours/
+    // frequency/probability gates, so most calls here are a no-op.
+    if (isAutomatic && (await getLinkedInPage(true)) !== null) {
+      const humanizeResult = await maybeRunHumanizePass();
+      if (humanizeResult.ran) {
+        console.log('[linkedin/humanize] liked', humanizeResult.liked, 'feed post(s) this tick.');
+      }
     }
+
+    const due = findDueActions();
+    if (due.length === 0) {
+      return { due: 0, autoExecuted: 0, errors: 0, circuitBreakerTripped: false };
+    }
+    const settings = getSafetySettings();
+
+    let actionable = due;
+    if (isAutomatic) {
+      const snapshot = getSafetySnapshot();
+      const plan = await getOrCreateTodaysPlan(settings, snapshot.effectiveDailyCap, SINGLE_TENANT_PLAN_ID);
+      const dueSlot = nextDueSlot(plan, Date.now(), snapshot.connectsToday);
+      if (dueSlot === null) {
+        return { due: due.length, autoExecuted: 0, errors: 0, circuitBreakerTripped: false, waitingForNextSlot: true };
+      }
+      // Checked here, before calling executeAction() at all — that
+      // function's own sendConnectionRequest()/sendMessage() calls
+      // getLinkedInPage() with its default (tab-opening) mode, so this is
+      // the one place that has to stop an automatic tick from reaching
+      // that path when no tab exists, rather than relying on a deeper
+      // call site to somehow know it's being run unattended.
+      if ((await getLinkedInPage(true)) === null) {
+        return { due: due.length, autoExecuted: 0, errors: 0, circuitBreakerTripped: false, noTabOpen: true };
+      }
+      actionable = due.slice(0, 1);
+    } else {
+      actionable = due.slice(0, MAX_ATTEMPTS_PER_TICK);
+    }
+
     let autoExecuted = 0;
     let errors = 0;
-    for (const action of due.slice(0, MAX_ATTEMPTS_PER_TICK)) {
-      const result = await executeAction(action);
+    for (const action of actionable) {
+      const result = await executeAction(action, openaiApiKey);
       if (result.ok) {
         autoExecuted++;
       } else {
         errors++;
         if (result.circuitBreakerTripped) {
-          return { due: due.length, autoExecuted, pendingApproval: 0, errors, circuitBreakerTripped: true };
+          return { due: due.length, autoExecuted, errors, circuitBreakerTripped: true };
         }
       }
     }
-    return { due: due.length, autoExecuted, pendingApproval: 0, errors, circuitBreakerTripped: false };
+    return { due: due.length, autoExecuted, errors, circuitBreakerTripped: false };
   } finally {
     tickInProgress = false;
   }

@@ -5,6 +5,7 @@ import { useToastStore } from '../../store/useToastStore';
 import { typeToConfirmDialog } from '../../store/useTypeToConfirmStore';
 import { formatHistoryTimestamp } from '../../utils/date';
 import { TAB_LABELS } from '../../utils/tabLabels';
+import { ArrowRight, Key } from 'lucide-react';
 
 const PERMISSION_LABELS: Array<{ key: keyof UserPermissions; label: string }> = [
   { key: 'canDeleteRows', label: 'Trinti eilutes' },
@@ -85,7 +86,7 @@ function WorkerActivityPanel({
                 </span>
               </div>
               <button type="button" className="worker-activity-jump" title="Pereiti prie langelio" onClick={() => jump(a)}>
-                →
+                <ArrowRight className="icon" size={14} />
               </button>
             </li>
           ))}
@@ -382,7 +383,7 @@ export function WorkersView({ onJumpToRow, onJumpToContact }: WorkersViewProps) 
                 {editingId === worker.id ? 'Uždaryti' : 'Redaguoti'}
               </button>
               <button type="button" onClick={() => setPasswordOpenId(passwordOpenId === worker.id ? null : worker.id)}>
-                {passwordOpenId === worker.id ? 'Uždaryti' : '🔑 Slaptažodis'}
+                {passwordOpenId === worker.id ? 'Uždaryti' : <><Key className="icon" size={14} /> Slaptažodis</>}
               </button>
               <button type="button" className="danger" onClick={() => void handleDelete(worker)}>
                 Ištrinti

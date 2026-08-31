@@ -11,6 +11,7 @@ import {
   MORE_INTEREST_STATUSES,
   type UniboxThreadEmail,
 } from '../../utils/instantlyApi';
+import { Inbox, Mail, AlarmClock, Clock, Send, X, Link, ChevronRight, CornerUpRight, CornerUpLeft, Download, type LucideIcon } from 'lucide-react';
 
 /** The "More" menu — modeled directly on a screenshot of Instantly's own
  * real one (Inbox/Unread only/Reminders only/Scheduled emails/Sent), on
@@ -22,12 +23,12 @@ const VIEW_MODE_LABELS: Record<UniboxViewMode, string> = {
   scheduled: 'Suplanuoti laiškai',
   sent: 'Išsiųsti',
 };
-const VIEW_MODE_ICONS: Record<UniboxViewMode, string> = {
-  inbox: '📥',
-  unread: '✉️',
-  reminders: '⏰',
-  scheduled: '🕓',
-  sent: '📤',
+const VIEW_MODE_ICONS: Record<UniboxViewMode, LucideIcon> = {
+  inbox: Inbox,
+  unread: Mail,
+  reminders: AlarmClock,
+  scheduled: Clock,
+  sent: Send,
 };
 
 function formatTimestamp(iso: string): string {
@@ -353,7 +354,7 @@ function ComposePanel({ mode, thread, accounts, onClose }: ComposePanelProps) {
       <div className="instantly-compose-header">
         <h3>{mode === 'reply' ? 'Atsakyti' : 'Persiųsti'}</h3>
         <button type="button" className="instantly-compose-close" onClick={onClose}>
-          ✕
+          <X className="icon" size={16} />
         </button>
       </div>
 
@@ -369,7 +370,7 @@ function ComposePanel({ mode, thread, accounts, onClose }: ComposePanelProps) {
             <span className="instantly-compose-chip" key={v}>
               {v}
               <button type="button" onClick={() => removeToChip(v)}>
-                ✕
+                <X className="icon" size={12} />
               </button>
             </span>
           ))}
@@ -431,7 +432,7 @@ function ComposePanel({ mode, thread, accounts, onClose }: ComposePanelProps) {
           }}
           title="Nuoroda"
         >
-          🔗
+          <Link className="icon" size={14} />
         </button>
         <button type="button" onClick={() => exec('removeFormat')} title="Išvalyti formatavimą">
           Tx
@@ -627,7 +628,7 @@ export function UniboxPanel() {
           className="instantly-unibox-block-header"
           onClick={() => setSidebarCollapsed((v) => !v)}
         >
-          <span className={`instantly-expand-caret ${!sidebarCollapsed ? 'instantly-expand-caret-open' : ''}`}>▸</span>
+          <span className={`instantly-expand-caret ${!sidebarCollapsed ? 'instantly-expand-caret-open' : ''}`}><ChevronRight className="icon" size={14} /></span>
           <span className="instantly-unibox-block-header-label">Filtrai</span>
         </button>
         {!sidebarCollapsed && (
@@ -648,7 +649,7 @@ export function UniboxPanel() {
                 className={`instantly-status-row ${!filterCampaignId ? 'active' : ''}`}
                 onClick={() => setCampaignsOpen((v) => !v)}
               >
-                <span className={`instantly-expand-caret ${campaignsOpen ? 'instantly-expand-caret-open' : ''}`}>▸</span>
+                <span className={`instantly-expand-caret ${campaignsOpen ? 'instantly-expand-caret-open' : ''}`}><ChevronRight className="icon" size={14} /></span>
                 {activeCampaign ? activeCampaign.name : 'Visos kampanijos'}
               </button>
               {campaignsOpen && (
@@ -668,7 +669,7 @@ export function UniboxPanel() {
                         setCampaignsOpen(false);
                       }}
                     >
-                      ✕ Išvalyti filtrą
+                      <X className="icon" size={14} /> Išvalyti filtrą
                     </button>
                   )}
                   {filteredCampaigns.map((c) => (
@@ -713,7 +714,7 @@ export function UniboxPanel() {
                     }
                   }}
                 >
-                  {syncingReplies ? 'Sinchronizuojama…' : '📥 Eksportuoti atsakymus į lentelę'}
+                  {syncingReplies ? 'Sinchronizuojama…' : <><Download className="icon" size={16} /> Eksportuoti atsakymus į lentelę</>}
                 </button>
               )}
             </div>
@@ -731,23 +732,26 @@ export function UniboxPanel() {
             <div className="instantly-unibox-sidebar-title">Daugiau</div>
             <div className="instantly-status-list">
               <button type="button" className="instantly-status-row" onClick={() => setMoreOpen((v) => !v)}>
-                <span className={`instantly-expand-caret ${moreOpen ? 'instantly-expand-caret-open' : ''}`}>▸</span>
+                <span className={`instantly-expand-caret ${moreOpen ? 'instantly-expand-caret-open' : ''}`}><ChevronRight className="icon" size={14} /></span>
                 {VIEW_MODE_LABELS[viewMode]}
               </button>
               {moreOpen &&
-                (Object.keys(VIEW_MODE_LABELS) as UniboxViewMode[]).map((mode) => (
-                  <button
-                    type="button"
-                    key={mode}
-                    className={`instantly-status-row ${viewMode === mode ? 'active' : ''}`}
-                    onClick={() => {
-                      setViewMode(mode);
-                      setMoreOpen(false);
-                    }}
-                  >
-                    {VIEW_MODE_ICONS[mode]} {VIEW_MODE_LABELS[mode]}
-                  </button>
-                ))}
+                (Object.keys(VIEW_MODE_LABELS) as UniboxViewMode[]).map((mode) => {
+                  const ModeIcon = VIEW_MODE_ICONS[mode];
+                  return (
+                    <button
+                      type="button"
+                      key={mode}
+                      className={`instantly-status-row ${viewMode === mode ? 'active' : ''}`}
+                      onClick={() => {
+                        setViewMode(mode);
+                        setMoreOpen(false);
+                      }}
+                    >
+                      <ModeIcon className="icon" size={16} /> {VIEW_MODE_LABELS[mode]}
+                    </button>
+                  );
+                })}
             </div>
           </>
         )}
@@ -759,7 +763,7 @@ export function UniboxPanel() {
           className="instantly-unibox-block-header"
           onClick={() => setThreadListCollapsed((v) => !v)}
         >
-          <span className={`instantly-expand-caret ${!threadListCollapsed ? 'instantly-expand-caret-open' : ''}`}>▸</span>
+          <span className={`instantly-expand-caret ${!threadListCollapsed ? 'instantly-expand-caret-open' : ''}`}><ChevronRight className="icon" size={14} /></span>
           <span className="instantly-unibox-block-header-label">Pokalbiai</span>
         </button>
         {!threadListCollapsed && (
@@ -860,7 +864,7 @@ export function UniboxPanel() {
                   ))}
                 </select>
                 <button type="button" className="instantly-detail-close" onClick={() => setOpenThreadId(null)}>
-                  ✕
+                  <X className="icon" size={16} />
                 </button>
               </div>
               <p className="instantly-thread-subject-heading">{latest.subject || '(be temos)'}</p>
@@ -887,10 +891,10 @@ export function UniboxPanel() {
               ) : (
                 <div className="instantly-compose-trigger-row">
                   <button type="button" onClick={() => setComposeMode('forward')}>
-                    ↪ Persiųsti
+                    <CornerUpRight className="icon" size={16} /> Persiųsti
                   </button>
                   <button type="button" className="primary" onClick={() => setComposeMode('reply')}>
-                    ↩ Atsakyti
+                    <CornerUpLeft className="icon" size={16} /> Atsakyti
                   </button>
                 </div>
               )}

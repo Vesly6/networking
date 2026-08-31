@@ -5,6 +5,7 @@ import { PeopleFilterForm } from './PeopleFilterForm';
 import { CompanyFilterForm } from './CompanyFilterForm';
 import { PeopleResultsTable } from './PeopleResultsTable';
 import { CompanyResultsTable } from './CompanyResultsTable';
+import { ChevronUp, ChevronDown, ArrowLeft, ArrowRight } from 'lucide-react';
 
 /** Apollo.io lookup — People Search (free) and Company Search (1 credit
  * per page), laid out the way Apollo's own product is: a filter sidebar
@@ -99,7 +100,7 @@ export function SearchView() {
             className="search-filters-toggle"
             onClick={() => setFiltersExpanded((v) => !v)}
           >
-            {filtersExpanded ? 'Slėpti filtrus ▲' : 'Filtrai ▼'}
+            {filtersExpanded ? <>Slėpti filtrus <ChevronUp className="icon" size={14} /></> : <>Filtrai <ChevronDown className="icon" size={14} /></>}
           </button>
         </div>
         {filtersExpanded && (mode === 'people' ? (
@@ -132,14 +133,14 @@ export function SearchView() {
                 disabled={page <= 1 || loading}
                 onClick={() => void (mode === 'people' ? runPeopleSearch(page - 1) : runCompanySearch(page - 1))}
               >
-                ← Atgal
+                <ArrowLeft className="icon" size={14} /> Atgal
               </button>
               <button
                 type="button"
                 disabled={page >= totalPages || loading}
                 onClick={() => void (mode === 'people' ? runPeopleSearch(page + 1) : runCompanySearch(page + 1))}
               >
-                Pirmyn →
+                Pirmyn <ArrowRight className="icon" size={14} />
               </button>
             </div>
           </div>

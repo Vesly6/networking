@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { generateEmail, type EmailLang, type EmailMode, type EmailModel } from '../../utils/emailApi';
 import { useToastStore } from '../../store/useToastStore';
+import { Mic, Circle, Check, Copy } from 'lucide-react';
 
 const MODE_META: Record<EmailMode, { label: string; placeholder: string }> = {
   new: {
@@ -26,9 +27,9 @@ const MODE_META: Record<EmailMode, { label: string; placeholder: string }> = {
 // API only ever listens for one language per session, so "recognize
 // Russian or Lithuanian" has to mean "let the operator pick which one",
 // not both at once.
-const MIC_LANG_OPTIONS: Array<{ value: string; label: string }> = [
-  { value: 'ru-RU', label: '🇷🇺 Rusų' },
-  { value: 'lt-LT', label: '🇱🇹 Lietuvių' },
+const MIC_LANG_OPTIONS: Array<{ value: string; code: string; label: string }> = [
+  { value: 'ru-RU', code: 'RU', label: 'Rusų' },
+  { value: 'lt-LT', code: 'LT', label: 'Lietuvių' },
 ];
 
 const MODEL_OPTIONS: Array<{ value: EmailModel; label: string }> = [
@@ -225,10 +226,10 @@ export function EmailGeneratorView() {
           <span className="label">Laiško kalba</span>
           <div className="lang-buttons">
             <button type="button" className={lang === 'lt' ? 'active' : ''} onClick={() => setLang('lt')}>
-              🇱🇹 Lietuvių
+              <span className="lang-code-badge">LT</span> Lietuvių
             </button>
             <button type="button" className={lang === 'en' ? 'active' : ''} onClick={() => setLang('en')}>
-              🇬🇧 English
+              <span className="lang-code-badge">EN</span> English
             </button>
           </div>
           <select className="email-model-select" value={model} onChange={(e) => setModel(e.target.value as EmailModel)}>
@@ -281,7 +282,7 @@ export function EmailGeneratorView() {
                       title="Kuria kalba diktuosite mikrofonui"
                       onClick={() => setMicLang(opt.value)}
                     >
-                      {opt.label}
+                      <span className="lang-code-badge">{opt.code}</span> {opt.label}
                     </button>
                   ))}
                 </div>
@@ -293,7 +294,7 @@ export function EmailGeneratorView() {
                 disabled={!speechSupported}
                 onClick={toggleRecording}
               >
-                🎤
+                <Mic className="icon" size={16} />
               </button>
             </div>
           </div>
@@ -304,7 +305,11 @@ export function EmailGeneratorView() {
             value={instructions}
             onChange={(e) => setInstructions(e.target.value)}
           />
-          {recording && <div className="recording-indicator">● Vyksta įrašymas...</div>}
+          {recording && (
+            <div className="recording-indicator">
+              <Circle className="icon" size={10} fill="currentColor" /> Vyksta įrašymas...
+            </div>
+          )}
         </div>
 
         {error && <div className="search-result-detail-error">{error}</div>}
@@ -318,7 +323,7 @@ export function EmailGeneratorView() {
             <div className="field-header">
               <label>Sugeneruotas laiškas</label>
               <button type="button" className="text-btn" onClick={() => void handleCopy()}>
-                {copied ? '✅ Nukopijuota' : '📋 Kopijuoti'}
+                {copied ? <><Check className="icon" size={14} /> Nukopijuota</> : <><Copy className="icon" size={14} /> Kopijuoti</>}
               </button>
             </div>
             <textarea ref={outputRef} rows={14} value={output} onChange={(e) => setOutput(e.target.value)} />

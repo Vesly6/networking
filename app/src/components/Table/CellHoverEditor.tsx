@@ -34,6 +34,7 @@ import { getAllTranscriptions, saveSmsLogEntry, getAllSmsLog } from '../../db/db
 import { ApolloContactSearchModal } from './ApolloContactSearchModal';
 import { SocialLookupModal } from './SocialLookupModal';
 import { Popover } from '../Popover';
+import { Copy, Check, Square, Hourglass, Mic, Bot, ChevronDown, Search, Save, X, Mail, Phone, PenLine } from 'lucide-react';
 
 interface CellHoverEditorProps {
   anchor: HTMLElement;
@@ -804,7 +805,7 @@ export function CellHoverEditor({
             title={`Kopijuoti ${SOCIAL_ICON_LABEL[platform]} nuorodą`}
             onClick={() => void copyText(field.value, `${SOCIAL_ICON_LABEL[platform]} nuoroda`)}
           >
-            📋
+            <Copy className="icon" size={14} />
           </button>
         </span>
       );
@@ -955,7 +956,7 @@ export function CellHoverEditor({
                   title="Išsaugoti"
                   onClick={() => commitNewEntry()}
                 >
-                  ✓
+                  <Check className="icon" size={14} />
                 </button>
                 <button
                   type="button"
@@ -975,7 +976,13 @@ export function CellHoverEditor({
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => void toggleVoiceNote()}
                 >
-                  {voiceNoteState === 'recording' ? '⏹' : voiceNoteState === 'transcribing' ? '⏳' : '🎤'}
+                  {voiceNoteState === 'recording' ? (
+                    <Square className="icon" size={14} fill="currentColor" />
+                  ) : voiceNoteState === 'transcribing' ? (
+                    <Hourglass className="icon" size={14} />
+                  ) : (
+                    <Mic className="icon" size={14} />
+                  )}
                 </button>
               </div>
               <div className="cell-hover-tags">
@@ -985,7 +992,7 @@ export function CellHoverEditor({
                   disabled={loadingLastSummary}
                   onClick={() => void handleLastSummary()}
                 >
-                  {loadingLastSummary ? 'Ieškoma…' : '🤖 Paskutinė santrauka'}
+                  {loadingLastSummary ? 'Ieškoma…' : <><Bot className="icon" size={14} /> Paskutinė santrauka</>}
                 </button>
                 {NOTE_TAGS.map((tag) => (
                   <button
@@ -1220,7 +1227,7 @@ export function CellHoverEditor({
                               void removeNoteEntry(entry.id);
                             }}
                           >
-                            ×
+                            <X className="icon" size={14} />
                           </button>
                         )}
                       </div>
@@ -1240,7 +1247,7 @@ export function CellHoverEditor({
                 >
                   <span className="filter-accordion-title">+ Pridėti kontaktą rankiniu būdu</span>
                   <span className={`filter-accordion-chevron ${manualContactFormOpen ? 'filter-accordion-chevron-open' : ''}`}>
-                    ▾
+                    <ChevronDown className="icon" size={14} />
                   </span>
                 </button>
                 <button
@@ -1254,7 +1261,7 @@ export function CellHoverEditor({
                       : 'Šiai eilutei nenustatytas įmonės pavadinimas'
                   }
                 >
-                  🔍 Paieška
+                  <Search className="icon" size={16} /> Paieška
                 </button>
               </div>
               {manualContactFormOpen && (
@@ -1414,10 +1421,10 @@ export function CellHoverEditor({
                             />
                             <div className="cell-hover-contact-edit-actions">
                               <button type="submit" className="primary">
-                                💾 Išsaugoti
+                                <Save className="icon" size={16} /> Išsaugoti
                               </button>
                               <button type="button" onClick={cancelContactEdit}>
-                                ✕ Atšaukti
+                                <X className="icon" size={16} /> Atšaukti
                               </button>
                             </div>
                           </form>
@@ -1448,7 +1455,7 @@ export function CellHoverEditor({
                                           title="Kopijuoti vardą"
                                           onClick={() => void copyText(field.value, 'Vardas')}
                                         >
-                                          📋
+                                          <Copy className="icon" size={14} />
                                         </button>
                                       )}
                                       {field.kind === 'phone' && (
@@ -1459,7 +1466,7 @@ export function CellHoverEditor({
                                             title="Kopijuoti telefono numerį"
                                             onClick={() => void copyText(field.value, 'Telefono numeris')}
                                           >
-                                            📋
+                                            <Copy className="icon" size={14} />
                                           </button>
                                           <button
                                             type="button"
@@ -1471,7 +1478,8 @@ export function CellHoverEditor({
                                             }
                                             onClick={() => void openSmsCompose(c.id, field.value)}
                                           >
-                                            ✉️{phoneSmsCount > 0 && <span className="cell-hover-contact-sms-badge">{phoneSmsCount}</span>}
+                                            <Mail className="icon" size={14} />
+                                            {phoneSmsCount > 0 && <span className="cell-hover-contact-sms-badge">{phoneSmsCount}</span>}
                                           </button>
                                         </>
                                       )}
@@ -1482,7 +1490,7 @@ export function CellHoverEditor({
                                           title="Kopijuoti el. paštą"
                                           onClick={() => void copyText(field.value, 'El. paštas')}
                                         >
-                                          📋
+                                          <Copy className="icon" size={14} />
                                         </button>
                                       )}
                                     </div>
@@ -1503,7 +1511,7 @@ export function CellHoverEditor({
                                     title={`Skambinti ${phone}`}
                                     onClick={() => void callContact(c.text)}
                                   >
-                                    📞
+                                    <Phone className="icon" size={14} />
                                   </button>
                                 )}
                                 <button
@@ -1512,7 +1520,7 @@ export function CellHoverEditor({
                                   title="Ieškoti Instagram / Facebook (AI)"
                                   onClick={() => setSocialLookupFor(c.id)}
                                 >
-                                  🔍
+                                  <Search className="icon" size={14} />
                                 </button>
                                 {canEditContacts && (
                                   <button
@@ -1521,7 +1529,7 @@ export function CellHoverEditor({
                                     title="Redaguoti kontaktą"
                                     onClick={() => startEditingContact(c)}
                                   >
-                                    ✏️
+                                    <PenLine className="icon" size={14} />
                                   </button>
                                 )}
                                 {canDeleteContacts && (
@@ -1533,7 +1541,7 @@ export function CellHoverEditor({
                                       void removeContact(c.id);
                                     }}
                                   >
-                                    ×
+                                    <X className="icon" size={14} />
                                   </button>
                                 )}
                               </div>
@@ -1557,10 +1565,10 @@ export function CellHoverEditor({
                                 />
                                 <div className="cell-hover-sms-compose-actions">
                                   <button type="submit" className="primary" disabled={sendingSms || !smsDraft.trim()}>
-                                    {sendingSms ? 'Siunčiama…' : '✉️ Siųsti'}
+                                    {sendingSms ? 'Siunčiama…' : <><Mail className="icon" size={16} /> Siųsti</>}
                                   </button>
                                   <button type="button" onClick={() => setSmsComposeFor(null)}>
-                                    ✕ Atšaukti
+                                    <X className="icon" size={16} /> Atšaukti
                                   </button>
                                 </div>
                                 {smsHistory.length > 0 && (

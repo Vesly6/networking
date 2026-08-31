@@ -146,88 +146,83 @@ export function updateLeadStatus(id: string, status: LinkedInLeadStatus): Promis
   });
 }
 
-export type LinkedInStepType = 'connect' | 'message';
+// The campaign builder graph — replaces the old flat sequence_steps list.
+// "Coming soon" types are real, valid values (the frontend palette just
+// renders them disabled) so a graph containing one doesn't get silently
+// dropped by anything that round-trips it — see server/src/linkedin/db.ts's
+// own SequenceNodeType for the authoritative list/reasoning.
+export type LinkedInSequenceNodeType =
+  | 'connect'
+  | 'message'
+  | 'withdraw'
+  | 'view_profile'
+  | 'follow'
+  | 'like_post'
+  | 'wait'
+  | 'end'
+  | 'condition_connected'
+  | 'condition_replied'
+  | 'condition_followed_back'
+  | 'condition_profile_visited'
+  | 'condition_post_liked'
+  | 'condition_custom'
+  | 'inmail'
+  | 'endorse'
+  | 'find_email';
 
-export interface LinkedInSequenceStep {
+export interface LinkedInSequenceNode {
   id: string;
   campaignId: string;
-  stepOrder: number;
-  type: LinkedInStepType;
-  delayDays: number;
+  type: LinkedInSequenceNodeType;
   messageTemplate: string | null;
+  waitDays: number | null;
+  posX: number;
+  posY: number;
 }
 
-export function fetchSteps(campaignId: string): Promise<{ steps: LinkedInSequenceStep[] }> {
-  return localApiRequest(`/api/linkedin/campaigns/${encodeURIComponent(campaignId)}/steps`);
-}
+export type LinkedInEdgeBranch = 'default' | 'yes' | 'no';
 
-export function addStep(
-  campaignId: string,
-  type: LinkedInStepType,
-  delayDays: number,
-  messageTemplate?: string,
-): Promise<LinkedInSequenceStep> {
-  return localApiRequest(`/api/linkedin/campaigns/${encodeURIComponent(campaignId)}/steps`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ type, delayDays, messageTemplate }),
-  });
-}
-
-export function deleteStep(id: string): Promise<{ ok: true }> {
-  return localApiRequest(`/api/linkedin/steps/${encodeURIComponent(id)}`, { method: 'DELETE' });
-}
-
-export interface DueAction {
-  leadId: string;
-  leadUrl: string;
-  leadName: string | null;
-  leadTitle: string | null;
-  leadCompany: string | null;
+export interface LinkedInSequenceEdge {
+  id: string;
   campaignId: string;
-  campaignName: string;
-  stepId: string;
-  stepType: LinkedInStepType;
+  fromNodeId: string | null;
+  toNodeId: string;
+  branch: LinkedInEdgeBranch;
+}
+
+export interface LinkedInCampaignGraph {
+  nodes: LinkedInSequenceNode[];
+  edges: LinkedInSequenceEdge[];
+}
+
+export function fetchGraph(campaignId: string): Promise<LinkedInCampaignGraph> {
+  return localApiRequest(`/api/linkedin/campaigns/${encodeURIComponent(campaignId)}/graph`);
+}
+
+export interface GraphNodeInput {
+  id: string;
+  type: LinkedInSequenceNodeType;
   messageTemplate: string | null;
+  waitDays: number | null;
+  posX: number;
+  posY: number;
 }
 
-/** Only ever non-empty in practice while "manual review" is on (the
- * default) — with it off, the Scheduler's own background tick executes
- * due actions itself before this list would ever show them. */
-export function fetchPendingActions(): Promise<{ due: DueAction[] }> {
-  return localApiRequest('/api/linkedin/scheduler/pending');
+export interface GraphEdgeInput {
+  fromNodeId: string | null;
+  toNodeId: string;
+  branch: LinkedInEdgeBranch;
 }
 
-/** Executes exactly one due action — a real, unrecoverable side effect
- * against an actual LinkedIn profile the instant it succeeds. The server
- * re-verifies the action is still due before running it (see
- * server/src/linkedin/scheduler.ts's approveAction), so this can't fire
- * on stale client state. `overrideMessage` (optional) is the Pending
- * Approval panel's own edited/AI-personalized text, if the user used
- * personalizeAction() below and reviewed/adjusted the result — omitted,
- * this sends the plain placeholder-substituted template unchanged. */
-export function approvePendingAction(
-  leadId: string,
-  stepId: string,
-  overrideMessage?: string,
-): Promise<{ ok: boolean; error?: string }> {
-  return localApiRequest('/api/linkedin/scheduler/approve', {
-    method: 'POST',
+/** Bulk replace, one request — an editor session naturally touches many
+ * nodes/edges at once (add a few, rewire a few, drag several into new
+ * positions), same reasoning as this app's other bulk-save endpoints
+ * (PUT /api/rows). */
+export function saveGraph(campaignId: string, nodes: GraphNodeInput[], edges: GraphEdgeInput[]): Promise<{ ok: true }> {
+  return localApiRequest(`/api/linkedin/campaigns/${encodeURIComponent(campaignId)}/graph`, {
+    method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ leadId, stepId, overrideMessage }),
-  });
-}
-
-/** Drafts an AI-personalized version of one due action's message/note —
- * never executes or sends anything itself. `baseText` is the same plain
- * placeholder-substituted text approvePendingAction() would send with no
- * override, included so the UI can show "before" alongside the AI
- * suggestion, or fall back to it if the AI version is discarded. */
-export function personalizeAction(leadId: string, stepId: string): Promise<{ baseText: string; personalizedText: string }> {
-  return localApiRequest('/api/linkedin/personalize', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ leadId, stepId }),
+    body: JSON.stringify({ nodes, edges }),
   });
 }
 
@@ -257,13 +252,12 @@ export function fetchAnalytics(): Promise<LinkedInAnalyticsSummary> {
 
 export interface LinkedInStepBreakdown {
   stepId: string;
-  stepOrder: number;
-  type: LinkedInStepType;
+  type: LinkedInSequenceNodeType;
   waiting: number;
-  /** Correctly positioned for this step but not yet eligible — currently
-   * only possible for a 'message' step whose lead hasn't accepted the
-   * connection yet. See server/src/linkedin/analytics.ts's own doc
-   * comment for why this needed splitting out of `waiting`. */
+  /** For a 'message' node only: leads positioned right before it but not
+   * yet eligible (haven't accepted the connection). See
+   * server/src/linkedin/analytics.ts's own doc comment for why this needed
+   * splitting out of `waiting`. */
   blocked: number;
   completed: number;
   failing: number;

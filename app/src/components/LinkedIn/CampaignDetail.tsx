@@ -2,9 +2,11 @@ import { useEffect, useMemo, useState } from 'react';
 import { useLinkedInCampaignsStore } from '../../store/useLinkedInCampaignsStore';
 import { confirmDialog } from '../../store/useConfirmStore';
 import { useToastStore } from '../../store/useToastStore';
-import { exportLeadsToCsv, type LinkedInCampaign, type LinkedInLead, type LinkedInStepType } from '../../utils/linkedinCampaignsApi';
+import { exportLeadsToCsv, type LinkedInCampaign, type LinkedInLead } from '../../utils/linkedinCampaignsApi';
 import { LeadCsvImport } from './LeadCsvImport';
 import { LeadSearchImport } from './LeadSearchImport';
+import { CampaignGraphEditor } from './CampaignGraphEditor';
+import { ArrowLeft, Trash2, Upload, Search, Download, Send, CheckCircle2, Mail, ExternalLink } from 'lucide-react';
 
 // UTC-anchored day key, same convention as utils/callStats.ts/analytics.ts's
 // own dayKeyUtc — deliberate, not incidental: local-time bucketing here
@@ -46,11 +48,6 @@ const LEAD_STATUS_LABEL: Record<string, string> = {
   withdrawn: 'Atšaukta',
 };
 
-const STEP_TYPE_LABEL: Record<string, string> = {
-  connect: '🤝 Connection request',
-  message: '✉️ Žinutė',
-};
-
 interface CampaignDetailProps {
   campaign: LinkedInCampaign;
   onBack: () => void;
@@ -66,20 +63,13 @@ export function CampaignDetail({ campaign, onBack }: CampaignDetailProps) {
   const importLeads = useLinkedInCampaignsStore((s) => s.importLeads);
   const importing = useLinkedInCampaignsStore((s) => s.importing);
   const removeLead = useLinkedInCampaignsStore((s) => s.removeLead);
+  const skipLead = useLinkedInCampaignsStore((s) => s.skipLead);
   const updateCampaignStatus = useLinkedInCampaignsStore((s) => s.updateCampaignStatus);
   const deleteCampaign = useLinkedInCampaignsStore((s) => s.deleteCampaign);
-  const steps = useLinkedInCampaignsStore((s) => s.steps);
-  const refreshSteps = useLinkedInCampaignsStore((s) => s.refreshSteps);
-  const addingStep = useLinkedInCampaignsStore((s) => s.addingStep);
-  const addStep = useLinkedInCampaignsStore((s) => s.addStep);
-  const removeStep = useLinkedInCampaignsStore((s) => s.removeStep);
   const showToast = useToastStore((s) => s.show);
 
   const [importOpen, setImportOpen] = useState(false);
   const [searchImportOpen, setSearchImportOpen] = useState(false);
-  const [newStepType, setNewStepType] = useState<LinkedInStepType>('connect');
-  const [newStepDelay, setNewStepDelay] = useState('0');
-  const [newStepMessage, setNewStepMessage] = useState('');
   const [leadPanel, setLeadPanel] = useState<LeadPanel>('sent');
   const [dateFilter, setDateFilter] = useState<string>('all');
 
@@ -122,23 +112,7 @@ export function CampaignDetail({ campaign, onBack }: CampaignDetailProps) {
 
   useEffect(() => {
     void refreshLeads(campaign.id);
-    void refreshSteps(campaign.id);
-  }, [campaign.id, refreshLeads, refreshSteps]);
-
-  const handleAddStep = async () => {
-    if (newStepType === 'message' && !newStepMessage.trim()) {
-      showToast('Žinutės žingsniui reikia teksto');
-      return;
-    }
-    await addStep(campaign.id, newStepType, Number(newStepDelay) || 0, newStepMessage.trim() || undefined);
-    setNewStepMessage('');
-    setNewStepDelay('0');
-  };
-
-  const handleRemoveStep = async (id: string) => {
-    if (!(await confirmDialog({ message: 'Pašalinti šį sekos žingsnį?', danger: true }))) return;
-    await removeStep(id);
-  };
+  }, [campaign.id, refreshLeads]);
 
   const handleImportConfirm = async (newLeads: Parameters<typeof importLeads>[1]) => {
     setImportOpen(false);
@@ -150,6 +124,14 @@ export function CampaignDetail({ campaign, onBack }: CampaignDetailProps) {
   const handleRemoveLead = async (id: string) => {
     if (!(await confirmDialog({ message: 'Pašalinti šį lyderį iš kampanijos?', danger: true }))) return;
     await removeLead(id);
+  };
+
+  // No LinkedIn side effect — just permanently stops this lead's sequence
+  // (manual review was removed entirely, so this is the one remaining
+  // manual override: "don't send this person anything further").
+  const handleSkipLead = async (id: string) => {
+    if (!(await confirmDialog({ message: 'Praleisti šį lyderį? Jam daugiau nebus siunčiami jokie automatiniai veiksmai.' }))) return;
+    await skipLead(id);
   };
 
   const handleDeleteCampaign = async () => {
@@ -168,7 +150,7 @@ export function CampaignDetail({ campaign, onBack }: CampaignDetailProps) {
     <div className="linkedin-campaign-detail">
       <div className="linkedin-campaign-detail-header">
         <button type="button" onClick={onBack}>
-          ← Kampanijos
+          <ArrowLeft className="icon" size={16} /> Kampanijos
         </button>
         <h3>{campaign.name}</h3>
         <select
@@ -182,70 +164,30 @@ export function CampaignDetail({ campaign, onBack }: CampaignDetailProps) {
           ))}
         </select>
         <button type="button" className="linkedin-delete-campaign" onClick={() => void handleDeleteCampaign()}>
-          🗑 Ištrinti kampaniją
+          <Trash2 className="icon" size={16} /> Ištrinti kampaniją
         </button>
       </div>
 
       <div className="linkedin-sequence">
         <h4>Seka</h4>
         <p className="linkedin-hint">
-          Kiekvienas žingsnis vyksta praėjus nurodytam dienų skaičiui nuo ankstesnio žingsnio (0 = iš karto, kai lyderis
-          pasiekia šį žingsnį). Žinutės žingsnis suveikia tik jau prisijungusiems lyderiams.
+          Sukurkite mazgus iš kairės ir sujunkite juos vilkdami nuo taško apačioje į tašką viršuje. Sąlygos mazgai
+          turi dvi šakas — "Taip" ir "Ne"; "Ne" šaka suveikia tik praėjus nurodytam dienų skaičiui, jei atsakymas
+          dar neaiškus. Žingsniai keičiami/išsaugomi automatiškai.
         </p>
-        {steps.length > 0 && (
-          <ol className="linkedin-sequence-list">
-            {steps.map((step) => (
-              <li key={step.id} className="linkedin-sequence-step">
-                <span className="linkedin-sequence-step-type">{STEP_TYPE_LABEL[step.type] ?? step.type}</span>
-                <span className="linkedin-hint">
-                  {step.delayDays > 0 ? `po ${step.delayDays} d.` : 'iš karto'}
-                </span>
-                {step.messageTemplate && <span className="linkedin-sequence-step-message">"{step.messageTemplate}"</span>}
-                <button type="button" className="linkedin-lead-remove" onClick={() => void handleRemoveStep(step.id)}>
-                  ×
-                </button>
-              </li>
-            ))}
-          </ol>
-        )}
-        <div className="linkedin-add-step">
-          <select value={newStepType} onChange={(e) => setNewStepType(e.target.value as LinkedInStepType)}>
-            <option value="connect">🤝 Connection request</option>
-            <option value="message">✉️ Žinutė</option>
-          </select>
-          <label>
-            Vėlinimas (d.)
-            <input
-              type="number"
-              min={0}
-              value={newStepDelay}
-              onChange={(e) => setNewStepDelay(e.target.value)}
-            />
-          </label>
-          {newStepType === 'message' && (
-            <input
-              type="text"
-              placeholder="Žinutės tekstas…"
-              value={newStepMessage}
-              onChange={(e) => setNewStepMessage(e.target.value)}
-            />
-          )}
-          <button type="button" disabled={addingStep} onClick={() => void handleAddStep()}>
-            {addingStep ? 'Pridedama…' : '+ Pridėti žingsnį'}
-          </button>
-        </div>
+        <CampaignGraphEditor campaignId={campaign.id} />
       </div>
 
       <div className="linkedin-leads-toolbar">
         <span className="linkedin-hint">{leads.length} lyderių</span>
         <button type="button" onClick={() => setImportOpen(true)} disabled={importing}>
-          {importing ? 'Importuojama…' : '📥 Importuoti iš CSV'}
+          {importing ? 'Importuojama…' : <><Upload className="icon" size={16} /> Importuoti iš CSV</>}
         </button>
         <button type="button" onClick={() => setSearchImportOpen(true)} disabled={importing}>
-          🔍 Ieškoti LinkedIn
+          <Search className="icon" size={16} /> Ieškoti LinkedIn
         </button>
         <button type="button" disabled={leads.length === 0} onClick={() => exportLeadsToCsv(campaign.name, leads)}>
-          ⬇ Eksportuoti CSV
+          <Download className="icon" size={16} /> Eksportuoti CSV
         </button>
       </div>
 
@@ -257,13 +199,13 @@ export function CampaignDetail({ campaign, onBack }: CampaignDetailProps) {
         <>
           <nav className="linkedin-lead-panel-nav">
             <button type="button" className={leadPanel === 'sent' ? 'active' : ''} onClick={() => handlePanelChange('sent')}>
-              📤 Išsiųsti ({leads.filter((l) => l.connectSentAt !== null).length})
+              <Send className="icon" size={16} /> Išsiųsti ({leads.filter((l) => l.connectSentAt !== null).length})
             </button>
             <button type="button" className={leadPanel === 'connected' ? 'active' : ''} onClick={() => handlePanelChange('connected')}>
-              ✅ Prisijungę ({leads.filter((l) => l.connectedAt !== null).length})
+              <CheckCircle2 className="icon" size={16} /> Prisijungę ({leads.filter((l) => l.connectedAt !== null).length})
             </button>
             <button type="button" className={leadPanel === 'messaged' ? 'active' : ''} onClick={() => handlePanelChange('messaged')}>
-              ✉️ Žinutės ({leads.filter((l) => l.messageSentAt !== null).length})
+              <Mail className="icon" size={16} /> Žinutės ({leads.filter((l) => l.messageSentAt !== null).length})
             </button>
             <button type="button" className={leadPanel === 'all' ? 'active' : ''} onClick={() => handlePanelChange('all')}>
               Visi lyderiai ({leads.length})
@@ -314,11 +256,16 @@ export function CampaignDetail({ campaign, onBack }: CampaignDetailProps) {
                     <td>{lead.company || '—'}</td>
                     <td>
                       <a href={lead.linkedinUrl} target="_blank" rel="noopener noreferrer">
-                        profilis ↗
+                        profilis <ExternalLink className="icon" size={13} />
                       </a>
                     </td>
                     <td>{LEAD_STATUS_LABEL[lead.status] ?? lead.status}</td>
-                    <td>
+                    <td className="linkedin-lead-actions">
+                      {!['skipped', 'withdrawn', 'replied'].includes(lead.status) && (
+                        <button type="button" className="linkedin-lead-skip" onClick={() => void handleSkipLead(lead.id)}>
+                          Praleisti
+                        </button>
+                      )}
                       <button type="button" className="linkedin-lead-remove" onClick={() => void handleRemoveLead(lead.id)}>
                         ×
                       </button>
@@ -348,7 +295,7 @@ export function CampaignDetail({ campaign, onBack }: CampaignDetailProps) {
                         <td>{lead.company || '—'}</td>
                         <td>
                           <a href={lead.linkedinUrl} target="_blank" rel="noopener noreferrer">
-                            profilis ↗
+                            profilis <ExternalLink className="icon" size={13} />
                           </a>
                         </td>
                         <td>{ts !== null ? formatDateTime(ts) : '—'}</td>

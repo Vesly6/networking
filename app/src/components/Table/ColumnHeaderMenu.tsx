@@ -3,6 +3,7 @@ import { useTableStore } from '../../store/useTableStore';
 import { useAuthStore } from '../../store/useAuthStore';
 import { confirmDialog } from '../../store/useConfirmStore';
 import { ContextMenu } from '../ContextMenu';
+import { Hash } from 'lucide-react';
 
 interface ColumnHeaderMenuProps {
   x: number;
@@ -116,7 +117,7 @@ export function ColumnHeaderMenu({ x, y, columns, targetIds, onSort, onFilterRan
             Rikiuoti Z → A
           </button>
           <button type="button" className="context-menu-item" onClick={() => run(onFilterRange)}>
-            🔢 Filtruoti (nuo–iki)
+            <Hash className="icon" size={16} /> Filtruoti (nuo–iki)
           </button>
         </>
       )}

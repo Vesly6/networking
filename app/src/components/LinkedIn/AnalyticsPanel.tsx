@@ -8,13 +8,9 @@ import {
   type LinkedInStepBreakdown,
 } from '../../utils/linkedinCampaignsApi';
 import { LinkedInActivityChart } from './LinkedInActivityChart';
+import { nodeTypeIcon, nodeTypeLabel } from '../../utils/linkedinNodeTypes';
 
 const pct = (n: number) => `${Math.round(n * 100)}%`;
-
-const STEP_TYPE_LABEL: Record<string, string> = {
-  connect: '🤝 Connection request',
-  message: '✉️ Žinutė',
-};
 
 /** One campaign's per-step funnel, fetched on demand only when its row is
  * expanded — not prefetched for every campaign up front, since most
@@ -42,10 +38,9 @@ function CampaignStepBreakdown({ campaignId }: { campaignId: string }) {
     <table className="linkedin-step-breakdown-table">
       <thead>
         <tr>
-          <th>#</th>
-          <th>Žingsnis</th>
+          <th>Mazgas</th>
           <th>Laukia</th>
-          <th title="Pozicija sekoje pasiekta, bet dar neprisijungę — žinutė nebus siunčiama, kol nepriims kvietimo">
+          <th title="Pasiektas ankstesnis mazgas, bet dar neprisijungę — žinutė nebus siunčiama, kol nepriims kvietimo">
             Blokuota
           </th>
           <th>Atlikta</th>
@@ -53,16 +48,18 @@ function CampaignStepBreakdown({ campaignId }: { campaignId: string }) {
         </tr>
       </thead>
       <tbody>
-        {steps.map((s) => (
+        {steps.map((s) => {
+          const StepIcon = nodeTypeIcon(s.type);
+          return (
           <tr key={s.stepId}>
-            <td>{s.stepOrder + 1}</td>
-            <td>{STEP_TYPE_LABEL[s.type] ?? s.type}</td>
+            <td>{StepIcon && <StepIcon className="icon" size={16} />} {nodeTypeLabel(s.type)}</td>
             <td>{s.waiting}</td>
             <td>{s.blocked}</td>
             <td>{s.completed}</td>
             <td>{s.failing > 0 ? <span className="linkedin-step-failing">{s.failing}</span> : s.failing}</td>
           </tr>
-        ))}
+          );
+        })}
       </tbody>
     </table>
   );

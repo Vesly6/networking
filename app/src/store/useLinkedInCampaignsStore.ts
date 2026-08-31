@@ -7,12 +7,8 @@ import {
   fetchLeads,
   addLeads as apiAddLeads,
   deleteLead as apiDeleteLead,
-  fetchSteps,
-  addStep as apiAddStep,
-  deleteStep as apiDeleteStep,
-  fetchPendingActions,
-  approvePendingAction,
-  personalizeAction as apiPersonalizeAction,
+  fetchGraph,
+  saveGraph as apiSaveGraph,
   updateLeadStatus as apiUpdateLeadStatus,
   fetchStaleInvites,
   withdrawStaleInvite,
@@ -20,17 +16,18 @@ import {
   type LinkedInCampaignStatus,
   type LinkedInLead,
   type NewLead,
-  type LinkedInSequenceStep,
-  type LinkedInStepType,
-  type DueAction,
+  type LinkedInSequenceNode,
+  type LinkedInSequenceEdge,
+  type GraphNodeInput,
+  type GraphEdgeInput,
   type LinkedInStaleInvite,
 } from '../utils/linkedinCampaignsApi';
 
 // Separate from useLinkedInStore (status/safety/actions-log) — this store
-// owns campaign+lead+sequence-step CRUD state plus the Pending Approval
-// queue, a distinct enough shape (list + a currently-open campaign's own
-// leads/steps) to warrant its own store, same split this app already
-// applies elsewhere (e.g. useTableStore vs useWorkspaceStore).
+// owns campaign+lead+sequence-step CRUD state, a distinct enough shape
+// (list + a currently-open campaign's own leads/steps) to warrant its own
+// store, same split this app already applies elsewhere (e.g. useTableStore
+// vs useWorkspaceStore).
 interface LinkedInCampaignsState {
   campaigns: LinkedInCampaign[];
   campaignsReady: boolean;
@@ -50,55 +47,34 @@ interface LinkedInCampaignsState {
   importLeads: (campaignId: string, leads: NewLead[]) => Promise<number | null>;
   removeLead: (id: string) => Promise<void>;
 
-  steps: LinkedInSequenceStep[];
-  stepsReady: boolean;
-  refreshSteps: (campaignId: string) => Promise<void>;
-  addingStep: boolean;
-  addStep: (campaignId: string, type: LinkedInStepType, delayDays: number, messageTemplate?: string) => Promise<void>;
-  removeStep: (id: string) => Promise<void>;
+  // The visual campaign-builder graph — replaces the old flat steps list.
+  graphNodes: LinkedInSequenceNode[];
+  graphEdges: LinkedInSequenceEdge[];
+  graphReady: boolean;
+  refreshGraph: (campaignId: string) => Promise<void>;
+  savingGraph: boolean;
+  /** Bulk replace — CampaignGraphEditor.tsx debounce-saves the whole graph
+   * on any change (add/remove/rewire/reposition) rather than per-node/
+   * per-edge calls, same bulk-endpoint reasoning as the server route
+   * itself. Updates local state optimistically so the editor doesn't
+   * visibly flicker while the request is in flight. */
+  saveGraph: (campaignId: string, nodes: GraphNodeInput[], edges: GraphEdgeInput[]) => Promise<void>;
 
-  pendingActions: DueAction[];
-  pendingReady: boolean;
-  refreshPending: () => Promise<void>;
-  // A Set, not a single string — a real, reproduced bug with a single
-  // "current key" here: approving row A, then (before A's request
-  // resolves) approving row B, overwrote the *one* key to B's, which made
-  // A's own button re-render as enabled even though A's request was still
-  // in flight. Since the server re-verifies "is this still due" but that
-  // check can itself race with a slow-to-execute first request (real
-  // browser automation takes seconds, well before the first call's own
-  // status update lands), a confused second click on A while it looked
-  // re-enabled could reach the server as a genuine second approval before
-  // the first one finished — a real double-send risk for an irreversible
-  // action. Tracking every in-flight key independently means each row's
-  // disabled state only ever reflects its *own* request.
-  approvingKeys: Set<string>;
-  /** Real, unrecoverable side effect the instant it succeeds — the caller
-   * (a Pending Approval list item) must have already shown a confirm
-   * dialog. `overrideMessage` (optional) is the panel's own edited/AI-
-   * personalized text, if personalizeAction() below was used first.
-   * Returns whether it actually went through. */
-  approveAction: (leadId: string, stepId: string, overrideMessage?: string) => Promise<boolean>;
   /** Local-data-only (marks the lead 'skipped', no LinkedIn side effect)
-   * — permanently removes it from further sequence consideration. */
+   * — permanently removes it from further sequence consideration. Lives
+   * directly in the lead-list UI (CampaignDetail.tsx) now that there is
+   * no separate Pending Approval queue to hang it off of — manual review
+   * was removed from this feature entirely, see scheduler.ts's
+   * runSchedulerTick doc comment. */
   skipLead: (leadId: string) => Promise<void>;
-
-  // Same Set-not-single-value fix as approvingKeys above — personalizing
-  // two different rows concurrently used to make the *slower* one's
-  // result silently steal the open edit box away from whichever row the
-  // user was actually looking at once it finally resolved.
-  personalizingKeys: Set<string>;
-  personalizeError: string | null;
-  /** Drafts an AI-personalized version of one pending action's message —
-   * never sends anything itself. Returns null on failure (personalizeError
-   * is set for the caller to show). */
-  personalizeAction: (leadId: string, stepId: string) => Promise<{ baseText: string; personalizedText: string } | null>;
 
   staleInvites: LinkedInStaleInvite[];
   staleInvitesReady: boolean;
   refreshStaleInvites: () => Promise<void>;
-  // Same Set-not-single-value fix as approvingKeys above, same reasoning
-  // (withdraw is just as irreversible/real as approve).
+  // A Set, not a single string — the same in-flight-key tracking pattern
+  // used throughout this app for any per-row async action two rows could
+  // plausibly trigger concurrently (see CLAUDE.md's own note on this),
+  // since withdraw is a real, irreversible LinkedIn action.
   withdrawingKeys: Set<string>;
   /** Real, unrecoverable side effect the instant it succeeds — the caller
    * (StaleInvitesPanel) must have already shown a confirm dialog. */
@@ -144,7 +120,7 @@ export const useLinkedInCampaignsStore = create<LinkedInCampaignsState>((set, ge
   },
 
   openCampaignId: null,
-  setOpenCampaignId: (id) => set({ openCampaignId: id, leads: [], leadsReady: false, steps: [], stepsReady: false }),
+  setOpenCampaignId: (id) => set({ openCampaignId: id, leads: [], leadsReady: false, graphNodes: [], graphEdges: [], graphReady: false }),
 
   leads: [],
   leadsReady: false,
@@ -179,90 +155,41 @@ export const useLinkedInCampaignsStore = create<LinkedInCampaignsState>((set, ge
     void get().refreshCampaigns(); // keeps each campaign's leadCount in sync
   },
 
-  steps: [],
-  stepsReady: false,
-  refreshSteps: async (campaignId) => {
+  graphNodes: [],
+  graphEdges: [],
+  graphReady: false,
+  refreshGraph: async (campaignId) => {
     try {
-      const { steps } = await fetchSteps(campaignId);
-      set({ steps, stepsReady: true });
+      const { nodes, edges } = await fetchGraph(campaignId);
+      set({ graphNodes: nodes, graphEdges: edges, graphReady: true });
     } catch {
-      set({ stepsReady: true });
+      set({ graphReady: true });
     }
   },
 
-  addingStep: false,
-  addStep: async (campaignId, type, delayDays, messageTemplate) => {
-    set({ addingStep: true });
+  savingGraph: false,
+  saveGraph: async (campaignId, nodes, edges) => {
+    set({ savingGraph: true });
     try {
-      const step = await apiAddStep(campaignId, type, delayDays, messageTemplate);
-      set((s) => ({ steps: [...s.steps, step], addingStep: false }));
+      await apiSaveGraph(campaignId, nodes, edges);
+      // Optimistic — the server accepted the exact shape just sent, so
+      // there's no need to re-fetch; refreshGraph() (e.g. on next open)
+      // will still pick up anything else that changed server-side.
+      set({
+        graphNodes: nodes.map((n) => ({ ...n, campaignId })),
+        graphEdges: edges.map((e) => ({ ...e, id: `${e.fromNodeId ?? 'start'}->${e.toNodeId}:${e.branch}`, campaignId })),
+        savingGraph: false,
+      });
     } catch {
-      set({ addingStep: false });
-    }
-  },
-
-  removeStep: async (id) => {
-    await apiDeleteStep(id);
-    set((s) => ({ steps: s.steps.filter((st) => st.id !== id) }));
-  },
-
-  pendingActions: [],
-  pendingReady: false,
-  refreshPending: async () => {
-    try {
-      const { due } = await fetchPendingActions();
-      set({ pendingActions: due, pendingReady: true });
-    } catch {
-      set({ pendingReady: true });
-    }
-  },
-
-  approvingKeys: new Set(),
-  approveAction: async (leadId, stepId, overrideMessage) => {
-    const key = `${leadId}:${stepId}`;
-    set((s) => ({ approvingKeys: new Set(s.approvingKeys).add(key) }));
-    const clear = () => set((s) => {
-      const next = new Set(s.approvingKeys);
-      next.delete(key);
-      return { approvingKeys: next };
-    });
-    try {
-      const result = await approvePendingAction(leadId, stepId, overrideMessage);
-      clear();
-      void get().refreshPending();
-      return result.ok;
-    } catch {
-      clear();
-      void get().refreshPending();
-      return false;
+      set({ savingGraph: false });
     }
   },
 
   skipLead: async (leadId) => {
     await apiUpdateLeadStatus(leadId, 'skipped');
-    void get().refreshPending();
+    const campaignId = get().openCampaignId;
+    if (campaignId) void get().refreshLeads(campaignId);
     void get().refreshCampaigns();
-  },
-
-  personalizingKeys: new Set(),
-  personalizeError: null,
-  personalizeAction: async (leadId, stepId) => {
-    const key = `${leadId}:${stepId}`;
-    set((s) => ({ personalizingKeys: new Set(s.personalizingKeys).add(key), personalizeError: null }));
-    const clear = () => set((s) => {
-      const next = new Set(s.personalizingKeys);
-      next.delete(key);
-      return { personalizingKeys: next };
-    });
-    try {
-      const result = await apiPersonalizeAction(leadId, stepId);
-      clear();
-      return result;
-    } catch (err) {
-      clear();
-      set({ personalizeError: err instanceof Error ? err.message : 'Nepavyko personalizuoti' });
-      return null;
-    }
   },
 
   staleInvites: [],

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { createPortal } from 'react-dom';
 import { searchLeads, type NewLead, type SearchedLead } from '../../utils/linkedinCampaignsApi';
+import { Search, X } from 'lucide-react';
 
 interface LeadSearchImportProps {
   onConfirm: (leads: NewLead[]) => void;
@@ -83,7 +84,7 @@ export function LeadSearchImport({ onConfirm, onCancel }: LeadSearchImportProps)
             onChange={(e) => setQuery(e.target.value)}
           />
           <button type="submit" className="primary" disabled={searching || !query.trim()}>
-            {searching ? 'Ieškoma…' : '🔍 Ieškoti'}
+            {searching ? 'Ieškoma…' : <><Search className="icon" size={16} /> Ieškoti</>}
           </button>
         </form>
         {error && <p className="search-result-detail-error">{error}</p>}
@@ -114,7 +115,7 @@ export function LeadSearchImport({ onConfirm, onCancel }: LeadSearchImportProps)
 
         <div className="popover-footer">
           <button type="button" onClick={onCancel}>
-            ✕ Atšaukti
+            <X className="icon" size={16} /> Atšaukti
           </button>
           {results && results.length > 0 && (
             <button type="button" className="primary" disabled={selected.size === 0} onClick={handleConfirm}>

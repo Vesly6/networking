@@ -24,6 +24,43 @@ export interface LinkedInActionLogEntry {
   detail: string | null;
   executedAt: number;
   responseTimeMs: number | null;
+  /** JSON-serialized ConnectTiming (server/src/linkedin/page.ts) for a
+   * 'connect' action — parse with parseConnectTiming() below. Null for
+   * every other action type, and for rows logged before this existed. */
+  timingJson: string | null;
+}
+
+/** A 'connect' action's per-phase timing breakdown — mirrors
+ * server/src/linkedin/page.ts's ConnectTiming exactly (kept as a plain
+ * parallel type rather than a shared import, since the server and app
+ * packages don't share a types module). Returns null on anything that
+ * isn't valid JSON or doesn't look like this shape, so a malformed/legacy
+ * row just renders as "no breakdown available" rather than crashing the
+ * log panel. */
+export interface LinkedInConnectTiming {
+  startedAt: number;
+  navigatedViaSearch: boolean;
+  navigatedAt: number;
+  loginConfirmedAt: number;
+  visitedRecentActivity: boolean;
+  recentActivityDwellMs: number | null;
+  connectClickedAt: number;
+  noteAdded: boolean;
+  sentAt: number;
+  totalMs: number;
+}
+
+export function parseConnectTiming(timingJson: string | null): LinkedInConnectTiming | null {
+  if (!timingJson) return null;
+  try {
+    const parsed = JSON.parse(timingJson);
+    if (parsed && typeof parsed === 'object' && typeof parsed.startedAt === 'number' && typeof parsed.sentAt === 'number') {
+      return parsed as LinkedInConnectTiming;
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 export function fetchLinkedInActions(limit = 20): Promise<{ actions: LinkedInActionLogEntry[] }> {
@@ -52,12 +89,26 @@ export interface LinkedInSafetySettings {
   weeklyMessageCap: number;
   workHoursStart: string;
   workHoursEnd: string;
+  workHoursTimezone: string;
   warmUpEnabled: boolean;
   warmUpDurationDays: number;
   warmUpStartPct: number;
   warmUpStartDate: string | null;
-  manualReviewEnabled: boolean;
   paused: boolean;
+  dailyTargetJitterPct: number;
+  browseActivityProbability: number;
+  searchNavigationProbability: number;
+  dailySearchCap: number;
+  /** Epoch ms, or null when not currently locked out — set once LinkedIn's
+   * own search looks genuinely exhausted (the exact "monthly limit" text,
+   * or two consecutive zero-result searches). See safety.ts's
+   * recordSearchLockout(). */
+  searchBlockedUntil: number | null;
+  searchLockoutDays: number;
+  likesProbability: number;
+  likesMinGapMinutes: number;
+  aiScheduleEnabled: boolean;
+  autoPersonalizeEnabled: boolean;
 }
 
 // Message caps/counters were missing here even though the server has
@@ -121,19 +172,35 @@ export function setLinkedInPaused(paused: boolean): Promise<LinkedInSafetySnapsh
 export interface SchedulerRunResult {
   due: number;
   autoExecuted: number;
-  pendingApproval: number;
   errors: number;
   circuitBreakerTripped: boolean;
   skippedConcurrent?: boolean;
+  waitingForNextSlot?: boolean;
+  noTabOpen?: boolean;
 }
 
-/** LinkedInView.tsx's "▶ Vykdyti dabar" button — this used to also run on
- * its own background setInterval every 5 minutes regardless of any user
- * action; removed on explicit request (see server/src/index.ts's own doc
- * comment on why), so this manual trigger is now the only way a due
- * sequence step ever actually gets processed — with manual review on (the
- * default), that just means refreshing what's in the Pending Approval
- * queue; with it off, this is what actually sends. */
+/** LinkedInView.tsx's "▶ Vykdyti dabar" button — a manual, human-supervised
+ * "run right now" burst (server/src/linkedin/scheduler.ts's
+ * MAX_ATTEMPTS_PER_TICK). The real, unattended path is the server's own
+ * background 5-minute interval; manual review was removed entirely, so
+ * there is no approval queue anymore — a due action just executes,
+ * gated only by the Safety Engine. */
 export function runLinkedInScheduler(): Promise<SchedulerRunResult> {
   return localApiRequest('/api/linkedin/scheduler/run', { method: 'POST' });
+}
+
+export interface LinkedInTodaysPlan {
+  date: string;
+  targetCount: number;
+  plannedSlots: number[];
+  firedCount: number;
+  nextSlotDueNowAt: number | null;
+}
+
+/** The Apžvalga dashboard section's "today's plan progress" glance — see
+ * server/src/linkedin/dailyPlan.ts for what a plan actually is (a
+ * human-paced set of minute-of-day slots for today, generated once and
+ * reused for the rest of the day). */
+export function fetchTodaysLinkedInPlan(): Promise<LinkedInTodaysPlan> {
+  return localApiRequest('/api/linkedin/plan/today');
 }

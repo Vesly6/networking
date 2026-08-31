@@ -67,11 +67,12 @@ interface InstantlyCampaignsState {
   refresh: () => Promise<void>;
   loadMore: () => Promise<void>;
 
-  // A Set, not a single string — the same fix already applied to
-  // useLinkedInCampaignsStore's approvingKeys after a real, reproduced bug
-  // there: a single shared "in-flight id" made a second row's click
-  // wrongly re-enable the first row's button while its own request was
-  // still pending.
+  // A Set, not a single string — the same in-flight-key tracking pattern
+  // used throughout this app for any per-row async action two rows could
+  // plausibly trigger concurrently (see CLAUDE.md's own note on this): a
+  // single shared "in-flight id" would make a second row's click wrongly
+  // re-enable the first row's button while its own request was still
+  // pending.
   togglingIds: Set<string>;
   toggleCampaignActive: (id: string, currentStatus: number) => Promise<void>;
 

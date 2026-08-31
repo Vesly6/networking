@@ -20,6 +20,7 @@ import { ensureProtocol } from '../../utils/link';
 import { highlightMatches } from '../../utils/highlight';
 import { isCellLockedForWorker } from '../../utils/workerCellLock';
 import { EXCEL_CELL_LIMIT } from '../../constants';
+import { Clock, FileText, User, ExternalLink, X } from 'lucide-react';
 
 interface DataCellProps {
   row: Row;
@@ -275,7 +276,7 @@ function DataCellImpl({
                 setTimeExpanded((v) => !v);
               }}
             >
-              🕐
+              <Clock className="icon" size={14} />
             </button>
           )}
           {showTimeInput && (
@@ -312,7 +313,7 @@ function DataCellImpl({
                 onToggleDatePopover?.('note', e.currentTarget);
               }}
             >
-              📝
+              <FileText className="icon" size={14} />
             </button>
           )}
           {column.isNextActionDate &&
@@ -343,7 +344,7 @@ function DataCellImpl({
                     onToggleDatePopover?.('contact', e.currentTarget);
                   }}
                 >
-                  👤
+                  <User className="icon" size={14} />
                 </button>
               );
             })()}
@@ -360,7 +361,7 @@ function DataCellImpl({
                 if (column.isNextActionDate && row.nextActionNote) setNextActionNote(row.id, null);
               }}
             >
-              ×
+              <X className="icon" size={14} />
             </button>
           )}
         </div>
@@ -555,7 +556,7 @@ function DataCellImpl({
               onMouseDown={(e) => e.stopPropagation()}
               onClick={(e) => e.stopPropagation()}
             >
-              🔗
+              <ExternalLink className="icon" size={13} />
             </a>
           )}
         </div>

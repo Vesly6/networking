@@ -35,6 +35,24 @@ interface SerperSearchResponse {
   organic?: SerperOrganicResult[];
 }
 
+export interface SerperNewsResult {
+  title?: string;
+  link?: string;
+  snippet?: string;
+  // serper.dev's own relative/absolute date string (e.g. "2 hours ago"),
+  // not a parsed Date — kept as-is since it's display-only here (the news
+  // feature sorts by this raw string only insofar as serper.dev's own News
+  // ranking already orders results by recency/relevance; no parsing is
+  // attempted).
+  date?: string;
+  source?: string;
+  imageUrl?: string;
+}
+
+interface SerperNewsResponse {
+  news?: SerperNewsResult[];
+}
+
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // A real, reported problem: a bare fetch() with no retry meant any
@@ -63,11 +81,14 @@ const MAX_ATTEMPTS = 3;
 // other network error already goes through.
 const REQUEST_TIMEOUT_MS = 10_000;
 
-async function serperSearch(query: string, apiKey: string): Promise<SerperOrganicResult[]> {
+// Shared by every serper.dev endpoint this file calls (plain web search,
+// news search, ...) — same retry/timeout/error handling regardless of
+// which one, so a new endpoint never has to re-derive this scaffolding.
+async function serperRequest<T>(endpoint: string, query: string, apiKey: string): Promise<T> {
   let res: Response | undefined;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
-      res = await fetch('https://google.serper.dev/search', {
+      res = await fetch(`https://google.serper.dev/${endpoint}`, {
         method: 'POST',
         headers: { 'X-API-KEY': apiKey, 'Content-Type': 'application/json' },
         body: JSON.stringify({ q: query }),
@@ -76,7 +97,7 @@ async function serperSearch(query: string, apiKey: string): Promise<SerperOrgani
       break;
     } catch (err) {
       if (attempt >= MAX_ATTEMPTS) {
-        console.error('serper.dev unreachable after retries:', err);
+        console.error(`serper.dev/${endpoint} unreachable after retries:`, err);
         throw new SerperError('Nepavyko pasiekti paieškos paslaugos — pabandykite dar kartą');
       }
       await sleep(attempt * 500);
@@ -86,10 +107,15 @@ async function serperSearch(query: string, apiKey: string): Promise<SerperOrgani
   // real answer from serper.dev, not a transient blip — surfaced
   // immediately rather than retried, since retrying a permanent failure
   // three times would only add latency for nothing.
-  const json = (await res!.json().catch(() => null)) as (SerperSearchResponse & { message?: string }) | null;
+  const json = (await res!.json().catch(() => null)) as (T & { message?: string }) | null;
   if (!res!.ok || !json) {
-    throw new SerperError(json?.message ?? `Search service request failed (HTTP ${res!.status})`);
+    throw new SerperError((json as { message?: string } | null)?.message ?? `Search service request failed (HTTP ${res!.status})`);
   }
+  return json;
+}
+
+async function serperSearch(query: string, apiKey: string): Promise<SerperOrganicResult[]> {
+  const json = await serperRequest<SerperSearchResponse>('search', query, apiKey);
   return Array.isArray(json.organic) ? json.organic : [];
 }
 
@@ -250,4 +276,19 @@ export async function searchSocialProfiles(
   ).slice(0, MAX_CANDIDATES_PER_PLATFORM);
 
   return { instagram, facebook };
+}
+
+/** One serper.dev `/news` call per topic (parallelized by the caller, same
+ * "Promise.all, not sequential" shape as searchSocialProfiles' own two
+ * platform calls above) — mirrors Google's own News tab for the given
+ * query. No trend/virality scoring happens here or anywhere in this app:
+ * "hottest" in the News tab just means Google's own News relevance
+ * ranking for the topic, freshest-first once combined across topics by
+ * the caller. A real trend signal (what people are actually searching for
+ * right now, not just what's been published) would need a different
+ * product (e.g. SerpApi's Google Trends engine) — deliberately not
+ * integrated; Serper alone doesn't offer it. */
+export async function searchNews(query: string, apiKey: string): Promise<SerperNewsResult[]> {
+  const json = await serperRequest<SerperNewsResponse>('news', query, apiKey);
+  return Array.isArray(json.news) ? json.news : [];
 }

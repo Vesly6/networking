@@ -1,6 +1,7 @@
 import { useSearchStore } from '../../store/useSearchStore';
 import { useAddApolloResultToTable } from '../../utils/addApolloToTable';
 import type { ApolloSearchPerson } from '../../utils/apolloApi';
+import { Link, Mail, Phone } from 'lucide-react';
 
 function PersonRow({ person }: { person: ApolloSearchPerson }) {
   const enriched = useSearchStore((s) => s.enrichedById[person.id]);
@@ -32,15 +33,15 @@ function PersonRow({ person }: { person: ApolloSearchPerson }) {
         {displayName || 'Nežinoma'}
         {enriched?.linkedin_url && (
           <a href={enriched.linkedin_url} target="_blank" rel="noreferrer" className="search-results-linkedin" title="Atverti LinkedIn profilį">
-            🔗 LinkedIn
+            <Link className="icon" size={14} /> LinkedIn
           </a>
         )}
       </td>
       <td>{person.title ?? '—'}</td>
       <td>{person.organization?.name ?? '—'}</td>
       <td>
-        {email && <div>✉️ {email}</div>}
-        {phone && <div>📞 {phone}</div>}
+        {email && <div><Mail className="icon" size={14} /> {email}</div>}
+        {phone && <div><Phone className="icon" size={14} /> {phone}</div>}
         {!email && !enriching && (
           <span className="search-result-detail-muted">{person.has_email ? 'El. paštas žinomas' : 'El. pašto nėra'}</span>
         )}

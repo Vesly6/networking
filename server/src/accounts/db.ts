@@ -60,6 +60,60 @@ function migrate(database: Database.Database): void {
       linkedin_cdp_url TEXT,
       updated_at INTEGER NOT NULL
     );
+
+    -- Purely organizational — groups topics and/or saved articles. Flat
+    -- (no nesting), company-scoped like everything else in this feature.
+    -- Created before news_topics/news_saved_items below since both
+    -- reference it.
+    CREATE TABLE IF NOT EXISTS news_folders (
+      id TEXT PRIMARY KEY,
+      company_id TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS news_folders_by_company ON news_folders(company_id);
+
+    CREATE TABLE IF NOT EXISTS news_topics (
+      id TEXT PRIMARY KEY,
+      company_id TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      query TEXT NOT NULL,
+      active INTEGER NOT NULL DEFAULT 1,
+      folder_id TEXT REFERENCES news_folders(id) ON DELETE SET NULL,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS news_topics_by_company ON news_topics(company_id);
+
+    -- One row per (company, article link) ever shown in the News tab —
+    -- purely a "have they seen this" marker, not a cache of the article's
+    -- own content (that always comes fresh from serper.dev/the short-lived
+    -- in-memory cache in index.ts). Insert-only: a row's presence is the
+    -- fact itself, first_seen_at is display-only (never updated).
+    CREATE TABLE IF NOT EXISTS news_seen_links (
+      company_id TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      link TEXT NOT NULL,
+      first_seen_at INTEGER NOT NULL,
+      PRIMARY KEY (company_id, link)
+    );
+
+    -- A user-bookmarked article — a real snapshot of the article's own
+    -- fields at save time (title/snippet/source/date/imageUrl), not just
+    -- the link, since News items themselves are never persisted anywhere
+    -- else (they're re-fetched fresh from serper.dev on every load/cache
+    -- window) and a re-search later isn't guaranteed to surface the exact
+    -- same result again for the user to re-save from.
+    CREATE TABLE IF NOT EXISTS news_saved_items (
+      id TEXT PRIMARY KEY,
+      company_id TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      folder_id TEXT REFERENCES news_folders(id) ON DELETE SET NULL,
+      link TEXT NOT NULL,
+      title TEXT,
+      snippet TEXT,
+      source TEXT,
+      date TEXT,
+      image_url TEXT,
+      saved_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS news_saved_items_by_company ON news_saved_items(company_id);
   `);
   // Additive migration for databases created before these four existed —
   // CREATE TABLE IF NOT EXISTS above is a no-op against an already-existing
@@ -73,6 +127,23 @@ function migrate(database: Database.Database): void {
     } catch {
       // Column already exists — nothing to do.
     }
+  }
+  // Same additive-migration shape, for news_topics.active — added after
+  // the initial ship (soft delete replacing a hard DELETE), so a database
+  // that already has news_topics from before this needs the column added
+  // explicitly rather than relying on CREATE TABLE IF NOT EXISTS above.
+  try {
+    database.exec(`ALTER TABLE news_topics ADD COLUMN active INTEGER NOT NULL DEFAULT 1`);
+  } catch {
+    // Column already exists — nothing to do.
+  }
+  // Same shape again for news_topics.folder_id (folders shipped after
+  // news_topics/active). SQLite allows adding a column with a REFERENCES
+  // clause via ALTER TABLE same as any other column.
+  try {
+    database.exec(`ALTER TABLE news_topics ADD COLUMN folder_id TEXT REFERENCES news_folders(id) ON DELETE SET NULL`);
+  } catch {
+    // Column already exists — nothing to do.
   }
 }
 
@@ -302,9 +373,260 @@ export function computeAvailableFeatures(integrations: CompanyIntegrations | nul
   if (integrations.apolloApiKey) features.push('search');
   if (integrations.anthropicApiKey) features.push('email');
   if (integrations.linkedinCdpUrl) features.push('linkedin');
+  // A real, intentional behavior change, not an oversight: serper_api_key
+  // previously only *augmented* the Apollo-gated 'search' tab
+  // (searchSocialProfiles' diacritic-guess-free fallback) without gating
+  // anything on its own. The News tab is what makes it independently
+  // gate a tab for the first time — a company with Serper configured but
+  // not Apollo now sees "Naujienos" where it previously saw nothing.
+  if (integrations.serperApiKey) features.push('news');
   return features;
 }
 // ---------------------------------------------------------------------
+
+export interface NewsTopic {
+  id: string;
+  companyId: string;
+  query: string;
+  active: boolean;
+  folderId: string | null;
+  createdAt: number;
+}
+
+interface NewsTopicRow {
+  id: string;
+  company_id: string;
+  query: string;
+  active: number;
+  folder_id: string | null;
+  created_at: number;
+}
+
+function newsTopicFromRow(r: NewsTopicRow): NewsTopic {
+  return {
+    id: r.id,
+    companyId: r.company_id,
+    query: r.query,
+    active: r.active === 1,
+    folderId: r.folder_id,
+    createdAt: r.created_at,
+  };
+}
+
+/** Every topic ever added, active or not — a real, reported data-loss
+ * incident (an automated test script's own cleanup step removed a real
+ * saved topic, since the old version hard-deleted rows) is why "×" on a
+ * topic chip no longer deletes anything at all; see deleteNewsTopic below.
+ * The frontend splits this single list into the active chip row vs. a
+ * "history" section itself rather than this file exposing two separate
+ * functions for what's really one list with a flag. */
+export function listNewsTopics(companyId: string): NewsTopic[] {
+  const rows = getDb()
+    .prepare(`SELECT * FROM news_topics WHERE company_id = ? ORDER BY created_at ASC`)
+    .all(companyId) as NewsTopicRow[];
+  return rows.map(newsTopicFromRow);
+}
+
+/** Re-activates an existing (possibly soft-deleted) topic with the exact
+ * same query instead of creating a duplicate row, so "remove then re-add
+ * the same search" doesn't silently pile up near-identical rows over
+ * time. Comparison is case-insensitive/trimmed — same casual-matching
+ * expectation as everywhere else in this app that compares user-typed
+ * text (e.g. CSV import's column-name matching). */
+export function createNewsTopic(companyId: string, query: string, folderId: string | null = null): NewsTopic {
+  const trimmed = query.trim();
+  const existing = getDb()
+    .prepare(`SELECT * FROM news_topics WHERE company_id = ? AND lower(query) = lower(?)`)
+    .get(companyId, trimmed) as NewsTopicRow | undefined;
+  if (existing) {
+    // Reactivating an existing topic also lets it move into a different
+    // folder (e.g. re-adding from the history chip after creating a
+    // folder that didn't exist yet) — only actually overwrites folder_id
+    // when a non-null one is explicitly passed, so a plain reactivate
+    // (folderId omitted) doesn't silently un-file an already-organized
+    // topic.
+    const nextFolderId = folderId ?? existing.folder_id;
+    getDb().prepare(`UPDATE news_topics SET active = 1, folder_id = ? WHERE id = ?`).run(nextFolderId, existing.id);
+    return newsTopicFromRow({ ...existing, active: 1, folder_id: nextFolderId });
+  }
+  const topic: NewsTopic = { id: randomUUID(), companyId, query: trimmed, active: true, folderId, createdAt: Date.now() };
+  getDb()
+    .prepare(`INSERT INTO news_topics (id, company_id, query, active, folder_id, created_at) VALUES (?, ?, ?, 1, ?, ?)`)
+    .run(topic.id, topic.companyId, topic.query, topic.folderId, topic.createdAt);
+  return topic;
+}
+
+/** Moves an existing topic into a different folder (or ungrouped, via
+ * `null`) without touching its active/query state — a separate action
+ * from createNewsTopic's own folder-on-reactivate behavior, for simply
+ * re-filing an already-active topic. */
+export function moveNewsTopic(companyId: string, id: string, folderId: string | null): void {
+  getDb().prepare(`UPDATE news_topics SET folder_id = ? WHERE id = ? AND company_id = ?`).run(folderId, id, companyId);
+}
+
+/** Soft delete only — flips `active` to 0, never removes the row. Nothing
+ * the user has ever searched for is allowed to actually disappear (see
+ * listNewsTopics' own doc comment for the incident that motivated this);
+ * "×" on a chip just stops it from being actively searched (and billed)
+ * going forward, recoverable any time via createNewsTopic's reactivation
+ * path above. Scoped to companyId so one company can never touch
+ * another's topic by guessing/reusing an id. */
+export function deleteNewsTopic(companyId: string, id: string): void {
+  getDb().prepare(`UPDATE news_topics SET active = 0 WHERE id = ? AND company_id = ?`).run(id, companyId);
+}
+
+/** Records that `link` has now been shown to `companyId` in the News tab
+ * and reports whether this is the *first* time — `INSERT OR IGNORE` means
+ * a link already seen is a no-op (its original first_seen_at survives),
+ * and better-sqlite3's `changes` count is what distinguishes "just
+ * inserted" (1, i.e. genuinely new) from "already existed" (0, i.e.
+ * already seen before) without a separate SELECT-then-INSERT round trip. */
+export function markNewsLinkSeen(companyId: string, link: string): boolean {
+  const result = getDb()
+    .prepare(`INSERT OR IGNORE INTO news_seen_links (company_id, link, first_seen_at) VALUES (?, ?, ?)`)
+    .run(companyId, link, Date.now());
+  return result.changes > 0;
+}
+
+export interface NewsFolder {
+  id: string;
+  companyId: string;
+  name: string;
+  createdAt: number;
+}
+
+interface NewsFolderRow {
+  id: string;
+  company_id: string;
+  name: string;
+  created_at: number;
+}
+
+function newsFolderFromRow(r: NewsFolderRow): NewsFolder {
+  return { id: r.id, companyId: r.company_id, name: r.name, createdAt: r.created_at };
+}
+
+export function listNewsFolders(companyId: string): NewsFolder[] {
+  const rows = getDb()
+    .prepare(`SELECT * FROM news_folders WHERE company_id = ? ORDER BY created_at ASC`)
+    .all(companyId) as NewsFolderRow[];
+  return rows.map(newsFolderFromRow);
+}
+
+export function createNewsFolder(companyId: string, name: string): NewsFolder {
+  const folder: NewsFolder = { id: randomUUID(), companyId, name: name.trim(), createdAt: Date.now() };
+  getDb()
+    .prepare(`INSERT INTO news_folders (id, company_id, name, created_at) VALUES (?, ?, ?, ?)`)
+    .run(folder.id, folder.companyId, folder.name, folder.createdAt);
+  return folder;
+}
+
+/** A real delete (not soft) — a folder is just an organizing label, not
+ * user-authored content, so there's nothing worth preserving about the
+ * folder row itself. Topics survive via the FK's own ON DELETE SET NULL
+ * (they just become ungrouped again — a topic is a search, meaningful on
+ * its own regardless of folder). Saved items are different: confirmed
+ * with the user that a saved article only exists *as* belonging to a
+ * folder ("оно может быть только как папка") — there's no ungrouped
+ * "Išsaugota" bucket to fall back into, so this explicitly deletes them
+ * first, application-level, rather than relying on (or changing) the
+ * column's own FK behavior, which stays SET NULL in the schema — a
+ * migration to CASCADE would mean recreating this table, and it already
+ * holds real, user-saved articles that a botched migration could lose. */
+export function deleteNewsFolder(companyId: string, id: string): void {
+  getDb().prepare(`DELETE FROM news_saved_items WHERE company_id = ? AND folder_id = ?`).run(companyId, id);
+  getDb().prepare(`DELETE FROM news_folders WHERE id = ? AND company_id = ?`).run(id, companyId);
+}
+
+export interface NewsSavedItem {
+  id: string;
+  companyId: string;
+  folderId: string | null;
+  link: string;
+  title: string | null;
+  snippet: string | null;
+  source: string | null;
+  date: string | null;
+  imageUrl: string | null;
+  savedAt: number;
+}
+
+interface NewsSavedItemRow {
+  id: string;
+  company_id: string;
+  folder_id: string | null;
+  link: string;
+  title: string | null;
+  snippet: string | null;
+  source: string | null;
+  date: string | null;
+  image_url: string | null;
+  saved_at: number;
+}
+
+function newsSavedItemFromRow(r: NewsSavedItemRow): NewsSavedItem {
+  return {
+    id: r.id,
+    companyId: r.company_id,
+    folderId: r.folder_id,
+    link: r.link,
+    title: r.title,
+    snippet: r.snippet,
+    source: r.source,
+    date: r.date,
+    imageUrl: r.image_url,
+    savedAt: r.saved_at,
+  };
+}
+
+export function listNewsSavedItems(companyId: string): NewsSavedItem[] {
+  const rows = getDb()
+    .prepare(`SELECT * FROM news_saved_items WHERE company_id = ? ORDER BY saved_at DESC`)
+    .all(companyId) as NewsSavedItemRow[];
+  return rows.map(newsSavedItemFromRow);
+}
+
+export interface SaveNewsItemInput {
+  folderId: string | null;
+  link: string;
+  title: string | null;
+  snippet: string | null;
+  source: string | null;
+  date: string | null;
+  imageUrl: string | null;
+}
+
+export function saveNewsItem(companyId: string, input: SaveNewsItemInput): NewsSavedItem {
+  const item: NewsSavedItem = { id: randomUUID(), companyId, savedAt: Date.now(), ...input };
+  getDb()
+    .prepare(
+      `INSERT INTO news_saved_items (id, company_id, folder_id, link, title, snippet, source, date, image_url, saved_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      item.id,
+      item.companyId,
+      item.folderId,
+      item.link,
+      item.title,
+      item.snippet,
+      item.source,
+      item.date,
+      item.imageUrl,
+      item.savedAt,
+    );
+  return item;
+}
+
+export function deleteNewsSavedItem(companyId: string, id: string): void {
+  getDb().prepare(`DELETE FROM news_saved_items WHERE id = ? AND company_id = ?`).run(id, companyId);
+}
+
+export function moveNewsSavedItem(companyId: string, id: string, folderId: string | null): void {
+  getDb()
+    .prepare(`UPDATE news_saved_items SET folder_id = ? WHERE id = ? AND company_id = ?`)
+    .run(folderId, id, companyId);
+}
 
 export interface UserPermissions {
   canDeleteRows: boolean;

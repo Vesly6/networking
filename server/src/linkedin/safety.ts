@@ -13,12 +13,104 @@ const DEFAULTS = {
   weekly_message_cap: '100',
   work_hours_start: '09:00',
   work_hours_end: '18:00',
+  // A real, live-found gap this session: work hours used to be compared
+  // against the server process's own local clock (effectively UTC on
+  // Render) — "09:00–18:00" meant nothing to do with the account owner's
+  // actual day. Any valid IANA zone name works since this is only ever
+  // fed to Intl.DateTimeFormat (see getZonedDateParts below), never
+  // parsed by hand.
+  work_hours_timezone: 'Europe/Vilnius',
   warm_up_enabled: 'true',
   warm_up_duration_days: '21',
   warm_up_start_pct: '25',
   warm_up_start_date: '',
-  manual_review_enabled: 'true',
   paused: 'false',
+  // How far below the effective daily cap a given day's real target can
+  // randomly land (dailyPlan.ts), as a PERCENTAGE of that day's own
+  // effective cap rather than a flat count — a flat absolute number (this
+  // setting's earlier form) barely mattered against a mature cap of 15 but
+  // could swallow a warm-up-era cap of 5 whole, leaving little real
+  // day-to-day variation exactly when a fixed daily count is most
+  // detectable (this session's own research: LinkedIn's enforcement reads
+  // as pattern/rhythm-based, and a perfectly consistent count — even a
+  // "safe," gradually-ramped one — is itself a flagged signal). Default
+  // 25% → cap 15 mostly lands in ~{12..15}, cap 5 (early warm-up) in
+  // ~{4..5} — proportionally similar variation at either end.
+  daily_target_jitter_pct: '25',
+  // Probability (0-100) that a given connect send pauses to look at one
+  // of the profile's own recent posts before proceeding — see page.ts's
+  // browseProfileBeforeConnect(). Deliberately not 100: most sends stay
+  // on the simpler, longer-verified path.
+  browse_activity_probability: '35',
+  // Probability (0-100) that a send navigates via LinkedIn's own
+  // search-by-name instead of a direct profile URL — deliberately LOW by
+  // default. LinkedIn's people search is a limited/commercial-use-gated
+  // feature on non-premium accounts; using it on every send would burn
+  // through the account's real, human search quota too, not just this
+  // feature's own budget for it.
+  search_navigation_probability: '18',
+  // Hard daily ceiling on how many of those searches actually happen,
+  // independent of the probability above — checked first, and once
+  // reached for the day every remaining send just falls back to direct-
+  // URL navigation rather than blocking the connect itself. LinkedIn
+  // doesn't publish an exact quota and it varies by account, so this is
+  // deliberately small/conservative and user-tunable, not a guessed
+  // hardcoded number.
+  daily_search_cap: '4',
+  // Set by recordSearchLockout() (page.ts's searchByNameAndNavigate) the
+  // moment LinkedIn's own search looks genuinely exhausted — live-
+  // confirmed this session against a real account already at LinkedIn's
+  // monthly commercial-use search cap. Epoch ms, empty string = not
+  // currently locked out. Checked by shouldUseSearchNavigation() before
+  // the probability roll, so a locked-out account never wastes another
+  // attempt against a wall it already hit.
+  search_blocked_until: '',
+  // How long a lockout lasts once triggered — the account owner's own
+  // suggested cooldown ("не повторять поиск неделю"), kept configurable
+  // rather than hardcoded since LinkedIn's own monthly reset cadence
+  // isn't published and may not line up with exactly 7 days.
+  search_lockout_days: '7',
+  // Consecutive zero-result search-by-name attempts, reset to 0 the
+  // moment any attempt finds real candidates (matched or not) — see
+  // recordSearchMiss()/recordSearchHit() below. The robust fallback
+  // lockout trigger for when LinkedIn's exact "monthly limit" wording
+  // isn't the page actually showing (this function only reads the
+  // lightweight typeahead dropdown, not the full results page).
+  search_misses_in_a_row: '0',
+  // humanize.ts's account-level "texture" activity, independent of
+  // whether any connect is actually due — on explicit request: likes
+  // only, never comments (a materially bigger surface — real generated
+  // text under this account's name — with no prior art anywhere in this
+  // codebase). Probability is the per-opportunity chance of liking
+  // anything at all once `likes_min_gap_minutes` has elapsed since the
+  // last run — deliberately well under 100%, since a real person doesn't
+  // react to something every single time they open the app either.
+  likes_probability: '40',
+  // Minimum real time between humanize passes — without this, a 5-minute
+  // scheduler tick would otherwise re-roll the probability above every 5
+  // minutes, which reads as far more feed activity than a real person
+  // idly checking in produces. Deliberately a wide, human-plausible gap
+  // rather than tied to the connect-scheduling cadence.
+  likes_min_gap_minutes: '90',
+  // Opt-in, OFF by default — dailyPlan.ts's procedural generator (seeded
+  // jitter/clustering) is what actually guarantees every slot lands
+  // inside work hours and is what ships enabled; this lets an LLM
+  // (openai.ts's suggestDailyScheduleMinutes) propose today's slot times
+  // instead, as an explicit live experiment to compare against the
+  // procedural baseline — never a replacement for its safety guarantee,
+  // since dailyPlan.ts re-validates every proposed slot against work
+  // hours regardless of this setting and discards the whole AI response
+  // in favor of the procedural one if it doesn't hold up.
+  ai_schedule_enabled: 'false',
+  // Opt-in, OFF by default — with manual review removed entirely (every
+  // due action fires on its own, nothing waits for a human to read it
+  // first — see scheduler.ts's runSchedulerTick), AI personalization
+  // folds directly into executeAction() as an automatic pre-send step
+  // when this is on. Off means the existing plain
+  // {{firstName}}/{{title}}/{{company}} placeholder substitution keeps
+  // happening exactly as before — this setting only controls whether an
+  // *additional* AI rewrite happens on top of that baseline.
+  auto_personalize_enabled: 'false',
 };
 
 export type SafetySettingKey = keyof typeof DEFAULTS;
@@ -34,12 +126,22 @@ export interface SafetySettings {
   weeklyMessageCap: number;
   workHoursStart: string;
   workHoursEnd: string;
+  workHoursTimezone: string;
   warmUpEnabled: boolean;
   warmUpDurationDays: number;
   warmUpStartPct: number;
   warmUpStartDate: string | null;
-  manualReviewEnabled: boolean;
   paused: boolean;
+  dailyTargetJitterPct: number;
+  browseActivityProbability: number;
+  searchNavigationProbability: number;
+  dailySearchCap: number;
+  searchBlockedUntil: number | null;
+  searchLockoutDays: number;
+  likesProbability: number;
+  likesMinGapMinutes: number;
+  aiScheduleEnabled: boolean;
+  autoPersonalizeEnabled: boolean;
 }
 
 export function getSafetySettings(): SafetySettings {
@@ -50,12 +152,22 @@ export function getSafetySettings(): SafetySettings {
     weeklyMessageCap: Number(get('weekly_message_cap')),
     workHoursStart: get('work_hours_start'),
     workHoursEnd: get('work_hours_end'),
+    workHoursTimezone: get('work_hours_timezone'),
     warmUpEnabled: get('warm_up_enabled') === 'true',
     warmUpDurationDays: Number(get('warm_up_duration_days')),
     warmUpStartPct: Number(get('warm_up_start_pct')),
     warmUpStartDate: get('warm_up_start_date') || null,
-    manualReviewEnabled: get('manual_review_enabled') === 'true',
     paused: get('paused') === 'true',
+    dailyTargetJitterPct: Number(get('daily_target_jitter_pct')),
+    browseActivityProbability: Number(get('browse_activity_probability')),
+    searchNavigationProbability: Number(get('search_navigation_probability')),
+    dailySearchCap: Number(get('daily_search_cap')),
+    searchBlockedUntil: get('search_blocked_until') ? Number(get('search_blocked_until')) : null,
+    searchLockoutDays: Number(get('search_lockout_days')),
+    likesProbability: Number(get('likes_probability')),
+    likesMinGapMinutes: Number(get('likes_min_gap_minutes')),
+    aiScheduleEnabled: get('ai_schedule_enabled') === 'true',
+    autoPersonalizeEnabled: get('auto_personalize_enabled') === 'true',
   };
 }
 
@@ -82,8 +194,49 @@ export function setPaused(paused: boolean): void {
   setSetting('paused', paused ? 'true' : 'false');
 }
 
-function isWithinWorkHours(settings: SafetySettings, now = new Date()): boolean {
-  const hhmm = now.toTimeString().slice(0, 5);
+export interface ZonedDateParts {
+  /** yyyy-MM-dd, the calendar date *in `timeZone`* — not UTC, not the
+   * server's own local date. */
+  dateStr: string;
+  /** 'Monday'..'Sunday', in `timeZone`. */
+  weekday: string;
+  /** HH:MM (24h), in `timeZone`. */
+  hhmm: string;
+}
+
+// Computes wall-clock date/weekday/time in an arbitrary IANA zone using
+// the native Intl API — Node ships full ICU, so this needs no dependency
+// (date-fns-tz/luxon/etc.), unlike every other date helper already in
+// this codebase (callStats.ts's toUtcDate/addDays, analytics.ts's
+// dayKeyUtc), which are UTC-anchored, not zone-parameterized — there was
+// nothing to reuse here, this is genuinely new. Shared by
+// isWithinWorkHours below and dailyPlan.ts's weekday/day-boundary logic,
+// so both agree on exactly the same notion of "what day/time is it for
+// this account" rather than each re-deriving it slightly differently.
+export function getZonedDateParts(timeZone: string, now = new Date()): ZonedDateParts {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    weekday: 'long',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(now);
+  const get2 = (type: string) => parts.find((p) => p.type === type)?.value ?? '';
+  // hour12:false can still render midnight as "24" in some ICU builds —
+  // normalize to "00" so string comparison against "HH:MM" bounds behaves.
+  const hour = get2('hour') === '24' ? '00' : get2('hour');
+  return {
+    dateStr: `${get2('year')}-${get2('month')}-${get2('day')}`,
+    weekday: get2('weekday'),
+    hhmm: `${hour}:${get2('minute')}`,
+  };
+}
+
+export function isWithinWorkHours(settings: SafetySettings, now = new Date()): boolean {
+  const { hhmm } = getZonedDateParts(settings.workHoursTimezone, now);
   return hhmm >= settings.workHoursStart && hhmm <= settings.workHoursEnd;
 }
 
@@ -190,6 +343,65 @@ export function recordConnectSent(): void {
  * today" rather than adding a new column for the same underlying need. */
 export function recordConnectAttempt(): void {
   incrementSafetyCounter('profile_views');
+}
+
+/** Whether *this* send should navigate via LinkedIn's own search-by-name
+ * instead of a direct profile URL — called once per send, before
+ * deciding how to navigate (page.ts). Checks the hard daily cap first
+ * (independent of and before the probability roll), so a low
+ * `dailySearchCap` genuinely bounds real search usage regardless of how
+ * the probability happens to roll; once reached for the day this always
+ * returns false and every remaining send that day just uses a direct URL
+ * instead, never blocking the connect itself over a search-quota
+ * concern. */
+export function shouldUseSearchNavigation(settings: SafetySettings): boolean {
+  // Checked before the daily cap/probability — a live lockout means "not
+  // right now, regardless of how the day's numbers look," see
+  // recordSearchLockout()'s own doc comment for what sets this.
+  if (settings.searchBlockedUntil !== null && Date.now() < settings.searchBlockedUntil) return false;
+  const today = getTodaySafetyState();
+  if (today.searchesUsed >= Math.max(0, settings.dailySearchCap)) return false;
+  return Math.random() * 100 < settings.searchNavigationProbability;
+}
+
+export function recordSearchUsed(): void {
+  incrementSafetyCounter('searches_used');
+}
+
+/** A search-by-name attempt that found zero real person-shaped results at
+ * all (not just "this specific lead wasn't among them") — see
+ * page.ts's searchByNameAndNavigate() for the call site. Returns the new
+ * consecutive-miss count so the caller can decide whether it's crossed
+ * the lockout threshold without a second read. */
+export function recordSearchMiss(): number {
+  const next = Number(get('search_misses_in_a_row')) + 1;
+  setSetting('search_misses_in_a_row', String(next));
+  return next;
+}
+
+/** A search-by-name attempt that found real candidates — resets the
+ * consecutive-miss streak, since whatever degraded the search (if
+ * anything) is evidently not happening right now. */
+export function recordSearchHit(): void {
+  setSetting('search_misses_in_a_row', '0');
+}
+
+/** Sets search_blocked_until `search_lockout_days` days out from now and
+ * resets the miss streak (a fresh streak should start counting only once
+ * the lockout itself has lifted, not still be primed from the run that
+ * just triggered it). Called from page.ts's searchByNameAndNavigate() the
+ * moment either lockout signal fires — see that function's own doc
+ * comment for what those are. Logged to the console (not just written
+ * silently) since this is exactly the kind of state change that's easy to
+ * miss without watching the UI — the next scheduler tick's own log line
+ * will otherwise just look like an ordinary "used direct URL" send with
+ * no visible cause. */
+export function recordSearchLockout(reason: string): void {
+  const days = Math.max(1, Number(get('search_lockout_days')));
+  const until = Date.now() + days * 86_400_000;
+  setSetting('search_blocked_until', String(until));
+  setSetting('search_misses_in_a_row', '0');
+  console.log(`[linkedin/safety] Search-by-name locked out until ${new Date(until).toISOString()} — ${reason}`);
 }
 
 /** Same gate as canSendConnect, scoped to the message caps/counters

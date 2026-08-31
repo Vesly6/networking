@@ -17,6 +17,18 @@ import {
   upsertCompanyIntegrations,
   clearCompanyIntegrationField,
   computeAvailableFeatures,
+  listNewsTopics,
+  createNewsTopic,
+  deleteNewsTopic,
+  moveNewsTopic,
+  markNewsLinkSeen,
+  listNewsFolders,
+  createNewsFolder,
+  deleteNewsFolder,
+  listNewsSavedItems,
+  saveNewsItem,
+  deleteNewsSavedItem,
+  moveNewsSavedItem,
 } from './accounts/db.js';
 import {
   ZadarmaApiError,
@@ -38,12 +50,10 @@ import {
   translateJobTitleToEnglish,
   SummarizeError,
   summarizeCall,
-  LinkedInPersonalizeError,
-  personalizeLinkedInMessage,
   LinkedInReplyError,
   suggestLinkedInReply,
 } from './openai.js';
-import { SerperError, searchSocialProfiles } from './serper.js';
+import { SerperError, searchSocialProfiles, searchNews, type SerperNewsResult } from './serper.js';
 import { EmailGenerateError, generateEmail } from './anthropic.js';
 import {
   loadTables,
@@ -94,7 +104,7 @@ import {
   getUnreadCount,
   updateLeadInterestStatus,
 } from './instantly.js';
-import { LinkedInBrowserError } from './linkedin/browser.js';
+import { LinkedInBrowserError, humanDelay } from './linkedin/browser.js';
 import { LinkedInPageError, getLinkedInStatus, sendConnectionRequest, replyInThread, searchLeads } from './linkedin/page.js';
 import { logAction, getRecentActions } from './linkedin/db.js';
 import {
@@ -107,26 +117,28 @@ import {
   addLeads,
   deleteLead,
   updateLeadStatus,
-  addSequenceStep,
-  listSequenceSteps,
-  updateSequenceStep,
-  deleteSequenceStep,
+  getCampaignGraph,
+  saveCampaignGraph,
+  type NewSequenceNode,
+  type NewSequenceEdge,
   listConversations,
   getConversation,
   markConversationRead,
   listMessagesForConversation,
   addMessageIfNew,
 } from './linkedin/db.js';
-import { canSendConnect, recordConnectSent, canSendMessage, recordMessageSent, getSafetySnapshot, updateSafetySettings, setPaused } from './linkedin/safety.js';
 import {
-  findDueActions,
-  findDueAction,
-  approveAction,
-  runSchedulerTick,
-  applyLeadPlaceholders,
-  findStaleInvites,
-  withdrawInvite,
-} from './linkedin/scheduler.js';
+  canSendConnect,
+  recordConnectSent,
+  canSendMessage,
+  recordMessageSent,
+  getSafetySettings,
+  getSafetySnapshot,
+  updateSafetySettings,
+  setPaused,
+} from './linkedin/safety.js';
+import { getOrCreateTodaysPlan, nextDueSlot } from './linkedin/dailyPlan.js';
+import { runSchedulerTick, findStaleInvites, withdrawInvite } from './linkedin/scheduler.js';
 import { syncInbox } from './linkedin/inbox.js';
 import { getAnalyticsSummary, getCampaignStepBreakdown, getDailyActivity } from './linkedin/analytics.js';
 
@@ -1055,6 +1067,216 @@ app.post(
   }),
 );
 
+// "Naujienos" tab's own short-lived cache, keyed by topic id (immutable
+// once a topic is created, unlike its query string which nothing ever
+// edits either, but id is the natural key regardless). Exists purely to
+// avoid spending a real serper.dev credit on every manual "↻ Atnaujinti"
+// click within a short window — a real cost concern the account owner
+// raised directly, not a correctness one (a topic's News results don't
+// meaningfully change minute to minute). In-memory only, module-level —
+// losing it on a server restart just means the next request re-fetches
+// fresh, which is fine; no need to persist it.
+const NEWS_CACHE_TTL_MS = 20 * 60 * 1000;
+const newsCache = new Map<string, { results: SerperNewsResult[]; fetchedAt: number }>();
+
+async function searchNewsCached(topicId: string, query: string, apiKey: string): Promise<SerperNewsResult[]> {
+  const cached = newsCache.get(topicId);
+  if (cached && Date.now() - cached.fetchedAt < NEWS_CACHE_TTL_MS) {
+    return cached.results;
+  }
+  const results = await searchNews(query, apiKey);
+  newsCache.set(topicId, { results, fetchedAt: Date.now() });
+  return results;
+}
+
+// "Naujienos" tab — plain CRUD over a company's saved search topics.
+// Topics aren't secret (same visibility as the tab itself, which any
+// authenticated company member sees once Serper is configured), so no
+// requireNotWorker-style role gate here, unlike Workers/Integrations.
+app.get(
+  '/api/news/topics',
+  asyncHandler(async (req, res) => {
+    res.json({ topics: listNewsTopics(req.auth!.companyId) });
+  }),
+);
+
+app.post(
+  '/api/news/topics',
+  asyncHandler(async (req, res) => {
+    const query = typeof req.body?.query === 'string' ? req.body.query.trim() : '';
+    if (!query) {
+      res.status(400).json({ error: 'Reikia įvesti temą' });
+      return;
+    }
+    const folderId = typeof req.body?.folderId === 'string' ? req.body.folderId : null;
+    const topic = createNewsTopic(req.auth!.companyId, query, folderId);
+    res.json(topic);
+  }),
+);
+
+app.delete(
+  '/api/news/topics/:id',
+  asyncHandler(async (req, res) => {
+    deleteNewsTopic(req.auth!.companyId, req.params.id);
+    newsCache.delete(req.params.id);
+    res.json({ ok: true });
+  }),
+);
+
+// Re-files an already-active topic into a different folder (or `null` to
+// ungroup) without touching its active/query state — distinct from
+// createNewsTopic's own folder-on-reactivate path, which only applies
+// when re-adding a soft-deleted topic.
+app.patch(
+  '/api/news/topics/:id',
+  asyncHandler(async (req, res) => {
+    const folderId = typeof req.body?.folderId === 'string' ? req.body.folderId : null;
+    moveNewsTopic(req.auth!.companyId, req.params.id, folderId);
+    res.json({ ok: true });
+  }),
+);
+
+// Folders — purely organizational, group topics and/or saved articles.
+// Same "no role gate" reasoning as topics above.
+app.get(
+  '/api/news/folders',
+  asyncHandler(async (req, res) => {
+    res.json({ folders: listNewsFolders(req.auth!.companyId) });
+  }),
+);
+
+app.post(
+  '/api/news/folders',
+  asyncHandler(async (req, res) => {
+    const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+    if (!name) {
+      res.status(400).json({ error: 'Reikia įvesti aplanko pavadinimą' });
+      return;
+    }
+    res.json(createNewsFolder(req.auth!.companyId, name));
+  }),
+);
+
+app.delete(
+  '/api/news/folders/:id',
+  asyncHandler(async (req, res) => {
+    deleteNewsFolder(req.auth!.companyId, req.params.id);
+    res.json({ ok: true });
+  }),
+);
+
+// Bookmarked articles — a real snapshot of the article's fields at save
+// time (see accounts/db.ts's news_saved_items doc comment for why), sent
+// straight from the frontend's already-rendered NewsItem rather than
+// re-searching serper.dev for it server-side.
+app.get(
+  '/api/news/saved',
+  asyncHandler(async (req, res) => {
+    res.json({ items: listNewsSavedItems(req.auth!.companyId) });
+  }),
+);
+
+app.post(
+  '/api/news/saved',
+  asyncHandler(async (req, res) => {
+    const link = typeof req.body?.link === 'string' ? req.body.link.trim() : '';
+    if (!link) {
+      res.status(400).json({ error: 'Trūksta nuorodos' });
+      return;
+    }
+    // A saved article only exists *as* belonging to a folder (confirmed
+    // with the user) — no "ungrouped saved items" bucket, unlike topics.
+    // Enforced here, not just in the frontend, since the column itself
+    // stays nullable (see deleteNewsFolder's own doc comment on why the
+    // schema wasn't migrated).
+    const folderId = typeof req.body?.folderId === 'string' ? req.body.folderId.trim() : '';
+    if (!folderId) {
+      res.status(400).json({ error: 'Pasirinkite aplanką, į kurį išsaugoti' });
+      return;
+    }
+    const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : null);
+    const item = saveNewsItem(req.auth!.companyId, {
+      folderId,
+      link,
+      title: str(req.body?.title),
+      snippet: str(req.body?.snippet),
+      source: str(req.body?.source),
+      date: str(req.body?.date),
+      imageUrl: str(req.body?.imageUrl),
+    });
+    res.json(item);
+  }),
+);
+
+app.delete(
+  '/api/news/saved/:id',
+  asyncHandler(async (req, res) => {
+    deleteNewsSavedItem(req.auth!.companyId, req.params.id);
+    res.json({ ok: true });
+  }),
+);
+
+app.patch(
+  '/api/news/saved/:id',
+  asyncHandler(async (req, res) => {
+    const folderId = typeof req.body?.folderId === 'string' ? req.body.folderId : null;
+    moveNewsSavedItem(req.auth!.companyId, req.params.id, folderId);
+    res.json({ ok: true });
+  }),
+);
+
+// One searchNews() call per saved topic, in parallel (same shape as
+// searchSocialProfiles' own two-platform Promise.all above) — no topics
+// configured just means an empty, valid result rather than an error, so
+// the frontend's empty state ("no topics yet, add one") is what a
+// brand-new company actually sees rather than a raw failure.
+app.get(
+  '/api/news',
+  asyncHandler(async (req, res) => {
+    const apiKey = requireSerperKey(req.auth!.companyId);
+    // Only active topics actually get searched (and billed) — a
+    // soft-deleted one stays recoverable (see deleteNewsTopic's own doc
+    // comment) but shouldn't keep spending serper.dev credits while it's
+    // hidden from the chip row.
+    const topics = listNewsTopics(req.auth!.companyId).filter((t) => t.active);
+    const perTopic = await Promise.all(
+      topics.map(async (topic) => {
+        const results = await searchNewsCached(topic.id, topic.query, apiKey);
+        return results.map((r) => ({
+          ...r,
+          topicId: topic.id,
+          topicQuery: topic.query,
+          // markNewsLinkSeen both records the sighting and reports whether
+          // this is the first one — `isNew` reflects that directly, so a
+          // link already shown on an earlier visit/refresh comes back
+          // false even though it's still included (full history, not a
+          // self-clearing "unread" feed — confirmed with the user).
+          // Un-linked items (rare — Serper occasionally omits `link`)
+          // can't be tracked at all, so they're always treated as new
+          // rather than silently miscounted as "seen".
+          isNew: r.link ? markNewsLinkSeen(req.auth!.companyId, r.link) : true,
+        }));
+      }),
+    );
+    // Round-robin across topics rather than a real chronological sort —
+    // serper.dev's `date` field is Google's own relative string ("2 hours
+    // ago", "3 days ago", an absolute date for older items, ...), not a
+    // consistent parseable timestamp, so sorting by it as a plain string
+    // would not actually produce chronological order. Each topic's own
+    // results already arrive in Google's own relevance/recency order for
+    // that query; interleaving one-from-each keeps the combined list from
+    // being dominated by whichever topic happens to be listed first,
+    // without pretending to a precision the raw data doesn't support.
+    const items: (typeof perTopic)[number] = [];
+    for (let i = 0; i < Math.max(0, ...perTopic.map((r) => r.length)); i++) {
+      for (const results of perTopic) {
+        if (results[i]) items.push(results[i]);
+      }
+    }
+    res.json({ items });
+  }),
+);
+
 // The three Apollo routes below just forward the request body through to
 // apollo.ts's typed wrappers — validation stays minimal (this is a single-
 // operator tool, not a public API), the frontend's filter panel is
@@ -1491,7 +1713,7 @@ app.post(
     }
     const startedAt = Date.now();
     try {
-      await sendConnectionRequest(profileUrl, note);
+      const timing = await sendConnectionRequest(profileUrl, note);
       recordConnectSent();
       logAction({
         leadId: null,
@@ -1502,6 +1724,7 @@ app.post(
         detail: null,
         executedAt: startedAt,
         responseTimeMs: Date.now() - startedAt,
+        timingJson: JSON.stringify(timing),
       });
       res.json({ ok: true });
     } catch (err) {
@@ -1521,6 +1744,82 @@ app.post(
   }),
 );
 
+// Batch version of test-connect above — real connection requests to a
+// list of profile URLs, one at a time, with a randomized human-paced
+// delay between each. Deliberately NOT the literal fixed 3s/5s/2s/5s
+// sequence first requested — a fixed, repeating cadence is exactly the
+// mechanical "looks scripted" signature this whole feature exists to
+// avoid (see browser.ts's own doc comment on humanDelay). Reusing
+// humanDelay's jittered-triangular distribution here instead keeps this
+// consistent with every other pacing decision already in this feature,
+// rather than inventing a second, different randomization scheme.
+//
+// Every item re-checks canSendConnect() individually, not just once
+// up front — caps/pause state can change mid-batch (e.g. this exact
+// batch crossing the daily cap partway through), so a later item must
+// be blocked the same way a single test-connect call would be. On the
+// first Safety Engine rejection, the whole batch stops rather than
+// skipping ahead to the next URL — same "stop, don't silently skip"
+// caution CLAUDE.md documents for Calls' history-sync chunking, for the
+// identical reason: skipping would make it look like everything after
+// the block point was simply never attempted, when the real reason is a
+// safety gate.
+app.post(
+  '/api/linkedin/test-connect-batch',
+  asyncHandler(async (req, res) => {
+    const profileUrls: string[] = Array.isArray(req.body?.profileUrls)
+      ? req.body.profileUrls.filter((u: unknown): u is string => typeof u === 'string' && u.trim().length > 0)
+      : [];
+    if (profileUrls.length === 0) {
+      res.status(400).json({ error: 'Missing "profileUrls" (non-empty array of strings)' });
+      return;
+    }
+    const results: Array<{ profileUrl: string; status: 'success' | 'error' | 'skipped'; detail: string | null }> = [];
+    for (let i = 0; i < profileUrls.length; i++) {
+      const profileUrl = profileUrls[i];
+      const safetyCheck = canSendConnect();
+      if (!safetyCheck.allowed) {
+        results.push({ profileUrl, status: 'skipped', detail: safetyCheck.reason ?? 'Blocked by the Safety Engine' });
+        break;
+      }
+      const startedAt = Date.now();
+      try {
+        const timing = await sendConnectionRequest(profileUrl);
+        recordConnectSent();
+        logAction({
+          leadId: null,
+          stepId: null,
+          actionType: 'connect',
+          status: 'success',
+          targetUrl: profileUrl,
+          detail: null,
+          executedAt: startedAt,
+          responseTimeMs: Date.now() - startedAt,
+          timingJson: JSON.stringify(timing),
+        });
+        results.push({ profileUrl, status: 'success', detail: null });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Failed to send connection request';
+        logAction({
+          leadId: null,
+          stepId: null,
+          actionType: 'connect',
+          status: 'error',
+          targetUrl: profileUrl,
+          detail: message,
+          executedAt: startedAt,
+          responseTimeMs: Date.now() - startedAt,
+        });
+        results.push({ profileUrl, status: 'error', detail: message });
+      }
+      if (i < profileUrls.length - 1) {
+        await humanDelay(2000, 6000);
+      }
+    }
+    res.json({ results });
+  }),
+);
+
 // Snapshot for the Settings panel + the always-visible status header:
 // today's/this-week's counts against the *effective* (warm-up-scaled)
 // caps, the pause state, and the raw settings themselves.
@@ -1528,6 +1827,33 @@ app.get(
   '/api/linkedin/safety',
   asyncHandler(async (_req, res) => {
     res.json(getSafetySnapshot());
+  }),
+);
+
+// Today's human-paced plan (dailyPlan.ts) — the Apžvalga dashboard
+// section's "today's plan progress" glance. `firedCount`/`nextSlotAt` are
+// derived here rather than duplicated client-side: `connectsToday` (the
+// same safety-snapshot field the header bar already shows) IS the fired
+// count, since dailyPlan.ts's own nextDueSlot() consumes planned slots in
+// order — see its doc comment.
+app.get(
+  '/api/linkedin/plan/today',
+  asyncHandler(async (req, res) => {
+    const settings = getSafetySettings();
+    const snapshot = getSafetySnapshot();
+    const plan = await getOrCreateTodaysPlan(settings, snapshot.effectiveDailyCap, req.auth!.companyId);
+    const firedCount = Math.min(snapshot.connectsToday, plan.targetCount);
+    const nextSlot = nextDueSlot(plan, Date.now(), snapshot.connectsToday);
+    res.json({
+      date: plan.date,
+      targetCount: plan.targetCount,
+      plannedSlots: plan.plannedSlots,
+      firedCount,
+      // The soonest still-due slot, if any is due *right now* — null just
+      // means "nothing due at this exact moment," not "nothing left
+      // today" (a later un-fired slot can still exist further in plannedSlots).
+      nextSlotDueNowAt: nextSlot,
+    });
   }),
 );
 
@@ -1686,149 +2012,90 @@ app.patch(
   }),
 );
 
-// --- Sequence steps + Scheduler (the Campaign Engine — see scheduler.ts
-// for the actual due-work/execute logic). Every executed step still goes
-// through the Safety Engine at the moment it fires, same as the manual
-// test-connect route above — nothing here bypasses it.
+// --- Campaign graph (the visual builder) + Scheduler (the Campaign
+// Engine — see scheduler.ts for the actual due-work/execute logic).
+// Every executed node still goes through the Safety Engine at the moment
+// it fires, same as the manual test-connect route above — nothing here
+// bypasses it. Replaces the old flat sequence_steps CRUD routes.
+
+const SEQUENCE_NODE_TYPES = new Set([
+  'connect', 'message', 'withdraw', 'view_profile', 'follow', 'like_post', 'wait', 'end',
+  'condition_connected', 'condition_replied', 'condition_followed_back', 'condition_profile_visited',
+  'condition_post_liked', 'condition_custom', 'inmail', 'endorse', 'find_email',
+]);
+const SEQUENCE_EDGE_BRANCHES = new Set(['default', 'yes', 'no']);
 
 app.get(
-  '/api/linkedin/campaigns/:id/steps',
+  '/api/linkedin/campaigns/:id/graph',
   asyncHandler(async (req, res) => {
-    res.json({ steps: listSequenceSteps(req.params.id) });
+    res.json(getCampaignGraph(req.params.id));
   }),
 );
 
-app.post(
-  '/api/linkedin/campaigns/:id/steps',
+/** Bulk replace — see saveCampaignGraph()'s own doc comment on why this is
+ * one endpoint, not per-node/per-edge CRUD: an editor session naturally
+ * touches many nodes/edges in one save (add a few, rewire a few, drag
+ * several into new positions). Validation here is deliberately shape-only
+ * (known types, branch values, numeric positions) — it does not enforce
+ * graph-structural rules like "a condition node has exactly two edges";
+ * the frontend editor is what keeps the graph well-formed, and the
+ * traversal engine (scheduler.ts) simply doesn't fire an edge that isn't
+ * there rather than needing the server to reject a not-yet-finished
+ * in-progress graph a user is still mid-edit on. */
+app.put(
+  '/api/linkedin/campaigns/:id/graph',
   asyncHandler(async (req, res) => {
-    const type = req.body?.type;
-    if (type !== 'connect' && type !== 'message') {
-      res.status(400).json({ error: 'Invalid "type" — must be "connect" or "message"' });
+    const rawNodes = req.body?.nodes;
+    const rawEdges = req.body?.edges;
+    if (!Array.isArray(rawNodes) || !Array.isArray(rawEdges)) {
+      res.status(400).json({ error: '"nodes" and "edges" must both be arrays' });
       return;
     }
-    const delayDays = Number(req.body?.delayDays);
-    if (!Number.isFinite(delayDays) || delayDays < 0) {
-      res.status(400).json({ error: 'Invalid "delayDays"' });
-      return;
-    }
-    const messageTemplate = typeof req.body?.messageTemplate === 'string' ? req.body.messageTemplate : null;
-    res.json(addSequenceStep(req.params.id, type, delayDays, messageTemplate));
-  }),
-);
-
-app.patch(
-  '/api/linkedin/steps/:id',
-  asyncHandler(async (req, res) => {
-    const patch: { delayDays?: number; messageTemplate?: string | null } = {};
-    if (req.body?.delayDays !== undefined) {
-      const delayDays = Number(req.body.delayDays);
-      if (!Number.isFinite(delayDays) || delayDays < 0) {
-        res.status(400).json({ error: 'Invalid "delayDays"' });
+    const nodes: NewSequenceNode[] = [];
+    for (const n of rawNodes) {
+      if (typeof n?.id !== 'string' || !n.id || !SEQUENCE_NODE_TYPES.has(n?.type)) {
+        res.status(400).json({ error: `Invalid node: ${JSON.stringify(n)}` });
         return;
       }
-      patch.delayDays = delayDays;
+      nodes.push({
+        id: n.id,
+        type: n.type,
+        messageTemplate: typeof n.messageTemplate === 'string' ? n.messageTemplate : null,
+        waitDays: typeof n.waitDays === 'number' && Number.isFinite(n.waitDays) ? n.waitDays : null,
+        posX: typeof n.posX === 'number' && Number.isFinite(n.posX) ? n.posX : 0,
+        posY: typeof n.posY === 'number' && Number.isFinite(n.posY) ? n.posY : 0,
+      });
     }
-    if (req.body?.messageTemplate !== undefined) {
-      patch.messageTemplate = typeof req.body.messageTemplate === 'string' ? req.body.messageTemplate : null;
+    const nodeIds = new Set(nodes.map((n) => n.id));
+    const edges: NewSequenceEdge[] = [];
+    for (const e of rawEdges) {
+      const fromNodeId = e?.fromNodeId === null ? null : e?.fromNodeId;
+      if (fromNodeId !== null && (typeof fromNodeId !== 'string' || !nodeIds.has(fromNodeId))) {
+        res.status(400).json({ error: `Invalid edge fromNodeId: ${JSON.stringify(e)}` });
+        return;
+      }
+      if (typeof e?.toNodeId !== 'string' || !nodeIds.has(e.toNodeId) || !SEQUENCE_EDGE_BRANCHES.has(e?.branch)) {
+        res.status(400).json({ error: `Invalid edge: ${JSON.stringify(e)}` });
+        return;
+      }
+      edges.push({ fromNodeId, toNodeId: e.toNodeId, branch: e.branch });
     }
-    updateSequenceStep(req.params.id, patch);
+    saveCampaignGraph(req.params.id, nodes, edges);
     res.json({ ok: true });
   }),
 );
 
-app.delete(
-  '/api/linkedin/steps/:id',
-  asyncHandler(async (req, res) => {
-    deleteSequenceStep(req.params.id);
-    res.json({ ok: true });
-  }),
-);
-
-// What's due right now, without executing anything — the Pending
-// Approval list's data source when manual review is on (the default).
-app.get(
-  '/api/linkedin/scheduler/pending',
-  asyncHandler(async (_req, res) => {
-    res.json({ due: findDueActions() });
-  }),
-);
-
-// Executes exactly one due action, re-verified as still-due at this
-// moment (see approveAction()'s own doc comment) — the frontend's
-// "Approve & send" button per pending item. A real, unrecoverable side
-// effect against an actual LinkedIn profile the instant it succeeds.
-app.post(
-  '/api/linkedin/scheduler/approve',
-  asyncHandler(async (req, res) => {
-    const leadId = typeof req.body?.leadId === 'string' ? req.body.leadId : '';
-    const stepId = typeof req.body?.stepId === 'string' ? req.body.stepId : '';
-    if (!leadId || !stepId) {
-      res.status(400).json({ error: 'Missing "leadId"/"stepId"' });
-      return;
-    }
-    // Optional — the Pending Approval panel's own edited/AI-personalized
-    // text (see /api/linkedin/personalize below), if the user reviewed and
-    // possibly adjusted it before clicking approve. Omitted, this sends
-    // the plain placeholder-substituted template exactly as Phase 1 did.
-    const overrideMessage = typeof req.body?.overrideMessage === 'string' ? req.body.overrideMessage : undefined;
-    const result = await approveAction(leadId, stepId, overrideMessage);
-    res.json(result);
-  }),
-);
-
-// Drafts an AI-personalized version of a due action's message for the
-// human to review/edit *before* approving — never executes anything
-// itself. 404s if the action isn't (or is no longer) due, for the same
-// stale-snapshot reason approve does. Returns the plain placeholder-
-// substituted base text alongside the AI version so the frontend can show
-// "before" for comparison, or fall back to it if AI personalization is
-// declined/unavailable.
-app.post(
-  '/api/linkedin/personalize',
-  asyncHandler(async (req, res) => {
-    const leadId = typeof req.body?.leadId === 'string' ? req.body.leadId : '';
-    const stepId = typeof req.body?.stepId === 'string' ? req.body.stepId : '';
-    if (!leadId || !stepId) {
-      res.status(400).json({ error: 'Missing "leadId"/"stepId"' });
-      return;
-    }
-    const action = findDueAction(leadId, stepId);
-    if (!action) {
-      res.status(404).json({ error: 'This action is no longer due (already handled, or conditions changed).' });
-      return;
-    }
-    if (!action.messageTemplate?.trim()) {
-      res.status(400).json({ error: 'This step has no message/note template to personalize.' });
-      return;
-    }
-    const baseText = applyLeadPlaceholders(action.messageTemplate ?? '', {
-      name: action.leadName,
-      title: action.leadTitle,
-      company: action.leadCompany,
-    });
-    const result = await personalizeLinkedInMessage(
-      {
-        template: action.messageTemplate ?? '',
-        firstName: action.leadName?.trim().split(/\s+/)[0] ?? null,
-        lastName: action.leadName?.trim().split(/\s+/).slice(1).join(' ') || null,
-        title: action.leadTitle,
-        company: action.leadCompany,
-        isConnectNote: action.stepType === 'connect',
-      },
-      requireOpenaiKey(req.auth!.companyId),
-    );
-    res.json({ baseText, personalizedText: result.text });
-  }),
-);
-
-// On-demand trigger — this is now the *only* way this tick ever runs (see
-// the bottom of this file for why the old background setInterval was
-// removed). With manual review on (the default), this never executes
-// anything itself, it only refreshes what's due.
+// On-demand trigger — a manual "▶ Vykdyti dabar" click. The account's own
+// configured OpenAI key (if any) is resolved here from the authenticated
+// request and passed through for the optional auto-personalize step
+// (safety.ts's auto_personalize_enabled) — scheduler.ts itself stays
+// company-agnostic (see its own doc comment on why) and never looks this
+// up on its own.
 app.post(
   '/api/linkedin/scheduler/run',
-  asyncHandler(async (_req, res) => {
-    res.json(await runSchedulerTick());
+  asyncHandler(async (req, res) => {
+    const openaiApiKey = getCompanyIntegrations(req.auth!.companyId)?.openaiApiKey ?? undefined;
+    res.json(await runSchedulerTick(false, openaiApiKey));
   }),
 );
 
@@ -2307,12 +2574,7 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
     res.status(502).json({ error: err.message });
     return;
   }
-  if (
-    err instanceof ContactParseError ||
-    err instanceof SummarizeError ||
-    err instanceof LinkedInPersonalizeError ||
-    err instanceof LinkedInReplyError
-  ) {
+  if (err instanceof ContactParseError || err instanceof SummarizeError || err instanceof LinkedInReplyError) {
     console.error('OpenAI error:', err.message);
     res.status(502).json({ error: err.message });
     return;
@@ -2400,20 +2662,51 @@ app.listen(PORT, HOST, () => {
 
 // Both the Scheduler tick and the Inbox sync USED to also run on their own
 // background setInterval heartbeats (5 min / 10 min) here, independently
-// of any HTTP request or user action. Removed on explicit request — a
-// real, reported problem: the Inbox sync in particular is a handful of
-// real Playwright page navigations against the user's actual LinkedIn
-// Chrome window every 10 minutes, unconditionally (no pause-switch check
-// at all, since it's framed as read/reconcile rather than write/send —
-// see inbox.ts's own doc comment), which was surfacing as "the LinkedIn
-// window keeps turning itself back on by itself" even right after closing
-// it. Both are still fully available — POST /api/linkedin/scheduler/run
-// and POST /api/linkedin/inbox/sync (below) — just only ever triggered by
-// an explicit click now: the "▶ Vykdyti dabar" button in LinkedInView.tsx
-// for the scheduler, and InboxPanel.tsx's existing "↻ Sinchronizuoti
-// dabar" for the inbox (that one was already manual-triggerable; only the
-// *automatic* interval alongside it is what's gone). A due sequence step
-// no longer fires purely on a wall-clock schedule while nobody's
-// looking — it now waits for the next explicit run, matching this
-// project's "only after my own click" request over the "works even with
-// the tab closed" design this originally shipped with.
+// of any HTTP request or user action — then were removed after a real,
+// reported problem: the Inbox sync had *zero* pause-switch check, and
+// getLinkedInPage() unconditionally recreated a closed LinkedIn tab, so
+// the pair of these together kept "turning the window back on" every 10
+// minutes regardless of the pause state or whether the account owner had
+// deliberately closed the tab. Brought back here, on the account owner's
+// own explicit request for genuinely unattended ("turn on and forget")
+// operation — but built on the actual fixes, not the same behavior that
+// caused the original complaint: inbox.ts's syncInbox() now checks
+// isPaused() before doing anything (scheduler.ts's connect/message paths
+// already did, via canSendConnect()/canSendMessage()), and both pass
+// `isAutomatic = true`, which makes getLinkedInPage() (browser.ts) refuse
+// to open a tab that isn't already there — an automatic tick with no
+// LinkedIn tab open just logs a clean skip and waits for the next one,
+// never recreates what was deliberately closed. The Scheduler tick
+// additionally paces itself against dailyPlan.ts's human-realistic daily
+// plan when automatic (see scheduler.ts's own doc comment) — this is what
+// actually spreads sends across the day instead of firing every due lead
+// the instant a tick finds them. Both routes below (POST
+// /api/linkedin/scheduler/run, POST /api/linkedin/inbox/sync) are
+// unchanged and still work exactly as before for an explicit click — only
+// the *automatic* path is new.
+const SCHEDULER_TICK_INTERVAL_MS = 5 * 60 * 1000;
+const INBOX_SYNC_INTERVAL_MS = 10 * 60 * 1000;
+
+setInterval(() => {
+  // Resolved fresh on every tick, not captured once at startup — lets a
+  // key added/changed later via the Integrations UI take effect on the
+  // very next automatic tick rather than needing a server restart.
+  const openaiApiKey = getCompanyIntegrations(ownerCompanyId)?.openaiApiKey ?? undefined;
+  runSchedulerTick(true, openaiApiKey)
+    .then((result) => {
+      if (result.autoExecuted > 0 || result.circuitBreakerTripped || result.errors > 0) {
+        console.log('[linkedin/scheduler] automatic tick:', result);
+      }
+    })
+    .catch((err) => console.error('[linkedin/scheduler] automatic tick failed:', err));
+}, SCHEDULER_TICK_INTERVAL_MS);
+
+setInterval(() => {
+  syncInbox(true)
+    .then((result) => {
+      if (result.newMessages > 0 || result.leadsPromoted > 0 || result.leadsMarkedReplied > 0) {
+        console.log('[linkedin/inbox] automatic sync:', result);
+      }
+    })
+    .catch((err) => console.error('[linkedin/inbox] automatic sync failed:', err));
+}, INBOX_SYNC_INTERVAL_MS);

@@ -16,9 +16,26 @@ interface WorkspaceViewProps {
    * workers (see canManageTables below — same role gate). */
   onOpenWorkers?: () => void;
   onOpenIntegrations?: () => void;
+  /** "Naujienos" — unlike Workers/Integrations this isn't an admin-only
+   * screen (no secrets, nothing to manage that affects other users), so
+   * it's shown to every user including workers whenever the company has
+   * it configured (App.tsx gates the prop itself on
+   * enabledFeatures.includes('news'), not on role). Lives on this screen
+   * rather than as an in-table tab per explicit request — it's not scoped
+   * to any particular table. */
+  onOpenNews?: () => void;
+  /** "Pamokos" — unlike News this one still also lives as its own in-table
+   * tab (App.tsx's `allowedTabs.has('lessons')`, unchanged); this is a
+   * second, additional entry point on the Workspace screen itself, added
+   * per explicit request so it's reachable without first opening a table.
+   * Gated by the exact same `allowedTabs.has('lessons')` check as the
+   * in-table tab (not the broader "every role" rule News uses), so a
+   * worker whose visibleTabs excludes lessons doesn't gain access to it
+   * just because this second entry point exists. */
+  onOpenLessons?: () => void;
 }
 
-export function WorkspaceView({ onOpenTable, onOpenWorkers, onOpenIntegrations }: WorkspaceViewProps) {
+export function WorkspaceView({ onOpenTable, onOpenWorkers, onOpenIntegrations, onOpenNews, onOpenLessons }: WorkspaceViewProps) {
   const tables = useWorkspaceStore((s) => s.tables);
   const createTable = useWorkspaceStore((s) => s.createTable);
   const renameTable = useWorkspaceStore((s) => s.renameTable);
@@ -80,6 +97,16 @@ export function WorkspaceView({ onOpenTable, onOpenWorkers, onOpenIntegrations }
           {canManageTables && onOpenIntegrations && (
             <button type="button" onClick={onOpenIntegrations}>
               API raktai
+            </button>
+          )}
+          {onOpenNews && (
+            <button type="button" onClick={onOpenNews}>
+              Naujienos
+            </button>
+          )}
+          {onOpenLessons && (
+            <button type="button" onClick={onOpenLessons}>
+              Pamokos
             </button>
           )}
           {canManageTables && (

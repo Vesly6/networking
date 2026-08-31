@@ -16,6 +16,7 @@ import {
   type CallStatRecord,
 } from '../../utils/callStats';
 import { BarChart, type BarChartPoint } from './BarChart';
+import { ArrowLeft, ArrowRight } from 'lucide-react';
 
 type Period = 'week' | 'month';
 
@@ -159,11 +160,11 @@ export function CallsStatsView() {
         </div>
         <div className="calls-stats-range-nav">
           <button type="button" onClick={() => shift(-1)} title="Ankstesnis">
-            ←
+            <ArrowLeft className="icon" size={16} />
           </button>
           <span className="calls-stats-range-title">{rangeTitle(start, end, period)}</span>
           <button type="button" onClick={() => shift(1)} title="Kitas">
-            →
+            <ArrowRight className="icon" size={16} />
           </button>
         </div>
         {historySyncing && historySyncProgress && (

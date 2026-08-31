@@ -3,6 +3,7 @@ import { useTableStore } from '../../store/useTableStore';
 import { getLinkedContactName, getNextActionColumn, getNextActionPhone, getPrimaryLabel } from '../../utils/row';
 import { formatDisplayDate, getTimePart, isDueToday, isOverdue } from '../../utils/date';
 import type { Row } from '../../types';
+import { MoreHorizontal, ArrowRight } from 'lucide-react';
 
 interface TaskListViewProps {
   onJumpToRow: (rowId: string) => void;
@@ -85,10 +86,10 @@ export function TaskListView({ onJumpToRow }: TaskListViewProps) {
           title={expanded ? 'Slėpti detales' : 'Rodyti detales'}
           onClick={() => toggleExpanded(row.id)}
         >
-          ⋯
+          <MoreHorizontal className="icon" size={16} />
         </button>
         <button type="button" className="task-open" onClick={() => onJumpToRow(row.id)}>
-          Atverti lentelėje →
+          Atverti lentelėje <ArrowRight className="icon" size={14} />
         </button>
       </li>
     );

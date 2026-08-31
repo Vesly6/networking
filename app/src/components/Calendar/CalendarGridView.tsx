@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { useTableStore } from '../../store/useTableStore';
 import { getLinkedContactName, getNextActionColumn, getNextActionPhone, getPrimaryLabel } from '../../utils/row';
 import { getDatePart, getMonthGrid, getTimePart, monthLabel, nextMonth, prevMonth, todayISO } from '../../utils/date';
+import { ArrowLeft, ArrowRight } from 'lucide-react';
 
 interface CalendarGridViewProps {
   onJumpToRow: (rowId: string) => void;
@@ -56,11 +57,11 @@ export function CalendarGridView({ onJumpToRow }: CalendarGridViewProps) {
     <div className="calendar-grid-view">
       <div className="calendar-nav">
         <button type="button" onClick={() => setMonth((m) => prevMonth(m))}>
-          ←
+          <ArrowLeft className="icon" size={16} />
         </button>
         <strong className="calendar-month-label">{monthLabel(month)}</strong>
         <button type="button" onClick={() => setMonth((m) => nextMonth(m))}>
-          →
+          <ArrowRight className="icon" size={16} />
         </button>
         <button type="button" className="calendar-today-btn" onClick={() => setMonth(new Date())}>
           Šiandien

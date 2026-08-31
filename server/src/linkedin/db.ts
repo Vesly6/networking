@@ -53,16 +53,24 @@ function migrate(database: Database.Database): void {
       message_template TEXT
     );
 
+    -- step_id is deliberately NOT foreign-keyed to any specific table (a
+    -- fresh install gets this shape immediately) — see the graph-builder
+    -- migration below for why: it needs to hold either a legacy
+    -- sequence_steps.id (old rows) or a sequence_nodes.id (new rows) going
+    -- forward, and actions_log is an insert-only historical log, not
+    -- something else joins against for correctness, so strict enforcement
+    -- here was never load-bearing the way it is for leads(id).
     CREATE TABLE IF NOT EXISTS actions_log (
       id TEXT PRIMARY KEY,
       lead_id TEXT REFERENCES leads(id) ON DELETE SET NULL,
-      step_id TEXT REFERENCES sequence_steps(id) ON DELETE SET NULL,
+      step_id TEXT,
       action_type TEXT NOT NULL,
       status TEXT NOT NULL,
       target_url TEXT,
       detail TEXT,
       executed_at INTEGER NOT NULL,
-      response_time_ms INTEGER
+      response_time_ms INTEGER,
+      timing_json TEXT
     );
 
     -- Not in the TZ's own minimal schema — added because a real inbox UI
@@ -95,14 +103,163 @@ function migrate(database: Database.Database): void {
       connects_sent INTEGER NOT NULL DEFAULT 0,
       messages_sent INTEGER NOT NULL DEFAULT 0,
       profile_views INTEGER NOT NULL DEFAULT 0,
-      warm_up_day INTEGER NOT NULL DEFAULT 0
+      warm_up_day INTEGER NOT NULL DEFAULT 0,
+      searches_used INTEGER NOT NULL DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+
+    -- One row per *local calendar day in the account's own workHoursTimezone*
+    -- (dailyPlan.ts), not a UTC day — generated once, the first time it's
+    -- needed that day, and never regenerated afterward so the day's planned
+    -- slot times stay fixed even as the scheduler ticks repeatedly.
+    CREATE TABLE IF NOT EXISTS daily_schedule (
+      date TEXT PRIMARY KEY,
+      planned_slots TEXT NOT NULL,
+      target_count INTEGER NOT NULL,
+      is_weekend INTEGER NOT NULL,
+      generated_at INTEGER NOT NULL
+    );
+
+    -- The visual campaign-builder graph (replaces the flat sequence_steps
+    -- list — see the migration below for how existing linear campaigns
+    -- carry over). Action nodes have at most one outgoing edge
+    -- (branch='default'); condition nodes have exactly two ('yes'/'no').
+    -- A 'wait' node is purely structural/timing — the traversal engine
+    -- (scheduler.ts's resolveNextNode) walks straight through it, it's
+    -- never itself "the lead's current position" and never gets its own
+    -- actions_log row, so its id never needs to be stable across a re-save.
+    CREATE TABLE IF NOT EXISTS sequence_nodes (
+      id TEXT PRIMARY KEY,
+      campaign_id TEXT NOT NULL REFERENCES campaigns(id),
+      type TEXT NOT NULL,
+      message_template TEXT,
+      wait_days INTEGER,
+      pos_x REAL NOT NULL DEFAULT 0,
+      pos_y REAL NOT NULL DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS sequence_edges (
+      id TEXT PRIMARY KEY,
+      campaign_id TEXT NOT NULL REFERENCES campaigns(id),
+      from_node_id TEXT REFERENCES sequence_nodes(id) ON DELETE CASCADE,
+      to_node_id TEXT NOT NULL REFERENCES sequence_nodes(id) ON DELETE CASCADE,
+      branch TEXT NOT NULL DEFAULT 'default'
+    );
   `);
+  // Additive migration for databases created before searches_used existed
+  // — CREATE TABLE IF NOT EXISTS above is a no-op against an
+  // already-existing safety_state table, same pattern accounts/db.ts uses
+  // for its own post-launch columns.
+  try {
+    database.exec(`ALTER TABLE safety_state ADD COLUMN searches_used INTEGER NOT NULL DEFAULT 0`);
+  } catch {
+    // Column already exists — nothing to do.
+  }
+  try {
+    database.exec(`ALTER TABLE actions_log ADD COLUMN timing_json TEXT`);
+  } catch {
+    // Column already exists — nothing to do.
+  }
+
+  migrateActionsLogStepIdFk(database);
+  migrateLegacySequenceStepsToGraph(database);
+}
+
+/** One-time table recreation for a database created before actions_log's
+ * step_id column dropped its FK to sequence_steps(id) — SQLite has no
+ * ALTER TABLE for changing/dropping a foreign key, so this is the standard
+ * "create the new shape, copy every row, drop the old table, rename"
+ * recipe, wrapped in a transaction (atomic — either the whole swap lands or
+ * none of it does) and only run once (checked via the table's own current
+ * foreign_key_list rather than a separate version flag, so it's correct
+ * even if this function is somehow called twice). A fresh install never
+ * hits this path at all — its actions_log is created directly in the
+ * unreferenced shape above. */
+function migrateActionsLogStepIdFk(database: Database.Database): void {
+  const fks = database.prepare(`PRAGMA foreign_key_list(actions_log)`).all() as Array<{ table: string; from: string }>;
+  const hasLegacyFk = fks.some((fk) => fk.from === 'step_id' && fk.table === 'sequence_steps');
+  if (!hasLegacyFk) return;
+
+  database.pragma('foreign_keys = OFF');
+  try {
+    const tx = database.transaction(() => {
+      database.exec(`
+        CREATE TABLE actions_log_new (
+          id TEXT PRIMARY KEY,
+          lead_id TEXT REFERENCES leads(id) ON DELETE SET NULL,
+          step_id TEXT,
+          action_type TEXT NOT NULL,
+          status TEXT NOT NULL,
+          target_url TEXT,
+          detail TEXT,
+          executed_at INTEGER NOT NULL,
+          response_time_ms INTEGER,
+          timing_json TEXT
+        );
+        INSERT INTO actions_log_new (id, lead_id, step_id, action_type, status, target_url, detail, executed_at, response_time_ms)
+          SELECT id, lead_id, step_id, action_type, status, target_url, detail, executed_at, response_time_ms FROM actions_log;
+        DROP TABLE actions_log;
+        ALTER TABLE actions_log_new RENAME TO actions_log;
+      `);
+    });
+    tx();
+  } finally {
+    database.pragma('foreign_keys = ON');
+  }
+}
+
+/** For any campaign that still only has the old flat sequence_steps list
+ * and no sequence_nodes yet, auto-converts it into an equivalent
+ * straight-line graph — zero manual action needed (contrast with
+ * migrateTableData.ts's frontend button, which exists because *that*
+ * migration crosses a network boundary; this is a same-database transform,
+ * nothing justifies making it manual). Each old step becomes one action
+ * node — reusing the OLD step's own id — so any actions_log row already
+ * pointing at that id (a lead mid-sequence) keeps resolving to the exact
+ * same logical position after the swap. A step with delayDays > 0 gets a
+ * synthesized 'wait' node (fresh id — never logged, see the table's own
+ * comment above) spliced in just before it. */
+function migrateLegacySequenceStepsToGraph(database: Database.Database): void {
+  const campaignIds = database.prepare(`SELECT DISTINCT campaign_id FROM sequence_steps`).all() as Array<{ campaign_id: string }>;
+  for (const { campaign_id: campaignId } of campaignIds) {
+    const alreadyMigrated = database.prepare(`SELECT 1 FROM sequence_nodes WHERE campaign_id = ? LIMIT 1`).get(campaignId);
+    if (alreadyMigrated) continue;
+
+    const steps = database
+      .prepare(`SELECT * FROM sequence_steps WHERE campaign_id = ? ORDER BY step_order ASC`)
+      .all(campaignId) as Array<{ id: string; type: string; delay_days: number; message_template: string | null }>;
+    if (steps.length === 0) continue;
+
+    const insertNode = database.prepare(
+      `INSERT INTO sequence_nodes (id, campaign_id, type, message_template, wait_days, pos_x, pos_y) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const insertEdge = database.prepare(
+      `INSERT INTO sequence_edges (id, campaign_id, from_node_id, to_node_id, branch) VALUES (?, ?, ?, ?, 'default')`,
+    );
+
+    const tx = database.transaction(() => {
+      let previousNodeId: string | null = null; // null = the start edge
+      let yPos = 0;
+      for (const step of steps) {
+        if (step.delay_days > 0) {
+          const waitId = randomUUID();
+          insertNode.run(waitId, campaignId, 'wait', null, step.delay_days, 0, yPos);
+          insertEdge.run(randomUUID(), campaignId, previousNodeId, waitId);
+          previousNodeId = waitId;
+          yPos += 120;
+        }
+        insertNode.run(step.id, campaignId, step.type, step.message_template, null, 0, yPos);
+        insertEdge.run(randomUUID(), campaignId, previousNodeId, step.id);
+        previousNodeId = step.id;
+        yPos += 120;
+      }
+    });
+    tx();
+  }
 }
 
 function getDb(): Database.Database {
@@ -133,6 +290,15 @@ export interface ActionLogEntry {
   detail: string | null;
   executedAt: number;
   responseTimeMs: number | null;
+  /** JSON-serialized per-action timing breakdown (page.ts's ConnectTiming
+   * for a 'connect' action — when it navigated, scrolled, whether it
+   * visited the lead's recent-activity page and for how long, when
+   * Connect was actually clicked, when it was actually sent) — kept in
+   * its own column rather than overloading `detail` (which stays
+   * error-text-only) since the two are different shapes for different
+   * purposes. Null for action types that don't build a breakdown, and for
+   * any row logged before this column existed. */
+  timingJson?: string | null;
 }
 
 /** Phase 0's one write path — logs the outcome of the manual test connect
@@ -142,10 +308,10 @@ export interface ActionLogEntry {
 export function logAction(entry: Omit<ActionLogEntry, 'id'>): void {
   getDb()
     .prepare(
-      `INSERT INTO actions_log (id, lead_id, step_id, action_type, status, target_url, detail, executed_at, response_time_ms)
-       VALUES (@id, @leadId, @stepId, @actionType, @status, @targetUrl, @detail, @executedAt, @responseTimeMs)`,
+      `INSERT INTO actions_log (id, lead_id, step_id, action_type, status, target_url, detail, executed_at, response_time_ms, timing_json)
+       VALUES (@id, @leadId, @stepId, @actionType, @status, @targetUrl, @detail, @executedAt, @responseTimeMs, @timingJson)`,
     )
-    .run({ id: randomUUID(), ...entry });
+    .run({ id: randomUUID(), ...entry, timingJson: entry.timingJson ?? null });
 }
 
 interface ActionLogRow {
@@ -158,6 +324,7 @@ interface ActionLogRow {
   detail: string | null;
   executed_at: number;
   response_time_ms: number | null;
+  timing_json: string | null;
 }
 
 function actionLogFromRow(r: ActionLogRow): ActionLogEntry {
@@ -171,6 +338,7 @@ function actionLogFromRow(r: ActionLogRow): ActionLogEntry {
     detail: r.detail,
     executedAt: r.executed_at,
     responseTimeMs: r.response_time_ms,
+    timingJson: r.timing_json,
   };
 }
 
@@ -248,6 +416,7 @@ export interface SafetyStateRow {
   connectsSent: number;
   messagesSent: number;
   profileViews: number;
+  searchesUsed: number;
 }
 
 function todayDateString(): string {
@@ -261,7 +430,7 @@ export function getTodaySafetyState(): SafetyStateRow {
   const date = todayDateString();
   const database = getDb();
   const existing = database.prepare(`SELECT * FROM safety_state WHERE date = ?`).get(date) as
-    | { date: string; connects_sent: number; messages_sent: number; profile_views: number }
+    | { date: string; connects_sent: number; messages_sent: number; profile_views: number; searches_used: number }
     | undefined;
   if (existing) {
     return {
@@ -269,15 +438,16 @@ export function getTodaySafetyState(): SafetyStateRow {
       connectsSent: existing.connects_sent,
       messagesSent: existing.messages_sent,
       profileViews: existing.profile_views,
+      searchesUsed: existing.searches_used,
     };
   }
   database
-    .prepare(`INSERT INTO safety_state (id, date, connects_sent, messages_sent, profile_views, warm_up_day) VALUES (?, ?, 0, 0, 0, 0)`)
+    .prepare(`INSERT INTO safety_state (id, date, connects_sent, messages_sent, profile_views, warm_up_day, searches_used) VALUES (?, ?, 0, 0, 0, 0, 0)`)
     .run(randomUUID(), date);
-  return { date, connectsSent: 0, messagesSent: 0, profileViews: 0 };
+  return { date, connectsSent: 0, messagesSent: 0, profileViews: 0, searchesUsed: 0 };
 }
 
-export function incrementSafetyCounter(field: 'connects_sent' | 'messages_sent' | 'profile_views'): void {
+export function incrementSafetyCounter(field: 'connects_sent' | 'messages_sent' | 'profile_views' | 'searches_used'): void {
   getTodaySafetyState(); // ensures today's row exists before the UPDATE below
   getDb()
     .prepare(`UPDATE safety_state SET ${field} = ${field} + 1 WHERE date = ?`)
@@ -294,6 +464,60 @@ export function getWeekSafetyTotals(): { connects: number; messages: number } {
               FROM safety_state WHERE date >= ?`)
     .get(sevenDaysAgo) as { connects: number; messages: number };
   return row;
+}
+
+// --- Daily schedule (dailyPlan.ts's human-paced daily plan) ---
+
+export interface DailyScheduleRow {
+  date: string;
+  plannedSlots: number[];
+  targetCount: number;
+  isWeekend: boolean;
+  generatedAt: number;
+}
+
+interface RawDailyScheduleRow {
+  date: string;
+  planned_slots: string;
+  target_count: number;
+  is_weekend: number;
+  generated_at: number;
+}
+
+function dailyScheduleFromRow(r: RawDailyScheduleRow): DailyScheduleRow {
+  return {
+    date: r.date,
+    plannedSlots: JSON.parse(r.planned_slots) as number[],
+    targetCount: r.target_count,
+    isWeekend: r.is_weekend === 1,
+    generatedAt: r.generated_at,
+  };
+}
+
+/** `date` is a *local calendar date in the account's own workHoursTimezone*
+ * (see safety.ts's getZonedDateParts), not a UTC date — deliberately a
+ * different notion of "today" than safety_state's own todayDateString()
+ * above, since this is specifically about when the account owner's day
+ * actually starts/ends, not about a fixed cap-counting window. */
+export function getDailySchedule(date: string): DailyScheduleRow | null {
+  const row = getDb().prepare(`SELECT * FROM daily_schedule WHERE date = ?`).get(date) as RawDailyScheduleRow | undefined;
+  return row ? dailyScheduleFromRow(row) : null;
+}
+
+export function saveDailySchedule(schedule: DailyScheduleRow): void {
+  getDb()
+    .prepare(
+      `INSERT INTO daily_schedule (date, planned_slots, target_count, is_weekend, generated_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(date) DO NOTHING`,
+    )
+    .run(
+      schedule.date,
+      JSON.stringify(schedule.plannedSlots),
+      schedule.targetCount,
+      schedule.isWeekend ? 1 : 0,
+      schedule.generatedAt,
+    );
 }
 
 // --- Campaigns ---
@@ -382,6 +606,12 @@ export function deleteCampaign(id: string): void {
   const tx = database.transaction(() => {
     database.prepare(`DELETE FROM leads WHERE campaign_id = ?`).run(id);
     database.prepare(`DELETE FROM sequence_steps WHERE campaign_id = ?`).run(id);
+    // Edges before nodes — both are also ON DELETE CASCADE from
+    // sequence_nodes, but deleting explicitly here (rather than relying
+    // solely on the cascade) keeps this function's own intent readable
+    // without needing to cross-reference the schema to know what happens.
+    database.prepare(`DELETE FROM sequence_edges WHERE campaign_id = ?`).run(id);
+    database.prepare(`DELETE FROM sequence_nodes WHERE campaign_id = ?`).run(id);
     database.prepare(`DELETE FROM campaigns WHERE id = ?`).run(id);
   });
   tx();
@@ -583,116 +813,160 @@ export function deleteLead(id: string): void {
   getDb().prepare(`DELETE FROM leads WHERE id = ?`).run(id);
 }
 
-// --- Sequence steps ---
-// Deliberately just two step *types* (connect/message), not a third
-// "wait" type the way TZ_LinkedIn_Automation.md's own schema lists it —
-// every step (including the first) carries its own delayDays, meaning
-// "wait this long after the previous step before firing this one" is a
-// property of the step itself rather than a separate step in the list.
-// Same sequencing power ("connect -> wait N days -> follow-up"), one
-// fewer moving part to schedule around.
+// The old flat sequence_steps CRUD (addSequenceStep/listSequenceSteps/
+// deleteSequenceStep/updateSequenceStep) is gone — the visual graph
+// builder (sequence_nodes/sequence_edges, below) is the live source of
+// truth now. The sequence_steps *table* itself is deliberately still
+// created (see migrate() above) and never dropped: it's what
+// migrateLegacySequenceStepsToGraph() reads from to convert an old
+// campaign on first load after upgrading, and dropping it would destroy
+// that one-time migration's own source data before it's had a chance to
+// run against every existing database.
 
-export type SequenceStepType = 'connect' | 'message';
+// --- Campaign graph (the visual builder — replaces sequence_steps as the
+// live source of truth; see migrateLegacySequenceStepsToGraph above for
+// how an old flat campaign gets converted). ---
 
-export interface SequenceStep {
+// The "coming soon" types (condition_followed_back/profile_visited/
+// post_liked/custom, inmail, endorse, find_email) are real, storable
+// values — the frontend palette just renders them disabled — so a
+// half-built graph a user experimented with before they were wired up
+// doesn't silently lose those nodes.
+export type SequenceNodeType =
+  | 'connect'
+  | 'message'
+  | 'withdraw'
+  | 'view_profile'
+  | 'follow'
+  | 'like_post'
+  | 'wait'
+  | 'end'
+  | 'condition_connected'
+  | 'condition_replied'
+  | 'condition_followed_back'
+  | 'condition_profile_visited'
+  | 'condition_post_liked'
+  | 'condition_custom'
+  | 'inmail'
+  | 'endorse'
+  | 'find_email';
+
+export interface SequenceNode {
   id: string;
   campaignId: string;
-  stepOrder: number;
-  type: SequenceStepType;
-  delayDays: number;
+  type: SequenceNodeType;
   messageTemplate: string | null;
+  waitDays: number | null;
+  posX: number;
+  posY: number;
 }
 
-interface SequenceStepRow {
+export interface SequenceEdge {
+  id: string;
+  campaignId: string;
+  /** null = the graph's single start edge (points at the first node). */
+  fromNodeId: string | null;
+  toNodeId: string;
+  branch: 'default' | 'yes' | 'no';
+}
+
+interface SequenceNodeRow {
   id: string;
   campaign_id: string;
-  step_order: number;
-  type: SequenceStepType;
-  delay_days: number;
+  type: SequenceNodeType;
   message_template: string | null;
+  wait_days: number | null;
+  pos_x: number;
+  pos_y: number;
 }
 
-function stepFromRow(r: SequenceStepRow): SequenceStep {
-  return {
-    id: r.id,
-    campaignId: r.campaign_id,
-    stepOrder: r.step_order,
-    type: r.type,
-    delayDays: r.delay_days,
-    messageTemplate: r.message_template,
-  };
+interface SequenceEdgeRow {
+  id: string;
+  campaign_id: string;
+  from_node_id: string | null;
+  to_node_id: string;
+  branch: 'default' | 'yes' | 'no';
 }
 
-/** Always appends at the end (step_order = current max + 1) — reordering
- * isn't exposed yet; delete and re-add in the right order if needed. */
-export function addSequenceStep(
-  campaignId: string,
-  type: SequenceStepType,
-  delayDays: number,
-  messageTemplate: string | null,
-): SequenceStep {
+function nodeFromRow(r: SequenceNodeRow): SequenceNode {
+  return { id: r.id, campaignId: r.campaign_id, type: r.type, messageTemplate: r.message_template, waitDays: r.wait_days, posX: r.pos_x, posY: r.pos_y };
+}
+
+function edgeFromRow(r: SequenceEdgeRow): SequenceEdge {
+  return { id: r.id, campaignId: r.campaign_id, fromNodeId: r.from_node_id, toNodeId: r.to_node_id, branch: r.branch };
+}
+
+export function getCampaignGraph(campaignId: string): { nodes: SequenceNode[]; edges: SequenceEdge[] } {
   const database = getDb();
-  const { m } = database.prepare(`SELECT COALESCE(MAX(step_order), -1) AS m FROM sequence_steps WHERE campaign_id = ?`).get(campaignId) as {
-    m: number;
-  };
-  const stepOrder = m + 1;
-  const id = randomUUID();
-  database
-    .prepare(`INSERT INTO sequence_steps (id, campaign_id, step_order, type, delay_days, message_template) VALUES (?, ?, ?, ?, ?, ?)`)
-    .run(id, campaignId, stepOrder, type, delayDays, messageTemplate);
-  return { id, campaignId, stepOrder, type, delayDays, messageTemplate };
+  const nodes = (database.prepare(`SELECT * FROM sequence_nodes WHERE campaign_id = ?`).all(campaignId) as SequenceNodeRow[]).map(nodeFromRow);
+  const edges = (database.prepare(`SELECT * FROM sequence_edges WHERE campaign_id = ?`).all(campaignId) as SequenceEdgeRow[]).map(edgeFromRow);
+  return { nodes, edges };
 }
 
-export function listSequenceSteps(campaignId: string): SequenceStep[] {
-  const rows = getDb()
-    .prepare(`SELECT * FROM sequence_steps WHERE campaign_id = ? ORDER BY step_order ASC`)
-    .all(campaignId) as SequenceStepRow[];
-  return rows.map(stepFromRow);
+export interface NewSequenceNode {
+  id: string;
+  type: SequenceNodeType;
+  messageTemplate: string | null;
+  waitDays: number | null;
+  posX: number;
+  posY: number;
 }
 
-export function deleteSequenceStep(id: string): void {
-  getDb().prepare(`DELETE FROM sequence_steps WHERE id = ?`).run(id);
+export interface NewSequenceEdge {
+  fromNodeId: string | null;
+  toNodeId: string;
+  branch: 'default' | 'yes' | 'no';
 }
 
-/** Partial update — only `delayDays`/`messageTemplate` are editable (not
- * `type`/`stepOrder`, which would change what "completing this step" even
- * means for leads that already have actions logged against it). Added
- * specifically so an existing step's message text can be changed without
- * deleting and re-adding it: a delete sets every actions_log row's step_id
- * to NULL (ON DELETE SET NULL), which would silently reset
- * getLastCompletedStepOrder() back to -1 for any lead that had already
- * completed that exact step — making the scheduler think they need to
- * redo it. Editing in place avoids that entirely. */
-export function updateSequenceStep(id: string, patch: { delayDays?: number; messageTemplate?: string | null }): void {
+/** Bulk replace, one transaction — an editor session naturally touches many
+ * nodes/edges at once (add a few, rewire a few, drag several into new
+ * positions), same "one bulk endpoint, not N per-item calls" reasoning as
+ * useTableStore's saveRows()/PUT /api/rows. Client-supplied node ids are
+ * kept as-is (not regenerated) specifically so a node that already has
+ * actions_log history against its id keeps that history attached across a
+ * save — only genuinely new nodes get a fresh id, assigned client-side
+ * before this is called. */
+export function saveCampaignGraph(campaignId: string, nodes: NewSequenceNode[], edges: NewSequenceEdge[]): void {
   const database = getDb();
-  if (patch.delayDays !== undefined) {
-    database.prepare(`UPDATE sequence_steps SET delay_days = ? WHERE id = ?`).run(patch.delayDays, id);
-  }
-  if (patch.messageTemplate !== undefined) {
-    database.prepare(`UPDATE sequence_steps SET message_template = ? WHERE id = ?`).run(patch.messageTemplate, id);
-  }
+  const tx = database.transaction(() => {
+    database.prepare(`DELETE FROM sequence_edges WHERE campaign_id = ?`).run(campaignId);
+    database.prepare(`DELETE FROM sequence_nodes WHERE campaign_id = ?`).run(campaignId);
+    const insertNode = database.prepare(
+      `INSERT INTO sequence_nodes (id, campaign_id, type, message_template, wait_days, pos_x, pos_y) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    );
+    for (const n of nodes) {
+      insertNode.run(n.id, campaignId, n.type, n.messageTemplate, n.waitDays, n.posX, n.posY);
+    }
+    const insertEdge = database.prepare(
+      `INSERT INTO sequence_edges (id, campaign_id, from_node_id, to_node_id, branch) VALUES (?, ?, ?, ?, ?)`,
+    );
+    for (const e of edges) {
+      insertEdge.run(randomUUID(), campaignId, e.fromNodeId, e.toNodeId, e.branch);
+    }
+  });
+  tx();
 }
 
 // --- Lead progress (derived from actions_log, not a separate tracked
-// column) — "what step is this lead currently on" is always computed
+// column) — "what node this lead is currently at" is always computed
 // from its own history of successful actions rather than stored
 // redundantly, so the two can never drift out of sync with each other. ---
 
-/** The step_order of the most recent *successful* action taken for this
- * lead, or -1 if none yet (meaning the lead hasn't started the sequence
- * at all — its next step is step_order 0). */
-export function getLastCompletedStepOrder(leadId: string): number {
+/** The id of the sequence_nodes row for the most recent *successful*
+ * action taken for this lead, or null if none yet (meaning the lead
+ * hasn't started the graph at all — its next node is whatever the start
+ * edge points to). Deliberately just reads actions_log.step_id back
+ * verbatim and trusts it as a node id — see actions_log's own schema
+ * comment on why that column dropped its FK: this is exactly the
+ * "resolve it as whatever the current model calls a position" flexibility
+ * that bought, working unchanged for both a legacy-migrated node (which
+ * kept its old sequence_steps id, see migrateLegacySequenceStepsToGraph)
+ * and a brand new one. */
+export function getLastCompletedNodeId(leadId: string): string | null {
   const row = getDb()
-    .prepare(
-      `SELECT s.step_order AS step_order
-       FROM actions_log a
-       JOIN sequence_steps s ON s.id = a.step_id
-       WHERE a.lead_id = ? AND a.status = 'success'
-       ORDER BY a.executed_at DESC
-       LIMIT 1`,
-    )
-    .get(leadId) as { step_order: number } | undefined;
-  return row?.step_order ?? -1;
+    .prepare(`SELECT step_id FROM actions_log WHERE lead_id = ? AND status = 'success' AND step_id IS NOT NULL ORDER BY executed_at DESC LIMIT 1`)
+    .get(leadId) as { step_id: string } | undefined;
+  return row?.step_id ?? null;
 }
 
 export function getLastActionTime(leadId: string): number | null {

@@ -1,4 +1,5 @@
 import { useIncomingCallStore } from '../store/useIncomingCallStore';
+import { Phone, ArrowRight, X } from 'lucide-react';
 
 interface IncomingCallBannerProps {
   onJumpToRow: (rowId: string) => void;
@@ -27,18 +28,20 @@ export function IncomingCallBanner({ onJumpToRow, onJumpToContact }: IncomingCal
 
   return (
     <div className="incoming-call-banner">
-      <span className="incoming-call-banner-icon">📞</span>
+      <span className="incoming-call-banner-icon">
+        <Phone className="icon" size={18} />
+      </span>
       <div className="incoming-call-banner-body">
         <span className="incoming-call-banner-title">Skambina: {match?.label ?? callerNumber}</span>
         {match && <span className="incoming-call-banner-number">{callerNumber}</span>}
       </div>
       {match && (
         <button type="button" className="incoming-call-banner-jump" onClick={handleJump}>
-          Atverti lentelėje →
+          Atverti lentelėje <ArrowRight className="icon" size={14} />
         </button>
       )}
       <button type="button" className="incoming-call-banner-close" onClick={clear} title="Uždaryti">
-        ✕
+        <X className="icon" size={16} />
       </button>
     </div>
   );

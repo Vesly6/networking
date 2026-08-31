@@ -25,9 +25,11 @@ import { LoginScreen } from './components/LoginScreen';
 import { RegistrationView } from './components/RegistrationView';
 import { WorkersView } from './components/Workers/WorkersView';
 import { IntegrationsView } from './components/Integrations/IntegrationsView';
+import { NewsView } from './components/News/NewsView';
 import { BrandLogo } from './components/BrandLogo';
 import { getNextActionColumn } from './utils/row';
 import { isOverdue, isDueToday } from './utils/date';
+import { ArrowLeft, Clock, Bell, BellOff, Menu } from 'lucide-react';
 import './App.css';
 
 type Tab = 'table' | 'calendar' | 'calls' | 'search' | 'linkedin' | 'instantly' | 'email' | 'lessons';
@@ -76,7 +78,7 @@ function App() {
   // onOpenWorkers/onOpenIntegrations), which is now their only entry
   // point (see the Tab/AppScreen comment above for why they were moved
   // out of the in-table nav).
-  const [workspaceScreen, setWorkspaceScreen] = useState<'tables' | 'integrations' | 'workers'>('tables');
+  const [workspaceScreen, setWorkspaceScreen] = useState<'tables' | 'integrations' | 'workers' | 'news' | 'lessons'>('tables');
   const [focusRowId, setFocusRowId] = useState<string | null>(null);
   const [focusContact, setFocusContact] = useState<{ rowId: string; columnId: string; contactId: string } | null>(null);
   const [editingTitle, setEditingTitle] = useState(false);
@@ -199,6 +201,13 @@ function App() {
     }
     return companyTabs;
   }, [user]);
+
+  // Not part of allowedTabs/Tab — News lives on the Workspace screen
+  // (WorkspaceView), not as an in-table tab, so it isn't scoped to any
+  // particular table and isn't subject to a worker's per-table-tab
+  // visibleTabs restriction the way allowedTabs' contents are. Every user
+  // whose company has it configured sees it, regardless of role.
+  const newsAvailable = (user?.company?.enabledFeatures ?? []).includes('news');
 
   const dueBadge = useMemo(() => {
     const dateColumn = getNextActionColumn(columns);
@@ -380,23 +389,35 @@ function App() {
       <TypeToConfirmDialog />
       {!activeTable ? (
         <div className="app">
-          {workspaceScreen === 'integrations' || workspaceScreen === 'workers' ? (
+          {workspaceScreen === 'integrations' || workspaceScreen === 'workers' || workspaceScreen === 'news' || workspaceScreen === 'lessons' ? (
             <div className="workspace-view">
               <div className="workspace-header">
                 <div className="brand">
                   <BrandLogo />
-                  <h2>{workspaceScreen === 'integrations' ? 'API raktai' : 'Darbuotojai'}</h2>
+                  <h2>
+                    {workspaceScreen === 'integrations'
+                      ? 'API raktai'
+                      : workspaceScreen === 'workers'
+                        ? 'Darbuotojai'
+                        : workspaceScreen === 'news'
+                          ? 'Naujienos'
+                          : 'Pamokos'}
+                  </h2>
                 </div>
                 <div className="workspace-header-actions">
                   <button type="button" onClick={() => setWorkspaceScreen('tables')}>
-                    ← Darbo sritis
+                    <ArrowLeft className="icon" size={16} /> Darbo sritis
                   </button>
                 </div>
               </div>
               {workspaceScreen === 'integrations' ? (
                 <IntegrationsView />
-              ) : (
+              ) : workspaceScreen === 'workers' ? (
                 <WorkersView onJumpToRow={jumpToTableRow} onJumpToContact={jumpToTableContact} />
+              ) : workspaceScreen === 'news' ? (
+                <NewsView />
+              ) : (
+                <LessonsView />
               )}
             </div>
           ) : (
@@ -404,6 +425,8 @@ function App() {
               onOpenTable={setActiveTable}
               onOpenWorkers={user.role !== 'worker' ? () => setWorkspaceScreen('workers') : undefined}
               onOpenIntegrations={user.role !== 'worker' ? () => setWorkspaceScreen('integrations') : undefined}
+              onOpenNews={newsAvailable ? () => setWorkspaceScreen('news') : undefined}
+              onOpenLessons={allowedTabs.has('lessons') ? () => setWorkspaceScreen('lessons') : undefined}
             />
           )}
           <Toast />
@@ -422,7 +445,7 @@ function App() {
                 setWorkspaceScreen('tables');
               }}
             >
-              ← Darbo sritis
+              <ArrowLeft className="icon" size={16} /> Darbo sritis
             </button>
             {editingTitle ? (
               <input
@@ -456,7 +479,7 @@ function App() {
                 className="pending-phone-search-badge"
                 title={`Fone ieškoma ${pendingPhoneCount} telefono ${pendingPhoneCount === 1 ? 'numerio' : 'numerių'} — galite tęsti darbą, jums pranešime, kai bus rasta`}
               >
-                🕐 {pendingPhoneCount}
+                <Clock className="icon" size={14} /> {pendingPhoneCount}
               </span>
             )}
             {reminderPermission === 'default' && (
@@ -466,7 +489,7 @@ function App() {
                 title="Įjungti pranešimus, kai ateina laikas skambinti (skaičiuojama pagal langelio laiką, jei jis nustatytas)"
                 onClick={() => void requestReminderPermission()}
               >
-                🔔 Įjungti priminimus
+                <Bell className="icon" size={14} /> Įjungti priminimus
               </button>
             )}
             {reminderPermission === 'denied' && (
@@ -474,7 +497,7 @@ function App() {
                 className="reminder-permission-blocked"
                 title="Pranešimai užblokuoti naršyklės nustatymuose — įjunkite juos svetainės nustatymuose, jei norite gauti garso priminimą"
               >
-                🔕
+                <BellOff className="icon" size={14} />
               </span>
             )}
             <ThemeToggle />
@@ -484,7 +507,7 @@ function App() {
               aria-label="Meniu"
               onClick={() => setMobileNavOpen((v) => !v)}
             >
-              ☰
+              <Menu className="icon" size={18} />
               {(dueBadge.overdue > 0 || dueBadge.today > 0) && (
                 <span className={`tab-badge ${dueBadge.overdue > 0 ? 'tab-badge-overdue' : ''}`}>
                   {dueBadge.overdue + dueBadge.today}

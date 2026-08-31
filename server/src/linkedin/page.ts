@@ -1,5 +1,6 @@
 import type { Page } from 'playwright';
 import { getLinkedInPage, humanDelay, humanMouseMove, humanType } from './browser.js';
+import { getSafetySettings, shouldUseSearchNavigation, recordSearchUsed, recordSearchMiss, recordSearchHit, recordSearchLockout } from './safety.js';
 
 // The only file in this feature allowed to know LinkedIn's actual DOM/URL
 // structure — every action above this layer goes through a named function
@@ -99,22 +100,259 @@ export class LinkedInPageError extends Error {}
  * for why). */
 export const ALREADY_CONNECTED_ERROR = 'Already connected — LinkedIn shows "Remove Connection" for this profile.';
 
+/** Types `name` into LinkedIn's own global search box (the same one a real
+ * person uses, top-left of every page) and, if the typeahead dropdown that
+ * appears within a couple seconds contains a result whose profile link
+ * resolves to exactly `profileUrl`'s path, clicks into it — returning
+ * `true` only once the page has actually landed on that path. Returns
+ * `false` (never throws) on anything short of that: no search box found,
+ * no matching result, or the click didn't land where expected — the
+ * caller (sendConnectionRequest) always has a direct page.goto() fallback,
+ * so a failed search attempt should degrade gracefully, not abort the
+ * whole send.
+ *
+ * Live-verified against a real search (typing "Vladimir Koptev" into this
+ * exact box) before this was written: the typeahead dropdown itself
+ * already renders direct `<a href="/in/...">` result links within ~2s —
+ * no need to submit the search and land on a separate /search/results/
+ * page first, which would be slower and is one more page load LinkedIn
+ * can see. Matching is by exact resolved-pathname equality against the
+ * lead's own already-trusted stored URL (same loop-and-compare-in-JS
+ * shape withdrawConnectionRequest() uses below, for the same
+ * no-string-interpolated-selector reason) rather than fuzzy name
+ * matching — safer than the profile-page name-matching heuristics
+ * elsewhere in this file, since path equality against a known-good URL
+ * can't land on a same-named-but-different person the way "does this
+ * aria-label contain this name" could. */
+/** LinkedIn's own commercial-use-limit page carries this exact phrasing
+ * ("You've reached the monthly limit for profile searches. Upgrade to
+ * Premium Business...") — live-confirmed this session by typing a real
+ * name into this exact search box on an account already at its monthly
+ * cap. Matched case-insensitively and loosely (two independent substrings
+ * rather than the exact sentence) so a minor wording tweak on LinkedIn's
+ * side doesn't silently stop this from firing. */
+function isSearchLockedPageText(text: string): boolean {
+  const lower = text.toLowerCase();
+  return lower.includes('monthly limit') || lower.includes('unlimited search');
+}
+
+/** Types `name` into LinkedIn's own global search box and clicks through
+ * to the matching profile if found — see this function's own history in
+ * this file for the full reasoning. This session also live-confirmed the
+ * failure mode: once an account is at LinkedIn's own monthly
+ * commercial-use search cap, the typeahead dropdown returns *zero* real
+ * person results at all (just the account's own profile/stats clutter),
+ * and the full search-results page (only reached by pressing Enter, which
+ * this function deliberately doesn't do — see the dropdown-only reasoning
+ * below) shows the exact lockout text above. Since this function only
+ * ever reads the lightweight dropdown, it can't always see that exact
+ * text — so lockout detection combines both signals: the exact phrase
+ * *when it happens to be visible*, and a consecutive-zero-candidates
+ * counter (safety.ts's recordSearchMiss/recordSearchHit) as the robust
+ * fallback that doesn't depend on LinkedIn's exact wording or which page
+ * happens to be showing it. See recordSearchLockout()'s own doc comment
+ * for what happens once either trips. */
+async function searchByNameAndNavigate(page: Page, name: string, profileUrl: string): Promise<boolean> {
+  const targetPath = new URL(profileUrl).pathname.replace(/\/+$/, '');
+  try {
+    await page.goto('https://www.linkedin.com/feed/', { waitUntil: 'domcontentloaded' });
+    await humanDelay(1000, 2200);
+
+    const searchBox = page.locator('input[placeholder="Search" i]').first();
+    if ((await searchBox.count()) === 0) return false;
+
+    await searchBox.click();
+    await humanDelay(300, 700);
+    await humanType(page, 'input[placeholder="Search" i]', name);
+    await humanDelay(1300, 2600);
+
+    const candidates = await page.locator('a[href*="/in/"]').all();
+
+    if (candidates.length === 0) {
+      // Zero real person-shaped results at all — never happens for a
+      // genuinely working search against a real name (LinkedIn's own
+      // typeahead is generous), so this is the search-is-degraded signal,
+      // independent of whether this specific lead would have matched.
+      // Cast through globalThis rather than referencing `document` directly —
+      // this file's tsconfig has no `dom` lib (Node-only backend code), same
+      // as browser.ts's navigator.webdriver patch; this callback's body only
+      // ever actually runs in the browser, injected by Playwright.
+      const bodyText = await page
+        .evaluate(() => (globalThis as unknown as { document: { body: { innerText: string } } }).document.body.innerText)
+        .catch(() => '');
+      if (isSearchLockedPageText(bodyText)) {
+        recordSearchLockout('LinkedIn showed its own monthly search-limit message.');
+      } else if (recordSearchMiss() >= 2) {
+        recordSearchLockout('Two consecutive searches returned zero results — likely at the monthly cap even without seeing the exact message.');
+      }
+      return false;
+    }
+    recordSearchHit();
+
+    let match: (typeof candidates)[number] | null = null;
+    for (const candidate of candidates) {
+      const href = await candidate.getAttribute('href').catch(() => null);
+      if (!href) continue;
+      const path = new URL(href, 'https://www.linkedin.com').pathname.replace(/\/+$/, '');
+      if (path === targetPath) {
+        match = candidate;
+        break;
+      }
+    }
+    if (!match) return false;
+
+    await humanDelay(300, 800);
+    await match.evaluate((el) => (el as { click: () => void }).click());
+    await humanDelay(1500, 3000);
+
+    const landedPath = new URL(page.url()).pathname.replace(/\/+$/, '');
+    return landedPath === targetPath;
+  } catch {
+    return false;
+  }
+}
+
+/** Human-realistic dwelling on a profile before Connect is ever searched
+ * for — always scrolls a little (a real visitor never lands motionless),
+ * and with `browseActivityProbability`% chance also visits the profile's
+ * own recent-activity page and spends real time there before coming back,
+ * rather than clicking Connect the instant the page loads. Deliberately
+ * does NOT click into any individual post permalink — live DOM inspection
+ * this session found `recent-activity/all/` already renders full post
+ * previews directly (the same page listing used to source the Like button
+ * for humanize.ts), so "spend time looking at this person's posts" is
+ * fully satisfied by dwelling there, without adding a second, unverified
+ * click target (a specific post's own permalink) on top of the "Show all"
+ * link click below — this codebase has already hit the wrong-target class
+ * of bug twice this session from exactly this kind of extra click.
+ *
+ * The "Show all" activity link's `href` (not its visible text) is what's
+ * matched — live-confirmed on a real profile that TWO different "Show
+ * all" links can be visible at once with identical text (one for
+ * activity, one for an unrelated "People you may also know"-style
+ * recommendations module) but different hrefs, so text-only matching
+ * would be ambiguous by design, not just in theory. */
+/** How long browseProfileBeforeConnect() actually spent dwelling on the
+ * lead's recent-activity page, if it visited one at all — feeds
+ * ConnectTiming below. `visitedRecentActivity: false` covers both "the
+ * probability roll skipped it" and "no activity link existed to click." */
+interface BrowseResult {
+  visitedRecentActivity: boolean;
+  recentActivityDwellMs: number | null;
+}
+
+async function browseProfileBeforeConnect(page: Page, profileUrl: string): Promise<BrowseResult> {
+  await page.mouse.wheel(0, 400 + Math.random() * 500);
+  await humanDelay(600, 1500);
+
+  const settings = getSafetySettings();
+  if (Math.random() * 100 >= settings.browseActivityProbability) {
+    await humanDelay(15_000, 60_000);
+    return { visitedRecentActivity: false, recentActivityDwellMs: null };
+  }
+
+  const activityLink = page.locator('a[href*="/recent-activity/"]').first();
+  if ((await activityLink.count()) === 0) {
+    await humanDelay(15_000, 60_000);
+    return { visitedRecentActivity: false, recentActivityDwellMs: null };
+  }
+
+  const dwellStartedAt = Date.now();
+  try {
+    const box = await activityLink.boundingBox();
+    if (box) {
+      await humanMouseMove(page, { x: box.x + box.width / 2, y: box.y + box.height / 2 });
+    }
+    await humanDelay(300, 800);
+    await activityLink.evaluate((el) => (el as { click: () => void }).click());
+    await humanDelay(1500, 3000);
+    await humanDelay(30_000, 180_000);
+    await page.goBack({ waitUntil: 'domcontentloaded' }).catch(() => {});
+    await humanDelay(800, 2000);
+    // goBack() can land somewhere unexpected (LinkedIn's own client-side
+    // routing doesn't always treat this as a plain history entry) — if it
+    // didn't actually return to the profile, re-navigate directly rather
+    // than let sendConnectionRequest's own Connect-finding logic run
+    // against the wrong page.
+    const path = new URL(page.url()).pathname.replace(/\/+$/, '');
+    const targetPath = new URL(profileUrl).pathname.replace(/\/+$/, '');
+    if (path !== targetPath) {
+      await page.goto(profileUrl, { waitUntil: 'domcontentloaded' });
+      await humanDelay(800, 1800);
+    }
+    return { visitedRecentActivity: true, recentActivityDwellMs: Date.now() - dwellStartedAt };
+  } catch {
+    // Best-effort — a failure here just means less realistic dwelling,
+    // never a reason to abort the actual connect attempt below.
+    const path = new URL(page.url()).pathname.replace(/\/+$/, '');
+    const targetPath = new URL(profileUrl).pathname.replace(/\/+$/, '');
+    if (path !== targetPath) {
+      await page.goto(profileUrl, { waitUntil: 'domcontentloaded' }).catch(() => {});
+    }
+    return { visitedRecentActivity: true, recentActivityDwellMs: Date.now() - dwellStartedAt };
+  }
+}
+
+/** Per-action timing breakdown for one connect send — answers exactly what
+ * the account owner asked for: how many minutes were spent scrolling a
+ * profile, how long it dwelled/"froze" on a recent-activity page, what
+ * minute the Connect click and the actual send happened. Every field is an
+ * absolute epoch-ms timestamp (or a duration for the dwell) so the caller
+ * can reconstruct the whole sequence without guessing from log ordering
+ * alone; `null` means that phase didn't happen (e.g. no note was added) or
+ * wasn't reached before an error — a caller wraps this in JSON.stringify()
+ * for actions_log.timing_json (db.ts), it's never persisted as-is. */
+export interface ConnectTiming {
+  startedAt: number;
+  navigatedViaSearch: boolean;
+  navigatedAt: number;
+  loginConfirmedAt: number;
+  visitedRecentActivity: boolean;
+  recentActivityDwellMs: number | null;
+  connectClickedAt: number;
+  noteAdded: boolean;
+  sentAt: number;
+  totalMs: number;
+}
+
 /** Sends one connection request to `profileUrl`, with an optional note.
  * Every step is human-paced (browser.ts's humanDelay/humanMouseMove/
  * humanType) — deliberately the slowest correct implementation, not the
  * fastest. Throws LinkedInPageError with a specific, actionable reason
  * (checkpoint / logged-out / button-not-found) rather than a generic
  * failure, so the caller's action-log entry records something useful
- * instead of just "it didn't work." */
-export async function sendConnectionRequest(profileUrl: string, note?: string): Promise<void> {
+ * instead of just "it didn't work." `leadName`, when supplied (scheduler.ts
+ * passes the lead's own stored name; the manual test-connect routes in
+ * index.ts don't have one and simply skip this), is used only to decide
+ * whether to navigate via LinkedIn's own search-by-name instead of a
+ * direct URL — see searchByNameAndNavigate() above and
+ * safety.ts's shouldUseSearchNavigation() for the probability/quota gate.
+ * Returns a ConnectTiming breakdown on success (see above) rather than
+ * void — a thrown LinkedInPageError on failure still carries no partial
+ * timing, same as before this was added, since the caller's own
+ * `responseTimeMs`/`executedAt` already covers the failure case. */
+export async function sendConnectionRequest(profileUrl: string, note?: string, leadName?: string | null): Promise<ConnectTiming> {
+  const startedAt = Date.now();
   const page = await getLinkedInPage();
 
   if (isCheckpointUrl(page.url())) {
     throw new LinkedInPageError('LinkedIn is showing a checkpoint/verification page — resolve it manually first.');
   }
 
-  await page.goto(profileUrl, { waitUntil: 'domcontentloaded' });
-  await humanDelay(1500, 4000);
+  const settings = getSafetySettings();
+  let navigatedViaSearch = false;
+  if (leadName?.trim() && shouldUseSearchNavigation(settings)) {
+    navigatedViaSearch = await searchByNameAndNavigate(page, leadName.trim(), profileUrl);
+    if (navigatedViaSearch) {
+      recordSearchUsed();
+      console.log('[linkedin/connect] navigated via search-by-name for', JSON.stringify(leadName));
+    }
+  }
+  if (!navigatedViaSearch) {
+    await page.goto(profileUrl, { waitUntil: 'domcontentloaded' });
+    await humanDelay(1500, 4000);
+  }
+  const navigatedAt = Date.now();
 
   if (isCheckpointUrl(page.url())) {
     throw new LinkedInPageError('Navigating to the profile triggered a checkpoint page.');
@@ -122,6 +360,9 @@ export async function sendConnectionRequest(profileUrl: string, note?: string): 
   if (!(await isLoggedIn(page))) {
     throw new LinkedInPageError('Not logged into LinkedIn in this Chrome profile.');
   }
+  const loginConfirmedAt = Date.now();
+
+  const browseResult = await browseProfileBeforeConnect(page, profileUrl);
 
   // The profile's own displayed name, captured now — before anything below
   // is clicked — so it can be cross-checked against the invite dialog's own
@@ -236,7 +477,21 @@ export async function sendConnectionRequest(profileUrl: string, note?: string): 
   // very top of the viewport) — a profile has exactly one such control in
   // its own header, confirmed against the real repro profile.
   if ((await connectButton.count()) === 0) {
-    const moreCandidates = await page.locator('[aria-label="More actions" i], [aria-label="More" i], button:has-text("More")').all();
+    // Real, live-reproduced incident this session: `button:has-text("More")`
+    // in this candidate list is a substring match, and profiles routinely
+    // have an unrelated "… more" text-expansion control further down the
+    // page (e.g. to expand a long About section) — its own visible text
+    // contains "more", so it matched this selector too. On one repro
+    // profile that control sat *below* the real "More actions" button
+    // (y:664 vs y:483), and the "highest y wins" picking logic below chose
+    // it instead — clicking it just expands some text, no menu opens, and
+    // the whole flow fails with a generic "no Connect button found."
+    // Fixed by requiring the precise aria-label match as the only
+    // candidate source; text-based matching is dropped entirely rather
+    // than kept as a fallback, since *any* "more"-labelled expander
+    // anywhere on the page is a plausible false positive the same way,
+    // not just this one instance of it.
+    const moreCandidates = await page.locator('[aria-label="More actions" i], [aria-label="More" i]').all();
     let moreButton: (typeof moreCandidates)[number] | null = null;
     let moreButtonTop = -1;
     for (const candidate of moreCandidates) {
@@ -349,6 +604,7 @@ export async function sendConnectionRequest(profileUrl: string, note?: string): 
   // exact element already confirmed correct via its aria-label above, so
   // there's nothing else on the page it could land on instead.
   await connectButton.evaluate((el) => (el as { click: () => void }).click());
+  const connectClickedAt = Date.now();
   await humanDelay(800, 2000);
   console.log('[linkedin/connect] clicked connectButton — page url now', page.url());
 
@@ -396,6 +652,7 @@ export async function sendConnectionRequest(profileUrl: string, note?: string): 
     );
   }
 
+  let noteAdded = false;
   if (note?.trim()) {
     const addNoteButton = page.locator('button:has-text("Add a note")').first();
     if ((await addNoteButton.count()) > 0) {
@@ -403,6 +660,7 @@ export async function sendConnectionRequest(profileUrl: string, note?: string): 
       await humanDelay(400, 1000);
       await humanType(page, 'textarea[name="message"]', note.trim());
       await humanDelay(500, 1500);
+      noteAdded = true;
     }
   }
 
@@ -423,7 +681,21 @@ export async function sendConnectionRequest(profileUrl: string, note?: string): 
   }
   await humanDelay(300, 900);
   await sendButton.click();
+  const sentAt = Date.now();
   await humanDelay(500, 1200);
+
+  return {
+    startedAt,
+    navigatedViaSearch,
+    navigatedAt,
+    loginConfirmedAt,
+    visitedRecentActivity: browseResult.visitedRecentActivity,
+    recentActivityDwellMs: browseResult.recentActivityDwellMs,
+    connectClickedAt,
+    noteAdded,
+    sentAt,
+    totalMs: sentAt - startedAt,
+  };
 }
 
 /** Sends a direct message to `profileUrl` — only works for an existing
@@ -758,4 +1030,225 @@ export async function replyInThread(threadUrl: string, text: string): Promise<vo
   await humanDelay(300, 900);
   await replySendButton.click();
   await humanDelay(500, 1200);
+}
+
+/** Standalone "View Profile" campaign-graph action — navigates to a lead's
+ * profile and dwells a human-plausible amount, no Connect/Message
+ * involved. Reuses the same scroll + humanDelay dwelling primitives
+ * sendConnectionRequest's own browseProfileBeforeConnect() established,
+ * kept as a separate, simpler function here since this is a deliberate,
+ * standalone action a graph author places on its own (e.g. "view their
+ * profile a few times before ever connecting") rather than something
+ * probabilistically folded into a connect send. */
+export async function viewProfile(profileUrl: string): Promise<void> {
+  const page = await getLinkedInPage();
+
+  if (isCheckpointUrl(page.url())) {
+    throw new LinkedInPageError('LinkedIn is showing a checkpoint/verification page — resolve it manually first.');
+  }
+
+  await page.goto(profileUrl, { waitUntil: 'domcontentloaded' });
+  await humanDelay(1500, 4000);
+
+  if (isCheckpointUrl(page.url())) {
+    throw new LinkedInPageError('Navigating to the profile triggered a checkpoint page.');
+  }
+  if (!(await isLoggedIn(page))) {
+    throw new LinkedInPageError('Not logged into LinkedIn in this Chrome profile.');
+  }
+
+  await page.mouse.wheel(0, 400 + Math.random() * 500);
+  await humanDelay(15_000, 60_000);
+}
+
+/** Follows a profile — live-verified this session (Mikhail Sak's profile):
+ * the Follow control is a real `<button aria-label="Follow {name}">`
+ * (same hashed-class LinkedIn UI-kit component family as the Connect
+ * button), and — unlike the reaction/Like button elsewhere in this file —
+ * a plain `element.evaluate(el => el.click())` DID correctly flip its
+ * state (confirmed via the aria-label changing to `"Following, click to
+ * unfollow {name}"`). Kept as evaluate-click rather than switching to a
+ * real Playwright `.click()` for consistency with every other non-
+ * reaction control in this file, now that it's been individually
+ * confirmed to actually work for this specific button — see
+ * likeRecentFeedPosts()'s own doc comment for why that assumption isn't
+ * safe to make blindly for every control. */
+export async function followProfile(profileUrl: string): Promise<void> {
+  const page = await getLinkedInPage();
+
+  if (isCheckpointUrl(page.url())) {
+    throw new LinkedInPageError('LinkedIn is showing a checkpoint/verification page — resolve it manually first.');
+  }
+
+  await page.goto(profileUrl, { waitUntil: 'domcontentloaded' });
+  await humanDelay(1500, 4000);
+
+  if (isCheckpointUrl(page.url())) {
+    throw new LinkedInPageError('Navigating to the profile triggered a checkpoint page.');
+  }
+  if (!(await isLoggedIn(page))) {
+    throw new LinkedInPageError('Not logged into LinkedIn in this Chrome profile.');
+  }
+
+  const followButton = page.locator('[aria-label^="Follow " i]').first();
+  if ((await followButton.count()) === 0) {
+    // Not necessarily an error — a profile you already follow, or one
+    // where Follow isn't offered as a separate action from Connect, simply
+    // has no such control. Treated as a clean no-op rather than a thrown
+    // failure, so a graph author who places this node broadly doesn't get
+    // spurious error-log noise for the (normal) case of an already-
+    // followed lead.
+    return;
+  }
+  const box = await followButton.boundingBox();
+  if (box) {
+    await humanMouseMove(page, { x: box.x + box.width / 2, y: box.y + box.height / 2 });
+  }
+  await humanDelay(300, 900);
+  await followButton.evaluate((el) => (el as { click: () => void }).click());
+  await humanDelay(500, 1200);
+}
+
+/** Likes the first post found on a lead's own recent-activity page —
+ * unlike humanize.ts's likeRecentFeedPosts() (general feed "texture",
+ * gated by its own probability, targeting random posts), this is a
+ * deliberate, targeted campaign-graph action: like *this specific
+ * person's* latest post. Reuses the exact same `/recent-activity/all/`
+ * navigation and reaction-button selector already proven correct this
+ * session (see §5's profile-dwelling work and likeRecentFeedPosts()'s own
+ * doc comment) — and, live-reverified specifically for this function
+ * against a real profile, the SAME real-Playwright-`.click()` requirement:
+ * `element.evaluate(el => el.click())` was inconsistent here too (worked
+ * once, silently no-opped once, confirmed by screenshot both times), so
+ * this never uses it, matching likeRecentFeedPosts()'s already-established
+ * choice. */
+export async function likeLatestPost(profileUrl: string): Promise<void> {
+  const page = await getLinkedInPage();
+
+  if (isCheckpointUrl(page.url())) {
+    throw new LinkedInPageError('LinkedIn is showing a checkpoint/verification page — resolve it manually first.');
+  }
+
+  const activityUrl = profileUrl.replace(/\/+$/, '') + '/recent-activity/all/';
+  await page.goto(activityUrl, { waitUntil: 'domcontentloaded' });
+  await humanDelay(2000, 4000);
+
+  if (isCheckpointUrl(page.url())) {
+    throw new LinkedInPageError('Navigating to recent activity triggered a checkpoint page.');
+  }
+  if (!(await isLoggedIn(page))) {
+    throw new LinkedInPageError('Not logged into LinkedIn in this Chrome profile.');
+  }
+
+  const likeButton = page.locator('button[aria-label*="Reaction button state: no reaction" i], button[aria-label="React Like" i]').first();
+  if ((await likeButton.count()) === 0) {
+    // No posts at all, or everything already liked — a clean no-op, same
+    // reasoning as followProfile() above.
+    return;
+  }
+  await likeButton.scrollIntoViewIfNeeded().catch(() => {});
+  await humanDelay(400, 1000);
+  const box = await likeButton.boundingBox();
+  if (box) {
+    await humanMouseMove(page, { x: box.x + box.width / 2, y: box.y + box.height / 2 });
+  }
+  await humanDelay(200, 600);
+  await likeButton.click();
+  await humanDelay(500, 1200);
+}
+
+/** Likes up to `maxLikes` posts on the main feed — the whole DOM-facing
+ * half of humanize.ts's "occasionally like 1-2 recent posts, sometimes
+ * none" activity-mixing (see that module for the probability/frequency
+ * policy; this function just executes, it makes no decisions about
+ * whether/how often to run). Never comments, never reposts — likes only,
+ * on explicit request (comments are a materially bigger surface: real
+ * generated text under this account's name, with no prior art anywhere in
+ * this codebase, vs. a single reversible click).
+ *
+ * The selector is the one real gotcha here, live-confirmed this session:
+ * the feed's Like button's `aria-label` is `"Reaction button state: no
+ * reaction"` — it does NOT contain the word "like" at all, unlike the
+ * `recent-activity/all/` page's own Like control (`aria-label="React
+ * Like"`), a different pattern on a different LinkedIn surface for what
+ * looks like the same button. Scoped to `"no reaction"` specifically (not
+ * just `"Reaction button state"`) so this only ever clicks a post that
+ * isn't already liked — a post already carrying some other reaction would
+ * report a different state string here and is deliberately left alone,
+ * since toggling an existing reaction is a different, unverified action
+ * this function has no business taking.
+ *
+ * Live-verified this session, and the OPPOSITE lesson from the Connect
+ * button above: `element.evaluate((el) => el.click())` (the pattern used
+ * everywhere else in this file, specifically because it bypasses
+ * screen-coordinate hit-testing) silently did NOTHING here on two separate
+ * attempts — the button's own `aria-label` stayed "no reaction" and its
+ * `componentkey` attribute changed (a re-render happened) but the actual
+ * reaction never registered. A genuine Playwright `.click()` (a real,
+ * full synthetic mouse event at screen coordinates) worked immediately,
+ * confirmed three ways: `aria-label` flipped to `"Reaction button state:
+ * Like"`, the icon turned blue/filled, and the post's reaction count/
+ * "You and N others" text updated — screenshotted before/after to be
+ * certain. This button apparently needs the fuller event sequence
+ * (mousedown/mouseup/pointer events) a real Playwright click dispatches,
+ * which a bare synthetic `click` event does not include. The lesson that
+ * generalizes: a click-dispatch strategy that's correct for one LinkedIn
+ * control is not guaranteed to work for another — verify each one
+ * independently rather than assuming the last fix generalizes. */
+export async function likeRecentFeedPosts(maxLikes: number): Promise<number> {
+  if (maxLikes <= 0) return 0;
+  const page = await getLinkedInPage();
+
+  if (isCheckpointUrl(page.url())) {
+    throw new LinkedInPageError('LinkedIn is showing a checkpoint/verification page — resolve it manually first.');
+  }
+
+  await page.goto('https://www.linkedin.com/feed/', { waitUntil: 'domcontentloaded' });
+  await humanDelay(2000, 4000);
+
+  if (isCheckpointUrl(page.url())) {
+    throw new LinkedInPageError('Navigating to the feed triggered a checkpoint page.');
+  }
+  if (!(await isLoggedIn(page))) {
+    throw new LinkedInPageError('Not logged into LinkedIn in this Chrome profile.');
+  }
+
+  // The feed lazy-loads posts as you scroll — live-confirmed this session
+  // that a fresh page load with no scroll can render zero post containers
+  // at all. A couple of modest scroll-and-pause cycles mimics a real
+  // person reading down the feed and gives more posts a chance to mount
+  // before candidates are collected.
+  for (let i = 0; i < 2; i++) {
+    await page.mouse.wheel(0, 500 + Math.random() * 600);
+    await humanDelay(1200, 2800);
+  }
+
+  const likeButtons = page.locator('button[aria-label*="Reaction button state: no reaction" i]');
+  const count = await likeButtons.count();
+  if (count === 0) return 0;
+
+  // Random sample, not "the first N" — the first posts in the feed are
+  // what every automated pass would hit first if this always just took
+  // index 0..maxLikes, itself a mechanical tell.
+  const indices = Array.from({ length: count }, (_, i) => i);
+  for (let i = indices.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [indices[i], indices[j]] = [indices[j], indices[i]];
+  }
+  const chosen = indices.slice(0, Math.min(maxLikes, count));
+
+  let liked = 0;
+  for (const idx of chosen) {
+    const button = likeButtons.nth(idx);
+    const box = await button.boundingBox().catch(() => null);
+    if (!box) continue;
+    await button.scrollIntoViewIfNeeded().catch(() => {});
+    await humanDelay(400, 1000);
+    await humanMouseMove(page, { x: box.x + box.width / 2, y: box.y + box.height / 2 });
+    await humanDelay(200, 600);
+    await button.click();
+    liked++;
+    await humanDelay(1500, 4000);
+  }
+  return liked;
 }
