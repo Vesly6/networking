@@ -34,6 +34,8 @@ import {
   saveNewsItem,
   deleteNewsSavedItem,
   moveNewsSavedItem,
+  getInstantlyTableMap,
+  setInstantlyTableMapping,
 } from './accounts/db.js';
 import {
   ZadarmaApiError,
@@ -57,6 +59,7 @@ import {
   summarizeCall,
   LinkedInReplyError,
   suggestLinkedInReply,
+  extractLatestEmailMessage,
 } from './openai.js';
 import { SerperError, searchSocialProfiles, searchNews, type SerperNewsResult } from './serper.js';
 import { EmailGenerateError, generateEmail } from './anthropic.js';
@@ -125,10 +128,11 @@ import {
   replyToEmail as replyToInstantlyEmail,
   forwardEmail as forwardInstantlyEmail,
   markThreadRead,
+  updateEmail,
   getUnreadCount,
   updateLeadInterestStatus,
 } from './instantly.js';
-import { syncInstantlyCampaignReplies } from './instantlyReplySync.js';
+import { syncInstantlyCampaignReplies, ensureVisiAtsakymaiTable, VISI_ATSAKYMAI_TABLE_NAME } from './instantlyReplySync.js';
 import { LinkedInBrowserError, humanDelay } from './linkedin/browser.js';
 import { LinkedInPageError, getLinkedInStatus, sendConnectionRequest, replyInThread, searchLeads } from './linkedin/page.js';
 import { logAction, getRecentActions } from './linkedin/db.js';
@@ -600,7 +604,7 @@ async function runInstantlyWebhookSync(companyId: string, campaignId: string) {
       console.warn('[instantly-webhook] no Instantly API key configured for company', companyId, '— skipping sync');
       return;
     }
-    const result = await syncInstantlyCampaignReplies(companyId, apiKey, campaignId, 'Visi atsakymai');
+    const result = await syncInstantlyCampaignReplies(companyId, apiKey, campaignId, VISI_ATSAKYMAI_TABLE_NAME);
     console.log('[instantly-webhook] synced campaign', campaignId, 'for company', companyId, result);
   } catch (err) {
     console.error('[instantly-webhook] sync failed for campaign', campaignId, 'company', companyId, err);
@@ -761,7 +765,17 @@ app.patch(
   '/api/admin/companies/:id/integrations',
   requireSuperAdmin,
   asyncHandler(async (req, res) => {
-    patchIntegrations(req.params.id, (req.body ?? {}) as Record<string, unknown>);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    patchIntegrations(req.params.id, body);
+    // "Visi atsakymai" otherwise only gets created lazily, on the first
+    // real webhook reply — this makes it exist immediately once a key is
+    // actually saved, matching patchIntegrations' own "non-empty trimmed
+    // string" definition of an actual submission (index.ts's
+    // INTEGRATION_FIELDS check) rather than firing on every PATCH call
+    // regardless of what it touched (e.g. just a Zadarma key update).
+    if (typeof body.instantlyApiKey === 'string' && body.instantlyApiKey.trim()) {
+      ensureVisiAtsakymaiTable(req.params.id);
+    }
     res.json({ ok: true });
   }),
 );
@@ -2015,6 +2029,24 @@ app.post(
   }),
 );
 
+// "Pažymėti kaip neperskaitytą" (UniboxPanel.tsx) — the reverse of the
+// thread-level mark-as-read above, which has no symmetric "mark thread
+// unread" endpoint on Instantly's side (see updateEmail's own doc comment
+// in instantly.ts for why this only takes a single message id, not a
+// thread id).
+app.patch(
+  '/api/instantly/emails/:id',
+  asyncHandler(async (req, res) => {
+    const { is_unread } = req.body ?? {};
+    if (is_unread !== 0 && is_unread !== 1) {
+      res.status(400).json({ error: 'Invalid "is_unread" — must be 0 or 1' });
+      return;
+    }
+    const result = await updateEmail(req.params.id, { is_unread }, requireInstantlyKey(req.auth!.companyId));
+    res.json(result);
+  }),
+);
+
 // Same real-side-effect caveat as /emails/reply above.
 app.post(
   '/api/instantly/emails/forward',
@@ -3006,6 +3038,65 @@ app.delete(
   asyncHandler(async (req, res) => {
     deleteRow(req.params.id, req.auth!.companyId);
     res.json({ ok: true });
+  }),
+);
+
+// The reply-mapping feature's saved campaign→table suggestions (see
+// PushReplyRowsModal.tsx) — a day-to-day company decision, not a
+// platform-admin one, so this stays under the normal requireAuth tier
+// (scoped by req.auth.companyId) rather than the super-admin integrations
+// screen where the Instantly API key itself lives.
+app.get(
+  '/api/instantly/table-map',
+  asyncHandler(async (req, res) => {
+    res.json({ map: getInstantlyTableMap(req.auth!.companyId) });
+  }),
+);
+
+app.put(
+  '/api/instantly/table-map',
+  requirePermission('canExportImport'),
+  asyncHandler(async (req, res) => {
+    const { campaignName, tableName } = (req.body ?? {}) as Record<string, unknown>;
+    if (typeof campaignName !== 'string' || !campaignName.trim() || typeof tableName !== 'string' || !tableName.trim()) {
+      res.status(400).json({ error: 'Invalid "campaignName"/"tableName"' });
+      return;
+    }
+    setInstantlyTableMapping(req.auth!.companyId, campaignName.trim(), tableName.trim());
+    res.json({ ok: true });
+  }),
+);
+
+// Batched (not one route call per row) so a 25+-row push doesn't mean
+// 25+ separate HTTP round trips — the client sends every selected row's
+// raw reply_text in one request, this fans them out with a small
+// concurrency cap (not fully sequential — slow for a big batch — nor
+// fully parallel — risks bursting past OpenAI's own per-minute rate
+// limit), and returns the cleaned texts in the same order. Each
+// extraction falls back to its own raw input on failure (see
+// extractLatestEmailMessage's own doc comment) — never lets one bad
+// call fail the whole batch.
+const REPLY_EXTRACT_CONCURRENCY = 5;
+app.post(
+  '/api/instantly/extract-reply-texts',
+  asyncHandler(async (req, res) => {
+    const texts = req.body?.texts;
+    if (!Array.isArray(texts) || !texts.every((t) => typeof t === 'string')) {
+      res.status(400).json({ error: 'Invalid "texts" — expected a string array' });
+      return;
+    }
+    const apiKey = requireOpenaiKey(req.auth!.companyId);
+    const results = new Array<string>(texts.length);
+    let next = 0;
+    async function worker() {
+      for (;;) {
+        const i = next++;
+        if (i >= texts.length) return;
+        results[i] = await extractLatestEmailMessage(texts[i], apiKey);
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(REPLY_EXTRACT_CONCURRENCY, texts.length) }, worker));
+    res.json({ texts: results });
   }),
 );
 

@@ -11,6 +11,15 @@ export interface NoteEntry {
    * legacy fallback below; CellHoverEditor's rendering just omits the
    * author line in that case rather than showing a placeholder. */
   authorName?: string;
+  /** Set only on an entry pushed in from an Instantly reply (the
+   * cross-table History mapping feature — see replyHistoryFormat.ts) —
+   * the reply's metadata fields (campaign_name, sender_email,
+   * received_at, reply_subject, first_name, company_name, lead_status,
+   * lead_email — see REPLY_TAG_ORDER), rendered as colored tags above
+   * `text` (which, for one of these entries, is just the reply's own
+   * body — see cleanReplyText) instead of plain text lines. Undefined
+   * for every ordinary, hand-typed/tagged note entry. */
+  replyFields?: Record<string, string>;
 }
 
 /** A note cell's stored value is a JSON array of dated entries (newest
@@ -28,6 +37,7 @@ export function parseNoteHistory(raw: string): NoteEntry[] {
         text: e.text,
         createdAt: typeof e.createdAt === 'number' ? e.createdAt : 0,
         authorName: typeof e.authorName === 'string' ? e.authorName : undefined,
+        replyFields: e.replyFields && typeof e.replyFields === 'object' ? e.replyFields : undefined,
       }));
     }
   } catch {
@@ -47,11 +57,11 @@ export function serializeNoteHistory(entries: NoteEntry[]): string {
  * multi-user context to attribute (shouldn't normally happen post-login,
  * but kept optional rather than required so this function doesn't need
  * to know anything about auth state itself). */
-export function addNoteEntry(raw: string, text: string, authorName?: string): string {
+export function addNoteEntry(raw: string, text: string, authorName?: string, replyFields?: Record<string, string>): string {
   const trimmed = text.trim();
   if (!trimmed) return raw;
   const existing = parseNoteHistory(raw);
-  const entry: NoteEntry = { id: randomUUID(), text: trimmed, createdAt: Date.now(), authorName };
+  const entry: NoteEntry = { id: randomUUID(), text: trimmed, createdAt: Date.now(), authorName, replyFields };
   return serializeNoteHistory([entry, ...existing]);
 }
 

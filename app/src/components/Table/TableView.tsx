@@ -13,6 +13,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import type { Column, Row } from '../../types';
 import { useTableStore, type CellColorUpdate, type CellUpdate, type ImportColumnMapping } from '../../store/useTableStore';
 import { useAuthStore } from '../../store/useAuthStore';
+import { useWorkspaceStore } from '../../store/useWorkspaceStore';
 import { useToastStore } from '../../store/useToastStore';
 import { confirmDialog } from '../../store/useConfirmStore';
 import { DataCell } from './DataCell';
@@ -21,6 +22,7 @@ import { CellHoverEditor } from './CellHoverEditor';
 import { ColumnMenu } from './ColumnMenu';
 import { AddColumnPopover } from './AddColumnPopover';
 import { CsvImportMapping } from './CsvImportMapping';
+import { PushReplyRowsModal } from './PushReplyRowsModal';
 import { MergeContactsModal, type MergeStats } from './MergeContactsModal';
 import { ColumnHeaderMenu } from './ColumnHeaderMenu';
 import { RowHeaderMenu } from './RowHeaderMenu';
@@ -28,6 +30,7 @@ import { CellContextMenu } from './CellContextMenu';
 import { HiddenColumnsPopover } from './HiddenColumnsPopover';
 import { HiddenRowsPopover } from './HiddenRowsPopover';
 import { NumericRangeFilterPopover } from './NumericRangeFilterPopover';
+import { ColumnColorFilterPopover, NO_COLOR_FILTER_VALUE } from './ColumnColorFilterPopover';
 import { FormulaBar } from '../FormulaBar';
 import { Popover } from '../Popover';
 import { parseCsvFile, exportRowsToCsv, downloadCsv } from '../../utils/csv';
@@ -37,6 +40,7 @@ import { addContact, updateContact, removeContact, markSocialLookupNotFound } fr
 import { columnLetter, formatCellRef, parseRangeRef } from '../../utils/spreadsheet';
 import { getColumnByType } from '../../utils/row';
 import { normalizePhoneDigits } from '../../utils/phoneMatch';
+import { VISI_ATSAKYMAI_TABLE_NAME } from '../../utils/instantlyReplySync';
 import { matchesNumericRange, parseNumericCellValue, type NumericRangeFilter } from '../../utils/numericFilter';
 import { isCellLockedForWorker } from '../../utils/workerCellLock';
 import {
@@ -183,12 +187,12 @@ function indexAtOffset(ranges: { start: number; end: number }[], offset: number,
 // to some default."
 function loadPersistedViewState(
   tableId: string | null,
-): { search: string; numericFilters: Record<string, NumericRangeFilter>; searchTags: string[] } {
-  if (!tableId) return { search: '', numericFilters: {}, searchTags: [] };
+): { search: string; numericFilters: Record<string, NumericRangeFilter>; colorFilters: Record<string, string>; searchTags: string[] } {
+  if (!tableId) return { search: '', numericFilters: {}, colorFilters: {}, searchTags: [] };
   try {
     const raw = localStorage.getItem(`${TABLE_VIEW_STATE_KEY_PREFIX}${tableId}`);
-    if (!raw) return { search: '', numericFilters: {}, searchTags: [] };
-    const parsed = JSON.parse(raw) as { search?: unknown; numericFilters?: unknown; searchTags?: unknown };
+    if (!raw) return { search: '', numericFilters: {}, colorFilters: {}, searchTags: [] };
+    const parsed = JSON.parse(raw) as { search?: unknown; numericFilters?: unknown; colorFilters?: unknown; searchTags?: unknown };
     const search = typeof parsed.search === 'string' ? parsed.search : '';
     // Added after numericFilters (the per-column range-filter popover)
     // shipped — a real, reported gap: the search box already survived a
@@ -202,15 +206,22 @@ function loadPersistedViewState(
       parsed.numericFilters && typeof parsed.numericFilters === 'object' && !Array.isArray(parsed.numericFilters)
         ? (parsed.numericFilters as Record<string, NumericRangeFilter>)
         : {};
+    // Same reasoning/shape as numericFilters, for the "Filtruoti pagal
+    // spalvą" column-menu item — columnId -> the one hex color currently
+    // filtered to.
+    const colorFilters =
+      parsed.colorFilters && typeof parsed.colorFilters === 'object' && !Array.isArray(parsed.colorFilters)
+        ? (parsed.colorFilters as Record<string, string>)
+        : {};
     // Committed search tags (the "type a word, press Enter, it sticks as
     // a chip" filtering — see the search-input onKeyDown below) — on
     // explicit request: working through one niche/segment over several
     // days needs the filter to genuinely survive a reload, the same way
     // numericFilters above already had to.
     const searchTags = Array.isArray(parsed.searchTags) ? parsed.searchTags.filter((t): t is string => typeof t === 'string') : [];
-    return { search, numericFilters, searchTags };
+    return { search, numericFilters, colorFilters, searchTags };
   } catch {
-    return { search: '', numericFilters: {}, searchTags: [] };
+    return { search: '', numericFilters: {}, colorFilters: {}, searchTags: [] };
   }
 }
 
@@ -218,11 +229,15 @@ function saveViewState(
   tableId: string | null,
   search: string,
   numericFilters: Record<string, NumericRangeFilter>,
+  colorFilters: Record<string, string>,
   searchTags: string[],
 ) {
   if (!tableId) return;
   try {
-    localStorage.setItem(`${TABLE_VIEW_STATE_KEY_PREFIX}${tableId}`, JSON.stringify({ search, numericFilters, searchTags }));
+    localStorage.setItem(
+      `${TABLE_VIEW_STATE_KEY_PREFIX}${tableId}`,
+      JSON.stringify({ search, numericFilters, colorFilters, searchTags }),
+    );
   } catch {
     // localStorage can throw (quota exceeded, private-browsing
     // restrictions) — persistence here is a nice-to-have, not required
@@ -258,6 +273,18 @@ export function TableView({
   const tableId = useTableStore((s) => s.tableId);
   const columns = useTableStore((s) => s.columns);
   const rows = useTableStore((s) => s.rows);
+  // One-off read (not a subscription — useWorkspaceStore.tables changing
+  // for unrelated reasons shouldn't re-render this whole view), matching
+  // the existing currentCellValue() "read fresh from store, don't
+  // subscribe" convention elsewhere in this file. Gates the "Perkelti į
+  // lentelę" reply-push button below — only meaningful while the active
+  // table is literally "Visi atsakymai". Safe to compute at mount/tableId
+  // change: useWorkspaceStore.init() only sets ready:true once tables is
+  // populated, and App.tsx doesn't mount TableView before that.
+  const isVisiAtsakymai = useMemo(
+    () => useWorkspaceStore.getState().tables.find((t) => t.id === tableId)?.name === VISI_ATSAKYMAI_TABLE_NAME,
+    [tableId],
+  );
   const hiddenColumns = columns.filter((c) => c.hidden);
   const hiddenRows = rows.filter((r) => r.hidden);
   // For the next-action-date cell's "who are you calling" picker — computed
@@ -276,6 +303,10 @@ export function TableView({
   // could click it. Same permission, same `role !== 'worker' ||` pattern
   // as RowHeaderMenu/ColumnHeaderMenu's own canDelete.
   const canDeleteSelectedRows = currentUser?.role !== 'worker' || currentUser.permissions.canDeleteRows;
+  // Reused below for the "Perkelti į lentelę" reply-push button — same
+  // permission the CSV import/export buttons already gate on, since this
+  // is semantically the same class of bulk import/export action.
+  const canExportImport = currentUser?.role !== 'worker' || currentUser.permissions.canExportImport;
   // The (⋮) column menu (ColumnMenu.tsx) is a hard block for every worker,
   // not gated per-field — on explicit request ("nenoriu, kad jis isvis
   // turėtų galimybę užeiti į (⋮)"). ColumnMenu itself already disables the
@@ -321,6 +352,9 @@ export function TableView({
   const [numericFilters, setNumericFilters] = useState<Record<string, NumericRangeFilter>>(
     () => loadPersistedViewState(tableId).numericFilters,
   );
+  // Same shape/persistence as numericFilters above, for "Filtruoti pagal
+  // spalvą" — columnId -> the one hex color currently filtered to.
+  const [colorFilters, setColorFilters] = useState<Record<string, string>>(() => loadPersistedViewState(tableId).colorFilters);
   // Committed search-box tags — on explicit request: typing a word and
   // pressing Enter "locks it in" as a chip (narrowing the visible rows
   // to those matching it), the box clears for the next word, and every
@@ -332,8 +366,8 @@ export function TableView({
   // onKeyDown below for where a tag actually gets added.
   const [searchTags, setSearchTags] = useState<string[]>(() => loadPersistedViewState(tableId).searchTags);
   useEffect(() => {
-    saveViewState(tableId, search, numericFilters, searchTags);
-  }, [tableId, search, numericFilters, searchTags]);
+    saveViewState(tableId, search, numericFilters, colorFilters, searchTags);
+  }, [tableId, search, numericFilters, colorFilters, searchTags]);
   // Memory for "which direction did the last click on this same column
   // use" — purely so a second click on the same header flips asc -> desc,
   // same as before. Deliberately a ref, not state: nothing should
@@ -381,6 +415,19 @@ export function TableView({
   // columns; this one merges a second CSV's contacts into the already-open
   // table's existing Contacts column, matched by website domain.
   const [mergeContactsOpen, setMergeContactsOpen] = useState(false);
+  // Holds the selected rows captured at the MOMENT the "Perkelti į
+  // lentelę" button is clicked (null when the modal is closed) — not a
+  // live derivation from selectedRowIds read at render time. This button's
+  // click bubbles to .table-view's onClick={closePopovers} (same as every
+  // other toolbar button), which clears rowRangeAnchor/rowRangeFocus as
+  // part of the same batched update — by the time PushReplyRowsModal
+  // would render and re-derive `rows` from the now-stale selectedRowIds,
+  // the selection is already gone (confirmed live: the modal opened with
+  // "Pasirinktos eilutės (0)" despite a real row being selected on
+  // screen). Fixed the same way handleDeleteSelected already avoids this
+  // for its own bulk action: capture the id/row list synchronously in the
+  // click handler, before any later state clear can run.
+  const [pushReplyRows, setPushReplyRows] = useState<Row[] | null>(null);
   const [columnContextMenu, setColumnContextMenu] = useState<{ x: number; y: number; targetIds: string[] } | null>(null);
   // Additive alongside sort (see NumericRangeFilterPopover's own doc
   // comment) — a map so several columns can each have their own active
@@ -389,6 +436,12 @@ export function TableView({
   // Declared above, alongside `search`, since both feed the same
   // persisted-view-state effect.
   const [numericFilterColumnId, setNumericFilterColumnId] = useState<string | null>(null);
+  // Same "which column's popover is open right now" pattern as
+  // numericFilterColumnId above, for ColumnColorFilterPopover — reuses the
+  // same columnHeaderRefs anchor map below (a color filter's anchor has
+  // the identical unmounted-menu-button problem NumericRangeFilterPopover's
+  // own doc comment describes).
+  const [colorFilterColumnId, setColorFilterColumnId] = useState<string | null>(null);
   // The popover's anchor can't be the ColumnHeaderMenu button that opened
   // it — that button unmounts in the same batch as the menu closing (see
   // ColumnHeaderMenu's own onFilterRange doc comment), and Popover
@@ -655,8 +708,24 @@ export function TableView({
     if (activeFilterEntries.length > 0) {
       visible = visible.filter((row) => activeFilterEntries.every(([columnId, filter]) => matchesNumericRange(row.cells[columnId] ?? '', filter)));
     }
+    // Same additive-not-replacement idea as the numeric range filter
+    // above, for cell background color — see ColumnColorFilterPopover's
+    // own doc comment ("Filtruoti pagal spalvą", modeled on Excel's own
+    // Filter by Cell Color).
+    const activeColorFilterEntries = Object.entries(colorFilters);
+    if (activeColorFilterEntries.length > 0) {
+      visible = visible.filter((row) =>
+        activeColorFilterEntries.every(([columnId, color]) => {
+          const cellColor = row.colors?.[columnId] ?? '';
+          // NO_COLOR_FILTER_VALUE ("Numatytoji") means the opposite of a
+          // real color match — rows whose cell has nothing painted at
+          // all, not rows painted that exact (impossible) literal value.
+          return color === NO_COLOR_FILTER_VALUE ? !cellColor : cellColor === color;
+        }),
+      );
+    }
     return visible;
-  }, [rows, search, searchTags, numericFilters]);
+  }, [rows, search, searchTags, numericFilters, colorFilters]);
 
   // Every currently-active text query (committed tags + whatever's still
   // being typed), for DataCell's highlightQuery — same list
@@ -2316,6 +2385,14 @@ export function TableView({
             Ištrinti pasirinktas ({selectedRowIds.size})
           </button>
         )}
+        {selectedRowIds.size > 0 && isVisiAtsakymai && canExportImport && (
+          <button
+            type="button"
+            onClick={() => setPushReplyRows(filteredSortedRows.filter((r) => selectedRowIds.has(r.id)))}
+          >
+            Perkelti į lentelę ({selectedRowIds.size})
+          </button>
+        )}
         <button
           type="button"
           disabled={!rangeBounds}
@@ -2380,7 +2457,7 @@ export function TableView({
         {hiddenRowsAnchor && (
           <HiddenRowsPopover anchor={hiddenRowsAnchor} rows={rows} columns={columns} onClose={() => setHiddenRowsAnchor(null)} />
         )}
-        {(currentUser?.role !== 'worker' || currentUser.permissions.canExportImport) && (
+        {canExportImport && (
           <>
             <button type="button" onClick={handleImportClick}>
               Importuoti CSV
@@ -2414,6 +2491,21 @@ export function TableView({
             onCancel={() => setMergeContactsOpen(false)}
           />
         )}
+        {pushReplyRows && (
+          <PushReplyRowsModal
+            rows={pushReplyRows}
+            sourceColumns={columns}
+            tables={useWorkspaceStore.getState().tables}
+            currentUserName={currentUserName}
+            onClose={() => setPushReplyRows(null)}
+            onDone={(message) => {
+              showToast(message);
+              setPushReplyRows(null);
+              setRowRangeAnchor(null);
+              setRowRangeFocus(null);
+            }}
+          />
+        )}
         {columnContextMenu && (
           <ColumnHeaderMenu
             x={columnContextMenu.x}
@@ -2422,6 +2514,7 @@ export function TableView({
             targetIds={columnContextMenu.targetIds}
             onSort={(direction) => commitSort(columnContextMenu.targetIds[0], direction)}
             onFilterRange={() => setNumericFilterColumnId(columnContextMenu.targetIds[0])}
+            onFilterColor={() => setColorFilterColumnId(columnContextMenu.targetIds[0])}
             onCopy={() => copyColumnsToClipboard(columnContextMenu.targetIds)}
             onPaste={() => pasteAtColumns(columnContextMenu.targetIds)}
             onClose={() => setColumnContextMenu(null)}
@@ -2446,6 +2539,30 @@ export function TableView({
                   })
                 }
                 onClose={() => setNumericFilterColumnId(null)}
+              />
+            );
+          })()}
+        {colorFilterColumnId &&
+          (() => {
+            const anchor = columnHeaderRefs.current.get(colorFilterColumnId);
+            const column = columns.find((c) => c.id === colorFilterColumnId);
+            if (!anchor || !column) return null;
+            const availableColors = [...new Set(rows.map((r) => r.colors?.[colorFilterColumnId]).filter((c): c is string => !!c))];
+            return (
+              <ColumnColorFilterPopover
+                anchor={anchor}
+                columnName={column.name}
+                availableColors={availableColors}
+                current={colorFilters[colorFilterColumnId]}
+                onApply={(color) => setColorFilters((prev) => ({ ...prev, [colorFilterColumnId]: color }))}
+                onClear={() =>
+                  setColorFilters((prev) => {
+                    const next = { ...prev };
+                    delete next[colorFilterColumnId];
+                    return next;
+                  })
+                }
+                onClose={() => setColorFilterColumnId(null)}
               />
             );
           })()}

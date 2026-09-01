@@ -14,6 +14,14 @@ import { loadTables, getTable, saveTable, updateTableColumns, loadRowsForTable, 
  * write into the same table by name, so either one's dedup covers rows the
  * other already added. */
 
+// Shared with server/src/index.ts (the webhook path and, now, the
+// auto-create-on-API-key-save hook) so the literal exists in exactly one
+// place server-side. The client has its own duplicate of this same
+// literal (app/src/utils/instantlyReplySync.ts) — no shared module
+// boundary between app/ and server/ in this codebase, same duplication
+// pattern already used for REPLY_COLUMNS/INTEREST_STATUS_LABELS.
+export const VISI_ATSAKYMAI_TABLE_NAME = 'Visi atsakymai';
+
 const REPLY_COLUMNS = [
   'reply_snippet',
   'lead_email',
@@ -126,6 +134,14 @@ function findOrCreateTargetTable(companyId: string, name: string): TableMeta {
   const table: TableMeta = { id: randomUUID(), name, columns, dailyBackupEnabled: false, createdAt: now, updatedAt: now };
   saveTable(table, companyId);
   return table;
+}
+
+/** Called right after a company's Instantly API key is first saved (see
+ * index.ts's PATCH /api/admin/companies/:id/integrations), so "Visi
+ * atsakymai" exists immediately rather than waiting on the first real
+ * webhook reply to lazily create it via findOrCreateTargetTable above. */
+export function ensureVisiAtsakymaiTable(companyId: string): void {
+  findOrCreateTargetTable(companyId, VISI_ATSAKYMAI_TABLE_NAME);
 }
 
 export interface ReplySyncResult {

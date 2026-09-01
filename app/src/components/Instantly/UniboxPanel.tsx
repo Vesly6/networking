@@ -3,7 +3,7 @@ import { useInstantlyInboxStore, type UniboxThread, type UniboxViewMode } from '
 import { useInstantlyAccountsStore } from '../../store/useInstantlyAccountsStore';
 import { useInstantlyCampaignsStore } from '../../store/useInstantlyCampaignsStore';
 import { useToastStore } from '../../store/useToastStore';
-import { syncInstantlyRepliesToTable } from '../../utils/instantlyReplySync';
+import { syncInstantlyRepliesToTable, VISI_ATSAKYMAI_TABLE_NAME } from '../../utils/instantlyReplySync';
 import {
   INTEREST_STATUS_LABELS,
   INTEREST_STATUS_COLORS,
@@ -13,9 +13,17 @@ import {
 } from '../../utils/instantlyApi';
 import { Inbox, Mail, AlarmClock, Clock, Send, X, Link, ChevronRight, CornerUpRight, CornerUpLeft, Download, type LucideIcon } from 'lucide-react';
 
-/** The "More" menu — modeled directly on a screenshot of Instantly's own
- * real one (Inbox/Unread only/Reminders only/Scheduled emails/Sent), on
- * explicit request. */
+/** The "Daugiau" section — originally modeled directly on a screenshot of
+ * Instantly's own real "More" menu (Inbox/Unread only/Reminders
+ * only/Scheduled emails/Sent, in that order). "Tik neperskaityti" was
+ * briefly moved to the very top on a follow-up request when this section
+ * was still a click-to-expand submenu — once it became its own
+ * always-open sidebar section (second filter block, right after
+ * Statusas — see the "сделаем проще" request), that extra prominence
+ * stopped being necessary, so it moved back to matching Instantly's own
+ * original order (Inbox first, Unread second). Both maps' key order
+ * drives the render below directly (Object.keys(VIEW_MODE_LABELS)), so
+ * reordering here is the only change needed. */
 const VIEW_MODE_LABELS: Record<UniboxViewMode, string> = {
   inbox: 'Inbox',
   unread: 'Tik neperskaityti',
@@ -464,6 +472,8 @@ export function UniboxPanel() {
   const setOpenThreadId = useInstantlyInboxStore((s) => s.setOpenThreadId);
   const markingThreadIds = useInstantlyInboxStore((s) => s.markingThreadIds);
   const markThreadRead = useInstantlyInboxStore((s) => s.markThreadRead);
+  const markThreadUnread = useInstantlyInboxStore((s) => s.markThreadUnread);
+  const unreadCount = useInstantlyInboxStore((s) => s.unreadCount);
   const replyError = useInstantlyInboxStore((s) => s.replyError);
   const forwardError = useInstantlyInboxStore((s) => s.forwardError);
   const updatingStatusThreadIds = useInstantlyInboxStore((s) => s.updatingStatusThreadIds);
@@ -483,7 +493,6 @@ export function UniboxPanel() {
   const [composeMode, setComposeMode] = useState<'reply' | 'forward' | null>(null);
   const [campaignsOpen, setCampaignsOpen] = useState(false);
   const [campaignSearch, setCampaignSearch] = useState('');
-  const [moreOpen, setMoreOpen] = useState(false);
   const [syncingReplies, setSyncingReplies] = useState(false);
   // Two INDEPENDENT collapse toggles — not one combined listVisible flag
   // like an earlier version of this had. That version auto-collapsed the
@@ -568,23 +577,19 @@ export function UniboxPanel() {
     });
   }, [viewModeFiltered, search]);
 
-  const statusCounts = useMemo(() => {
-    const counts: Record<string, number> = {};
-    for (const t of tabFiltered) counts[statusKey(t.latest.i_status)] = (counts[statusKey(t.latest.i_status)] ?? 0) + 1;
-    return counts;
-  }, [tabFiltered]);
-
   const openThread = threads.find((t) => t.threadId === openThreadId);
 
   // The sidebar's "Lead" row is the reset/all-inclusive bucket — it does
   // NOT mean "only leads with no status set", it means "every status,
   // full stop" (on explicit clarification: "Lead статус берёт в себя все
   // статусы"). Every other row narrows to its own exact i_status value.
+  //
+  // No per-row count badge (removed on explicit follow-up request — "они
+  // збивают с толку", the numbers were confusing rather than useful).
   const renderStatusRow = (status: number | null) => {
     const isLeadRow = status === null;
     const key = statusKey(status);
     const active = isLeadRow ? statusFilter === 'all' : statusFilter === status;
-    const count = isLeadRow ? tabFiltered.length : (statusCounts[key] ?? 0);
     return (
       <button
         type="button"
@@ -594,7 +599,6 @@ export function UniboxPanel() {
       >
         <span className="instantly-status-dot" style={{ background: INTEREST_STATUS_COLORS[key] }} />
         {INTEREST_STATUS_LABELS[key]}
-        {count ? <span className="instantly-status-count">{count}</span> : null}
       </button>
     );
   };
@@ -640,6 +644,31 @@ export function UniboxPanel() {
                 ⋯ {showMoreStatuses ? 'Mažiau' : 'Daugiau'}
               </button>
               {showMoreStatuses && MORE_INTEREST_STATUSES.map(renderStatusRow)}
+            </div>
+
+            {/* Second filter section, always expanded — on explicit
+             * request ("сделаем проще"): this used to be a collapsed-by-
+             * default toggle way down after Kampanijos/Pašto dėžutė, but
+             * view mode (especially "Tik neperskaityti") is used often
+             * enough that hiding it behind both a scroll and a click was
+             * more friction than it was worth. No moreOpen state anymore —
+             * every row just renders directly. */}
+            <div className="instantly-unibox-sidebar-title">Daugiau</div>
+            <div className="instantly-status-list">
+              {(Object.keys(VIEW_MODE_LABELS) as UniboxViewMode[]).map((mode) => {
+                const ModeIcon = VIEW_MODE_ICONS[mode];
+                return (
+                  <button
+                    type="button"
+                    key={mode}
+                    className={`instantly-status-row ${viewMode === mode ? 'active' : ''}`}
+                    onClick={() => setViewMode(mode)}
+                  >
+                    <ModeIcon className="icon" size={16} /> {VIEW_MODE_LABELS[mode]}
+                    {mode === 'unread' && unreadCount > 0 && <span className="instantly-status-count">{unreadCount}</span>}
+                  </button>
+                );
+              })}
             </div>
 
             <div className="instantly-unibox-sidebar-title">Kampanijos</div>
@@ -703,7 +732,7 @@ export function UniboxPanel() {
                   onClick={async () => {
                     setSyncingReplies(true);
                     try {
-                      const result = await syncInstantlyRepliesToTable(filterCampaignId, 'Visi atsakymai');
+                      const result = await syncInstantlyRepliesToTable(filterCampaignId, VISI_ATSAKYMAI_TABLE_NAME);
                       showToast(
                         `„${result.tableName}": pridėta ${result.created} atsakymų (rasta ${result.repliesFound}, praleista pasikartojančių: ${result.skippedDuplicate})`,
                       );
@@ -728,31 +757,6 @@ export function UniboxPanel() {
                 </option>
               ))}
             </select>
-
-            <div className="instantly-unibox-sidebar-title">Daugiau</div>
-            <div className="instantly-status-list">
-              <button type="button" className="instantly-status-row" onClick={() => setMoreOpen((v) => !v)}>
-                <span className={`instantly-expand-caret ${moreOpen ? 'instantly-expand-caret-open' : ''}`}><ChevronRight className="icon" size={14} /></span>
-                {VIEW_MODE_LABELS[viewMode]}
-              </button>
-              {moreOpen &&
-                (Object.keys(VIEW_MODE_LABELS) as UniboxViewMode[]).map((mode) => {
-                  const ModeIcon = VIEW_MODE_ICONS[mode];
-                  return (
-                    <button
-                      type="button"
-                      key={mode}
-                      className={`instantly-status-row ${viewMode === mode ? 'active' : ''}`}
-                      onClick={() => {
-                        setViewMode(mode);
-                        setMoreOpen(false);
-                      }}
-                    >
-                      <ModeIcon className="icon" size={16} /> {VIEW_MODE_LABELS[mode]}
-                    </button>
-                  );
-                })}
-            </div>
           </>
         )}
       </aside>
@@ -806,7 +810,10 @@ export function UniboxPanel() {
                 <span className="instantly-thread-status-dot" style={{ background: statusColor }} />
                 <div className="instantly-thread-main">
                   <div className="instantly-thread-top-row">
-                    <span className="instantly-thread-subject">{other?.name ?? '—'}</span>
+                    <span className="instantly-thread-name-row">
+                      {thread.hasUnread && <span className="instantly-thread-unread-dot" title="Neperskaityta" />}
+                      <span className="instantly-thread-subject">{other?.name ?? '—'}</span>
+                    </span>
                     <span className="instantly-thread-meta">{formatTimestamp(thread.latest.timestamp_email)}</span>
                   </div>
                   {thread.latest.subject && <span className="instantly-thread-subject-line">{thread.latest.subject}</span>}
@@ -863,6 +870,15 @@ export function UniboxPanel() {
                     </option>
                   ))}
                 </select>
+                <button
+                  type="button"
+                  className="instantly-detail-mark-unread"
+                  title="Pažymėti kaip neperskaitytą — grįžkite prie jo vėliau"
+                  disabled={markingThreadIds.has(openThread.threadId)}
+                  onClick={() => void markThreadUnread(openThread.threadId)}
+                >
+                  <Mail className="icon" size={16} /> Neperskaityta
+                </button>
                 <button type="button" className="instantly-detail-close" onClick={() => setOpenThreadId(null)}>
                   <X className="icon" size={16} />
                 </button>

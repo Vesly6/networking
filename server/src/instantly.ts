@@ -412,6 +412,20 @@ export function markThreadRead(threadId: string, apiKey: string) {
   return callInstantly<{ status: string }>(`/emails/threads/${encodeURIComponent(threadId)}/mark-as-read`, { method: 'POST' }, apiKey);
 }
 
+/** PATCH /emails/{id} — the one *single-message* update endpoint, confirmed
+ * directly against the real API reference (not guessed from prose): the
+ * request body accepts only `is_unread` (number, 1/0) and `reminder_ts`,
+ * `additionalProperties: false`. There is no symmetric "mark thread as
+ * unread" endpoint the way markThreadRead above has a whole-thread one —
+ * this only ever flips a single message, so "mark this thread unread"
+ * (UniboxPanel.tsx) applies it to that thread's *latest* message
+ * specifically, which is enough to flip the thread's own hasUnread
+ * computation back to true (see useInstantlyInboxStore.ts's
+ * groupIntoThreads: `messages.some(m => m.is_unread)`). */
+export function updateEmail(id: string, patch: { is_unread?: 0 | 1; reminder_ts?: string | null }, apiKey: string) {
+  return callInstantly<InstantlyEmail>(`/emails/${encodeURIComponent(id)}`, { method: 'PATCH', body: patch }, apiKey);
+}
+
 export function getUnreadCount(apiKey: string) {
   return callInstantly<{ count: number }>('/emails/unread/count', {}, apiKey);
 }

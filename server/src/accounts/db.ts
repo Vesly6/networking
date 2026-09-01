@@ -95,6 +95,21 @@ function migrate(database: Database.Database): void {
       PRIMARY KEY (company_id, link)
     );
 
+    -- Remembers which destination table a given Instantly campaign's
+    -- replies should be pushed into from "Visi atsakymai" (the
+    -- reply-mapping feature) — a per-campaign choice the company makes
+    -- once (in PushReplyRowsModal.tsx) and gets suggested/pre-filled on
+    -- every later export of that same campaign, rather than a separate
+    -- upfront settings screen. One row per (company, campaign) — a later
+    -- save for the same campaign just overwrites the earlier choice.
+    CREATE TABLE IF NOT EXISTS company_instantly_table_map (
+      company_id TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      campaign_name TEXT NOT NULL,
+      table_name TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (company_id, campaign_name)
+    );
+
     -- A user-bookmarked article — a real snapshot of the article's own
     -- fields at save time (title/snippet/source/date/imageUrl), not just
     -- the link, since News items themselves are never persisted anywhere
@@ -512,6 +527,29 @@ export function markNewsLinkSeen(companyId: string, link: string): boolean {
     .prepare(`INSERT OR IGNORE INTO news_seen_links (company_id, link, first_seen_at) VALUES (?, ?, ?)`)
     .run(companyId, link, Date.now());
   return result.changes > 0;
+}
+
+/** The Instantly reply-mapping feature's saved campaign→table choices for
+ * one company, as a plain lookup object (campaign name -> table name) —
+ * the shape PushReplyRowsModal.tsx actually wants for a suggestion
+ * lookup, not a row array. */
+export function getInstantlyTableMap(companyId: string): Record<string, string> {
+  const rows = getDb()
+    .prepare(`SELECT campaign_name, table_name FROM company_instantly_table_map WHERE company_id = ?`)
+    .all(companyId) as { campaign_name: string; table_name: string }[];
+  return Object.fromEntries(rows.map((r) => [r.campaign_name, r.table_name]));
+}
+
+export function setInstantlyTableMapping(companyId: string, campaignName: string, tableName: string): void {
+  getDb()
+    .prepare(
+      `INSERT INTO company_instantly_table_map (company_id, campaign_name, table_name, updated_at)
+       VALUES (@companyId, @campaignName, @tableName, @updatedAt)
+       ON CONFLICT(company_id, campaign_name) DO UPDATE SET
+         table_name = excluded.table_name,
+         updated_at = excluded.updated_at`,
+    )
+    .run({ companyId, campaignName, tableName, updatedAt: Date.now() });
 }
 
 export interface NewsFolder {

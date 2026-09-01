@@ -1595,6 +1595,46 @@ tr.row-drop-end td {
   margin-bottom: 0.4rem;
 }
 
+.popover-hint {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+/* ColumnColorFilterPopover — one swatch per distinct color actually
+   painted in the column right now (never a fixed palette). */
+.column-color-filter-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.5rem;
+}
+.column-color-filter-swatch {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  border: 1px solid var(--border-strong);
+  cursor: pointer;
+  padding: 0;
+}
+.column-color-filter-swatch.active {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+/* "Numatytoji" (no color) — a diagonal-stripe pattern instead of a solid
+   fill, same convention design tools use for "no fill", so it can't be
+   mistaken for a real pale color. */
+.column-color-filter-swatch-none {
+  background-color: var(--bg);
+  background-image: repeating-linear-gradient(
+    45deg,
+    var(--border-strong) 0,
+    var(--border-strong) 1px,
+    transparent 1px,
+    transparent 6px
+  );
+}
+
 .popover-field input,
 .popover-field select {
   width: 100%;
@@ -1789,6 +1829,13 @@ tr.row-drop-end td {
 }
 .type-to-confirm-input {
   width: 100%;
+}
+
+.push-reply-rows-remember {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
 }
 
 .csv-import-mapping-hint {
@@ -2128,6 +2175,44 @@ tr.row-drop-end td {
   display: flex;
   align-items: flex-start;
   gap: 0.4rem;
+}
+
+/* The "Peržiūrėti istoriją" correspondence section — visually distinct
+   (dashed border) from the main comment list right below it, and only
+   ever shown when toggled open. Holds the row's own reply-sourced
+   entries (NoteEntry.replyFields present) — kept out of the always-shown
+   list entirely, on explicit request: mixing pushed correspondence in
+   among the user's own hand-typed comments read as "всё перемешалось"
+   (everything jumbled together) — "это две разные вещи" (these are two
+   different things). */
+.cell-hover-visi-preview {
+  border: 1px dashed var(--border-strong);
+  border-radius: 8px;
+  padding: 0.5rem;
+}
+.cell-hover-visi-empty {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+/* The bold metadata block on a reply-sourced entry (campaign_name,
+   sender_email, received_at, reply_subject, first_name, company_name,
+   lead_email — see REPLY_HEADER_FIELD_ORDER) — a per-field colored pill
+   for each of these was tried and rolled back as too busy ("теги
+   убераем"); bold weight alone is enough to make it stand out from the
+   reply_text body below it, without a label word per line. lead_status
+   keeps its own single colored badge (.cell-hover-history-tag-chip,
+   rendered separately) rather than joining this block. */
+.cell-hover-reply-header {
+  font-weight: 600;
+  font-size: 0.85rem;
+  white-space: pre-line;
+  margin: 0.3em 0 0;
+  /* A real reply can contain a single very long unbroken token (a
+     tracking-pixel URL, confirmed live to overflow badly before this). */
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 .cell-hover-history-text {
@@ -5073,6 +5158,32 @@ tr.row-drop-end td {
   border-color: var(--accent);
   background: var(--bg-alt);
 }
+/* A real, reported gap: the border/background tint above was too subtle
+   to actually notice at a glance in a long list — a dedicated dot (the
+   same "unread" convention as Gmail/most email clients) plus bolder
+   sender text makes it unmistakable which threads still need attention,
+   without needing to compare colors row to row. */
+.instantly-thread-row.instantly-thread-unread .instantly-thread-subject {
+  font-weight: 800;
+}
+.instantly-thread-row:not(.instantly-thread-unread) .instantly-thread-subject {
+  font-weight: 500;
+  color: var(--text-muted);
+}
+.instantly-thread-name-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+}
+.instantly-thread-unread-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--accent);
+  flex-shrink: 0;
+}
 .instantly-thread-main {
   flex: 1;
   min-width: 0;
@@ -5081,7 +5192,6 @@ tr.row-drop-end td {
   gap: 0.15rem;
 }
 .instantly-thread-subject {
-  font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -5678,6 +5788,15 @@ tr.row-drop-end td {
 }
 .instantly-detail-close:hover {
   color: var(--text);
+}
+
+.instantly-detail-mark-unread {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.8rem;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .instantly-thread-row-active {

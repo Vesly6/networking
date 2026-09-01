@@ -332,6 +332,16 @@ export const INTEREST_STATUS_COLORS: Record<string, string> = {
   '-4': '#8a8f98',
 };
 
+/** A `lead_status` cell (in "Visi atsakymai" and anywhere its rows get
+ * copied — see replyHistoryFormat.ts) stores statusLabel()'s output, the
+ * label TEXT (e.g. "Interested"), not the raw numeric i_status — so a
+ * badge keyed by INTEREST_STATUS_COLORS' numeric-string keys can't look it
+ * up directly. Derived once here from the two maps above, which already
+ * share keys 1:1. */
+export const INTEREST_LABEL_COLORS: Record<string, string> = Object.fromEntries(
+  Object.entries(INTEREST_STATUS_LABELS).map(([key, label]) => [label, INTEREST_STATUS_COLORS[key]]),
+);
+
 /** The core "which statuses show as their own top-level sidebar row"
  * list, matching Instantly's own Unibox sidebar exactly — everything else
  * (Out of office/Not interested/Wrong person/Lost/No show) collapses
@@ -399,6 +409,18 @@ export function replyToInstantlyEmail(body: {
 export function markInstantlyThreadRead(threadId: string) {
   return localApiRequest<{ status: string }>(`/api/instantly/emails/threads/${encodeURIComponent(threadId)}/mark-as-read`, {
     method: 'POST',
+  });
+}
+
+/** The reverse — no thread-level "mark unread" exists on Instantly's side
+ * (see server/src/instantly.ts's updateEmail doc comment), so this flips a
+ * single message's own is_unread flag; the caller targets a thread's
+ * latest message specifically. */
+export function markInstantlyEmailUnread(emailId: string) {
+  return localApiRequest<InstantlyEmail>(`/api/instantly/emails/${encodeURIComponent(emailId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ is_unread: 1 }),
   });
 }
 

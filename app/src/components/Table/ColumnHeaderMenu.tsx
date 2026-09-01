@@ -3,7 +3,7 @@ import { useTableStore } from '../../store/useTableStore';
 import { useAuthStore } from '../../store/useAuthStore';
 import { confirmDialog } from '../../store/useConfirmStore';
 import { ContextMenu } from '../ContextMenu';
-import { Hash } from 'lucide-react';
+import { Hash, Palette } from 'lucide-react';
 
 interface ColumnHeaderMenuProps {
   x: number;
@@ -32,12 +32,23 @@ interface ColumnHeaderMenuProps {
    * cleared — see NumericRangeFilterPopover's own doc comment for why
    * this is additive alongside sort, not a replacement for it. */
   onFilterRange: () => void;
+  /** Opens ColumnColorFilterPopover — same anchor-resolution reasoning as
+   * onFilterRange above (this menu's own buttons don't outlive onClose()).
+   * Always shown for a single-column target, same as onFilterRange —
+   * originally gated on "does this column actually have a colored cell
+   * right now," which was reverted on explicit request: that gate made
+   * the item appear/disappear per-column in a way that read as broken
+   * ("кнопка фильтра вообще пропала") rather than as the intended "no
+   * colors here yet" state. The popover itself still handles the "no
+   * colors" case gracefully — see ColumnColorFilterPopover, which always
+   * offers the "Numatytoji" (no color) swatch regardless. */
+  onFilterColor: () => void;
   onCopy: () => void;
   onPaste: () => void;
   onClose: () => void;
 }
 
-export function ColumnHeaderMenu({ x, y, columns, targetIds, onSort, onFilterRange, onCopy, onPaste, onClose }: ColumnHeaderMenuProps) {
+export function ColumnHeaderMenu({ x, y, columns, targetIds, onSort, onFilterRange, onFilterColor, onCopy, onPaste, onClose }: ColumnHeaderMenuProps) {
   const insertColumns = useTableStore((s) => s.insertColumns);
   const removeColumns = useTableStore((s) => s.removeColumns);
   const setColumnsHidden = useTableStore((s) => s.setColumnsHidden);
@@ -118,6 +129,9 @@ export function ColumnHeaderMenu({ x, y, columns, targetIds, onSort, onFilterRan
           </button>
           <button type="button" className="context-menu-item" onClick={() => run(onFilterRange)}>
             <Hash className="icon" size={16} /> Filtruoti (nuo–iki)
+          </button>
+          <button type="button" className="context-menu-item" onClick={() => run(onFilterColor)}>
+            <Palette className="icon" size={16} /> Filtruoti pagal spalvą
           </button>
         </>
       )}

@@ -165,7 +165,7 @@ export interface ContactDisplayField {
 // doesn't drag along trailing punctuation if the text happens to contain
 // JSON-ish syntax (e.g. someone pasting this module's own stored shape,
 // `[{"id":...,"text":"..."}]`, back in as literal text).
-const EMAIL_SEARCH_PATTERN = /[^\s,"{}[\]]+@[^\s,"{}[\]]+\.[^\s,"{}[\]]+/;
+export const EMAIL_SEARCH_PATTERN = /[^\s,"{}[\]]+@[^\s,"{}[\]]+\.[^\s,"{}[\]]+/;
 
 // Matches a LinkedIn profile/company URL anywhere in the text. Extracted
 // *before* the phone pattern below, not just before/after email — a

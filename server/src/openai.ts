@@ -137,6 +137,65 @@ export async function translateJobTitleToEnglish(title: string, apiKey: string):
   }
 }
 
+export class ReplyExtractError extends Error {}
+
+const REPLY_EXTRACT_MODEL = 'gpt-4o-mini';
+
+// The reply-mapping feature (PushReplyRowsModal.tsx) pushes an Instantly
+// reply's full reply_text into a CRM row's History — but a real reply's
+// reply_text is the *whole* email client rendering: the newest message on
+// top, followed by the entire quoted older thread (each introduced by a
+// "From: ... Sent: ... To: ... Subject: ..." block or similar), often with
+// a legal disclaimer repeated on every quoted message. Confirmed live on a
+// real reply: the newest message was 4 short lines plus a signature: the
+// rest (quoted thread + disclaimers, twice) was 30+ lines of noise that
+// swamped the actually-new content and — separately — was long/dense
+// enough to trigger a real UI bug when a user tried to edit that entry
+// (see CellHoverEditor.tsx's now-disabled edit path for reply-sourced
+// entries). Rule-based stripping (cut at the first "From:" line) is
+// fragile across different email clients' quote-marker formats/languages,
+// so this is deliberately an LLM extraction task, same "AI drafts, human
+// already decided to push it" split as parseContactText's cleanup above.
+const REPLY_EXTRACT_SYSTEM_PROMPT = `You extract only the NEWEST message from an email reply, discarding everything else. The input typically contains the newest message at the top, followed by one or more older QUOTED messages from earlier in the thread — introduced by a marker like "From: ... Sent: ... To: ... Subject: ...", "On [date], [name] wrote:", "-----Original Message-----", or an equivalent in another language.
+
+Keep: the newest message's own text, including its own signature block (name, title, company, contact details) if present, and any inline image/attachment placeholder (e.g. "[cid:...]") that's part of it.
+Remove: everything from the first quoted-message marker onward — the entire older quoted thread, and any legal/confidentiality disclaimer text attached to those older quoted messages.
+
+Preserve the original language and the line breaks of the kept portion exactly — do not translate, summarize, paraphrase, or add anything not already present. If the whole input is just one message with no quoted thread at all, return it unchanged.
+Output ONLY the extracted text — no explanation, no surrounding quotes, no markdown.`;
+
+/** Falls back to the original raw text on any failure (network, API
+ * error, empty response) rather than throwing — called per-row inside a
+ * bulk push (PushReplyRowsModal.tsx), where one row's AI hiccup should
+ * never block the other 30 rows in the same batch from still going
+ * through with their own (successfully cleaned, or at worst
+ * unextracted-but-intact) text. */
+export async function extractLatestEmailMessage(rawText: string, apiKey: string): Promise<string> {
+  try {
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: REPLY_EXTRACT_MODEL,
+        messages: [
+          { role: 'system', content: REPLY_EXTRACT_SYSTEM_PROMPT },
+          { role: 'user', content: rawText },
+        ],
+        temperature: 0,
+      }),
+    });
+    if (!res.ok) return rawText;
+    const json: any = await res.json().catch(() => null);
+    const text = json?.choices?.[0]?.message?.content?.trim();
+    return text || rawText;
+  } catch {
+    return rawText;
+  }
+}
+
 export class SummarizeError extends Error {}
 
 const SUMMARIZE_MODEL = 'gpt-4o-mini';

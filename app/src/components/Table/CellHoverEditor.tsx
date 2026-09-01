@@ -8,7 +8,7 @@ import {
   type KeyboardEvent,
 } from 'react';
 import { createPortal } from 'react-dom';
-import { parseNoteHistory } from '../../utils/noteHistory';
+import { parseNoteHistory, type NoteEntry } from '../../utils/noteHistory';
 import {
   parseContacts,
   extractPhoneNumber,
@@ -27,6 +27,7 @@ import { transcribeVoiceNote } from '../../utils/voiceNote';
 import { phoneMatchKey } from '../../utils/phoneMatch';
 import { randomUUID } from '../../utils/uuid';
 import { contrastTextColor } from '../../utils/color';
+import { REPLY_HEADER_FIELD_ORDER, replyStatusColor } from '../../utils/replyHistoryFormat';
 import { useToastStore } from '../../store/useToastStore';
 import { useAuthStore } from '../../store/useAuthStore';
 import { confirmDialog } from '../../store/useConfirmStore';
@@ -236,6 +237,31 @@ function parseTaggedEntry(text: string, statusOptionColors?: Record<string, stri
 // good. Flip back to true to restore the 📞 button on each contact entry.
 const CONTACT_CALL_BUTTON_ENABLED = false;
 
+/** Renders one reply-sourced entry's metadata (a NoteEntry.replyFields
+ * dict). A per-field colored pill for every metadata field ("tags") was
+ * tried and explicitly rolled back — "моя идея с тегами слишком зашла
+ * далеко... надо как-то сделать более просто" — but the metadata still
+ * needs to stand out from the reply_text body below it, so this renders
+ * lead_status as the one colored badge it always was (a single pill, not
+ * "tags" plural) plus the other fields as a plain BOLD text block —
+ * values only, no labels. Empty fields are simply omitted from the bold
+ * block. */
+function renderReplyHeader(fields: Record<string, string>) {
+  const status = fields.lead_status;
+  const color = status ? replyStatusColor(status) : undefined;
+  const lines = REPLY_HEADER_FIELD_ORDER.map((key) => fields[key]).filter(Boolean);
+  return (
+    <>
+      {status && (
+        <span className="cell-hover-history-tag-chip" style={color ? { backgroundColor: color, color: contrastTextColor(color) } : undefined}>
+          {status}
+        </span>
+      )}
+      {lines.length > 0 && <p className="cell-hover-reply-header">{lines.join('\n')}</p>}
+    </>
+  );
+}
+
 export function CellHoverEditor({
   anchor,
   mode,
@@ -278,6 +304,21 @@ export function CellHoverEditor({
   const [noteTagPickerAnchor, setNoteTagPickerAnchor] = useState<{ tag: (typeof NOTE_TAGS)[number]; anchor: HTMLElement } | null>(null);
   const [editDraft, setEditDraft] = useState('');
   const [loadingLastSummary, setLoadingLastSummary] = useState(false);
+  // "Peržiūrėti istoriją" toggle (note mode) — shows/hides the
+  // reply-sourced entries already stored in THIS row's own History (the
+  // ones with a `replyFields` dict, written by the bulk "Perkelti į
+  // lentelę" flow — see PushReplyRowsModal.tsx). A real, reported bug
+  // fixed by this split: those entries used to render inline among the
+  // user's own hand-typed comments, which read as "всё перемешалось"
+  // (everything mixed together) the moment a row had a real batch of
+  // pushed correspondence — "я не хочу связывать историю переписки и
+  // историю моих комментариев, это две разные вещи" (correspondence
+  // history and my own comment history are two different things, don't
+  // mix them). Purely a synchronous filter of the `value` prop already in
+  // hand (see replyEntries/commentEntries below) — no fetch, no loading
+  // state, so the toggle's own count is always immediately correct, never
+  // a "click to find out" gap.
+  const [visiOpen, setVisiOpen] = useState(false);
   // Voice-note recording state (see the 🎤 button below) — 'idle' →
   // 'recording' (mic live, MediaRecorder collecting chunks) →
   // 'transcribing' (stopped, waiting on ElevenLabs) → back to 'idle'.
@@ -901,6 +942,121 @@ export function CellHoverEditor({
     visibility: pos ? 'visible' : 'hidden',
   };
 
+  // The History/correspondence split (note mode only — see visiOpen's own
+  // doc comment above): commentEntries is what always renders in the
+  // main list; replyEntries only renders inside the "Peržiūrėti istoriją"
+  // toggle.
+  const allNoteEntries = mode === 'note' ? parseNoteHistory(value) : [];
+  const commentEntries = allNoteEntries.filter((e) => !e.replyFields);
+  // Newest-received first, not insertion order — a real reply can be
+  // pushed in a LATER batch than an older one it should still sort above/
+  // below correctly (addNoteEntry's own prepend-on-insert only keeps
+  // things sorted within a single push, not across several done on
+  // different days) — on explicit request ("по иерархии даты, самый
+  // недавний наверху"), sort explicitly by each entry's own
+  // replyFields.received_at instead of trusting array order.
+  const replyEntries = allNoteEntries
+    .filter((e) => e.replyFields)
+    .sort((a, b) => (b.replyFields?.received_at ?? '').localeCompare(a.replyFields?.received_at ?? ''));
+
+  // Shared by both lists below (commentEntries always rendered,
+  // replyEntries only inside the "Peržiūrėti istoriją" toggle). A
+  // reply-sourced entry gets its metadata header (renderReplyHeader) above
+  // the text and is DELETABLE but never editable — a real, reported bug:
+  // opening one of these for editing ("нажал на редактировать емайл")
+  // corrupted the whole panel ("все просто в кашу перемешалось"), almost
+  // certainly the combination of a very long (often 1000+ character,
+  // multi-paragraph) reply body loaded into the inline edit textarea. On
+  // explicit request, editing is disabled entirely for these rather than
+  // chasing that specific failure mode — there's no legitimate reason to
+  // hand-edit a pushed reply's text anyway (it's a record of what was
+  // actually said); delete-and-repush (from Visi atsakymai) is the correct
+  // way to fix a bad extraction.
+  const renderNoteEntry = (entry: NoteEntry) => {
+    const tagged = parseTaggedEntry(entry.text, statusOptionColors);
+    return (
+      <div key={entry.id} className="cell-hover-history-entry">
+        {entry.replyFields && renderReplyHeader(entry.replyFields)}
+        {(entry.authorName || entry.createdAt > 0) && (
+          <div className="cell-hover-history-time">
+            {entry.authorName && <span className="cell-hover-history-author">{entry.authorName}</span>}
+            {entry.authorName && entry.createdAt > 0 && ' · '}
+            {entry.createdAt > 0 && formatHistoryTimestamp(entry.createdAt)}
+          </div>
+        )}
+        <div className="cell-hover-history-row">
+          {editingNoteId === entry.id && !entry.replyFields ? (
+            <textarea
+              ref={editRef}
+              className="cell-hover-history-edit"
+              autoFocus
+              value={editDraft}
+              onChange={(e) => setEditDraft(e.target.value)}
+              onBlur={() => commitNoteEdit(entry.id)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  commitNoteEdit(entry.id);
+                }
+                if (e.key === 'Escape') {
+                  skipNoteEditCommitRef.current = true;
+                  e.currentTarget.blur();
+                }
+              }}
+            />
+          ) : (
+            (() => {
+              const content = !tagged ? (
+                entry.text
+              ) : tagged.tagPosition === 'suffix' ? (
+                <>
+                  {tagged.restText && `${tagged.restText} `}
+                  <span className="cell-hover-history-tag-chip" style={{ backgroundColor: tagged.color, color: contrastTextColor(tagged.color) }}>
+                    {tagged.tagLabel}
+                  </span>
+                </>
+              ) : tagged.tagPosition === 'prefix' ? (
+                <>
+                  <span className="cell-hover-history-tag-chip" style={{ backgroundColor: tagged.color, color: contrastTextColor(tagged.color) }}>
+                    {tagged.tagLabel}
+                  </span>
+                  {tagged.restText && ` ${tagged.restText}`}
+                </>
+              ) : (
+                <span className="cell-hover-history-tag-chip" style={{ backgroundColor: tagged.color, color: contrastTextColor(tagged.color) }}>
+                  {tagged.tagLabel}
+                </span>
+              );
+              return canDeleteNotes && !entry.replyFields ? (
+                <button
+                  type="button"
+                  className="cell-hover-history-text cell-hover-history-text-button"
+                  onClick={() => startEditingNote(entry.id, entry.text)}
+                >
+                  {content}
+                </button>
+              ) : (
+                <span className="cell-hover-history-text">{content}</span>
+              );
+            })()
+          )}
+          {canDeleteNotes && (
+            <button
+              type="button"
+              className="cell-hover-history-remove"
+              title="Ištrinti įrašą"
+              onClick={() => {
+                void removeNoteEntry(entry.id);
+              }}
+            >
+              <X className="icon" size={14} />
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <>
       {createPortal(
@@ -994,6 +1150,11 @@ export function CellHoverEditor({
                 >
                   {loadingLastSummary ? 'Ieškoma…' : <><Bot className="icon" size={14} /> Paskutinė santrauka</>}
                 </button>
+                {replyEntries.length > 0 && (
+                  <button type="button" className="cell-hover-tag cell-hover-tag-summary" onClick={() => setVisiOpen((v) => !v)}>
+                    {visiOpen ? '−' : '+'} Peržiūrėti istoriją ({replyEntries.length})
+                  </button>
+                )}
                 {NOTE_TAGS.map((tag) => (
                   <button
                     type="button"
@@ -1124,118 +1285,13 @@ export function CellHoverEditor({
                   })}
                 </Popover>
               )}
-              {parseNoteHistory(value).length > 0 && (
-                <div className="cell-hover-history">
-                  {parseNoteHistory(value).map((entry) => {
-                    const tagged = parseTaggedEntry(entry.text, statusOptionColors);
-                    return (
-                    <div key={entry.id} className="cell-hover-history-entry">
-                      {(entry.authorName || entry.createdAt > 0) && (
-                        <div className="cell-hover-history-time">
-                          {entry.authorName && <span className="cell-hover-history-author">{entry.authorName}</span>}
-                          {entry.authorName && entry.createdAt > 0 && ' · '}
-                          {entry.createdAt > 0 && formatHistoryTimestamp(entry.createdAt)}
-                        </div>
-                      )}
-                      <div className="cell-hover-history-row">
-                        {editingNoteId === entry.id ? (
-                          <textarea
-                            ref={editRef}
-                            className="cell-hover-history-edit"
-                            autoFocus
-                            value={editDraft}
-                            onChange={(e) => setEditDraft(e.target.value)}
-                            onBlur={() => commitNoteEdit(entry.id)}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter' && !e.shiftKey) {
-                                e.preventDefault();
-                                commitNoteEdit(entry.id);
-                              }
-                              if (e.key === 'Escape') {
-                                skipNoteEditCommitRef.current = true;
-                                e.currentTarget.blur();
-                              }
-                            }}
-                          />
-                        ) : (
-                          (() => {
-                            // On request — a tag used to color the whole
-                            // entry's background, which read as "the
-                            // whole line shouting one color" for an entry
-                            // that's mostly a name ("Andrius Ivanaitis
-                            // neatsiliepė"). Now only the tag word itself
-                            // renders as a small colored chip (matching
-                            // the quick-tag buttons above), with any
-                            // name/rest of the text staying plain — the
-                            // entry itself is never colored anymore, so
-                            // it no longer needs its own
-                            // contrastTextColor fix either.
-                            const content = !tagged ? (
-                              entry.text
-                            ) : tagged.tagPosition === 'suffix' ? (
-                              <>
-                                {tagged.restText && `${tagged.restText} `}
-                                <span
-                                  className="cell-hover-history-tag-chip"
-                                  style={{ backgroundColor: tagged.color, color: contrastTextColor(tagged.color) }}
-                                >
-                                  {tagged.tagLabel}
-                                </span>
-                              </>
-                            ) : tagged.tagPosition === 'prefix' ? (
-                              <>
-                                <span
-                                  className="cell-hover-history-tag-chip"
-                                  style={{ backgroundColor: tagged.color, color: contrastTextColor(tagged.color) }}
-                                >
-                                  {tagged.tagLabel}
-                                </span>
-                                {tagged.restText && ` ${tagged.restText}`}
-                              </>
-                            ) : (
-                              <span
-                                className="cell-hover-history-tag-chip"
-                                style={{ backgroundColor: tagged.color, color: contrastTextColor(tagged.color) }}
-                              >
-                                {tagged.tagLabel}
-                              </span>
-                            );
-                            // A worker without canDeleteNotes can't edit
-                            // this entry (that's what editing an existing
-                            // one via startEditingNote ultimately writes
-                            // as — see the shared server-side validator),
-                            // so it's plain text for them, not a button.
-                            return canDeleteNotes ? (
-                              <button
-                                type="button"
-                                className="cell-hover-history-text cell-hover-history-text-button"
-                                onClick={() => startEditingNote(entry.id, entry.text)}
-                              >
-                                {content}
-                              </button>
-                            ) : (
-                              <span className="cell-hover-history-text">{content}</span>
-                            );
-                          })()
-                        )}
-                        {canDeleteNotes && (
-                          <button
-                            type="button"
-                            className="cell-hover-history-remove"
-                            title="Ištrinti įrašą"
-                            onClick={() => {
-                              void removeNoteEntry(entry.id);
-                            }}
-                          >
-                            <X className="icon" size={14} />
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                    );
-                  })}
+              {visiOpen && (
+                <div className="cell-hover-history cell-hover-visi-preview">
+                  {replyEntries.length === 0 && <p className="cell-hover-visi-empty">Susirašinėjimo istorijos nėra.</p>}
+                  {replyEntries.map(renderNoteEntry)}
                 </div>
               )}
+              {commentEntries.length > 0 && <div className="cell-hover-history">{commentEntries.map(renderNoteEntry)}</div>}
             </>
           ) : (
             <>

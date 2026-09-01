@@ -13,6 +13,14 @@ import { fetchInstantlyEmails, fetchInstantlyLeads, fetchInstantlyCampaign, INTE
  * this doesn't try to be a continuously-running sync yet; re-running it
  * (same or a different campaign) is safe and additive, see the dedup
  * note below. */
+// Shared with TableView.tsx (the "is this literally the Visi atsakymai
+// table" check that gates the reply-push toolbar button) and
+// PushReplyRowsModal.tsx. The server has its own duplicate of this same
+// literal (server/src/instantlyReplySync.ts) — no shared module boundary
+// between app/ and server/ in this codebase, same duplication pattern
+// already used for REPLY_COLUMNS itself.
+export const VISI_ATSAKYMAI_TABLE_NAME = 'Visi atsakymai';
+
 export const REPLY_COLUMNS = [
   'reply_snippet',
   'lead_email',
