@@ -31,10 +31,52 @@ export interface ContactEntry {
    * incrementContactRepliedCount below) — never set through any control
    * in the Contacts editor itself. */
   repliedCount?: number;
+  /** Every distinct sender mailbox that has emailed this contact, across
+   * every outreach round ("Pridėti siuntėją" — see addContactSender
+   * below), each stamped with the date it was recorded — a growing,
+   * deduped-by-email list, not a counter, because the whole point is
+   * remembering *which* mailbox(es) and *when*, not just how many times:
+   * a worker who's about to call this person needs to say "we emailed
+   * you from X on this date" correctly, and a real contact genuinely
+   * accumulates more than one entry here across 10+ separate campaigns
+   * run over time (a first round nobody replies to, a later round from a
+   * different mailbox that gets a response). Newest-first — addContactSender
+   * prepends. Absent entirely, never an empty array, for a contact
+   * that's never had a sender recorded. */
+  senders?: SenderRecord[];
+}
+
+export interface SenderRecord {
+  email: string;
+  /** yyyy.MM.dd — see utils/date.ts's todaySenderDate(). Empty string
+   * for a sender recorded before dates were tracked (the very first
+   * shipped version stored senders as plain email strings with no date
+   * at all) — parseContacts below reads that legacy shape transparently. */
+  date: string;
 }
 
 function toPositiveCount(v: unknown): number | undefined {
   return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : undefined;
+}
+
+/** Reads both shapes senders has ever been stored as: the current
+ * `{email, date}[]` and the very first shipped version's plain
+ * `string[]` (a real, already-written batch of ~770 entries exists in
+ * that older shape) — a bare email there becomes `{email, date: ''}`. */
+function normalizeSenders(v: unknown): SenderRecord[] | undefined {
+  if (!Array.isArray(v) || v.length === 0) return undefined;
+  const result: SenderRecord[] = [];
+  for (const item of v) {
+    if (typeof item === 'string' && item.trim()) {
+      result.push({ email: item.trim(), date: '' });
+    } else if (item && typeof item === 'object' && typeof (item as { email?: unknown }).email === 'string') {
+      const email = (item as { email: string }).email.trim();
+      if (!email) continue;
+      const date = typeof (item as { date?: unknown }).date === 'string' ? (item as { date: string }).date : '';
+      result.push({ email, date });
+    }
+  }
+  return result.length > 0 ? result : undefined;
 }
 
 /** A `contact`-type cell's stored value is a JSON array of free-text
@@ -57,6 +99,7 @@ export function parseContacts(raw: string): ContactEntry[] {
         socialLookup: e.socialLookup && typeof e.socialLookup === 'object' ? e.socialLookup : undefined,
         sentCount: toPositiveCount(e.sentCount),
         repliedCount: toPositiveCount(e.repliedCount),
+        senders: normalizeSenders(e.senders),
       }));
     }
   } catch {
@@ -157,6 +200,28 @@ export function markSocialLookupNotFound(raw: string, id: string, platform: 'ins
  * legitimate, expected use, not an error. */
 export function markContactSent(raw: string, id: string): string {
   return serializeContacts(parseContacts(raw).map((c) => (c.id === id ? { ...c, sentCount: (c.sentCount ?? 0) + 1 } : c)));
+}
+
+/** "Pridėti siuntėją" bulk action (AddSenderModal.tsx's own equivalent of
+ * MarkContactsSentModal) — records that `senderEmail` emailed this
+ * contact on `date` (utils/date.ts's todaySenderDate()). Prepended, not
+ * appended — the tooltip reads newest-first, on explicit request, so a
+ * worker sees the most recent outreach mailbox first. Deduped
+ * case-insensitively by email: running the same campaign export twice,
+ * or two campaigns that happen to reuse a mailbox, moves that sender to
+ * the front with the new date rather than growing a duplicate entry —
+ * "when did we last send from this mailbox" should reflect the latest
+ * send, not the first. */
+export function addContactSender(raw: string, id: string, senderEmail: string, date: string): string {
+  const sender = senderEmail.trim();
+  if (!sender) return raw;
+  return serializeContacts(
+    parseContacts(raw).map((c) => {
+      if (c.id !== id) return c;
+      const existing = (c.senders ?? []).filter((s) => s.email.toLowerCase() !== sender.toLowerCase());
+      return { ...c, senders: [{ email: sender, date }, ...existing] };
+    }),
+  );
 }
 
 /** Never called from the Contacts editor UI directly — only from

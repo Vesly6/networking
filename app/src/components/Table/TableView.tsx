@@ -24,6 +24,7 @@ import { AddColumnPopover } from './AddColumnPopover';
 import { CsvImportMapping } from './CsvImportMapping';
 import { PushReplyRowsModal } from './PushReplyRowsModal';
 import { MarkContactsSentModal } from './MarkContactsSentModal';
+import { AddSenderModal } from './AddSenderModal';
 import { MergeContactsModal, type MergeStats } from './MergeContactsModal';
 import { ColumnHeaderMenu } from './ColumnHeaderMenu';
 import { RowHeaderMenu } from './RowHeaderMenu';
@@ -57,7 +58,7 @@ import {
   RECENT_COLORS_KEY,
   TABLE_VIEW_STATE_KEY_PREFIX,
 } from '../../constants';
-import { MoreHorizontal, Undo2, Redo2, Lock, X, GripVertical, Hash, MoreVertical, ChevronUp, ChevronDown, UserPlus, Send } from 'lucide-react';
+import { MoreHorizontal, Undo2, Redo2, Lock, X, GripVertical, Hash, MoreVertical, ChevronUp, ChevronDown, UserPlus, Send, Mail } from 'lucide-react';
 
 interface TableViewProps {
   focusRowId: string | null;
@@ -430,6 +431,7 @@ export function TableView({
   // click handler, before any later state clear can run.
   const [pushReplyRows, setPushReplyRows] = useState<Row[] | null>(null);
   const [markSentOpen, setMarkSentOpen] = useState(false);
+  const [addSenderOpen, setAddSenderOpen] = useState(false);
   const [columnContextMenu, setColumnContextMenu] = useState<{ x: number; y: number; targetIds: string[] } | null>(null);
   // Additive alongside sort (see NumericRangeFilterPopover's own doc
   // comment) — a map so several columns can each have their own active
@@ -2480,6 +2482,13 @@ export function TableView({
             >
               <Send className="icon" size={14} /> Pridėti išsiųstus
             </button>
+            <button
+              type="button"
+              title="Įkelkite išsiuntimo eksporto CSV — bus ieškoma atitikmenų visose darbo srities lentelėse ir prie kiekvieno rasto kontakto pridėta siuntėjo pašto dėžutė"
+              onClick={() => setAddSenderOpen(true)}
+            >
+              <Mail className="icon" size={14} /> Pridėti siuntėją
+            </button>
           </>
         )}
         {pendingImport && (
@@ -2534,6 +2543,17 @@ export function TableView({
               // possibly the one currently open, whose in-memory rows
               // otherwise wouldn't reflect the new sentCount until a manual
               // reload.
+              if (tableId) void useTableStore.getState().loadTable(tableId);
+            }}
+          />
+        )}
+        {addSenderOpen && (
+          <AddSenderModal
+            onClose={() => setAddSenderOpen(false)}
+            onDone={(message) => {
+              showToast(message);
+              setAddSenderOpen(false);
+              // Same reasoning as MarkContactsSentModal's onDone above.
               if (tableId) void useTableStore.getState().loadTable(tableId);
             }}
           />

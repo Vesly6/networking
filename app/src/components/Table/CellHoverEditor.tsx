@@ -185,6 +185,72 @@ interface TaggedEntry {
 // rendering; a prefix/suffix check is still the only way to find a
 // neatsiliepė/LinkedIn-request entry, since neither has a fixed stored
 // flag for it — see the original getHistoryEntryColor this replaced.
+/** Tooltip text for the ✉️ sent/replied badge below. On explicit
+ * request, a recorded "Pridėti siuntėją" sender list (see
+ * ContactEntry.senders' own doc comment) replaces the plain sent-count
+ * text entirely rather than appending to it — just the mailbox/date
+ * pairs, newest first (senders is already stored in that order — see
+ * addContactSender), one per line so a growing list (10+ campaigns over
+ * time) stays readable rather than running together on one line. */
+function buildSentTooltip(c: ContactEntry): string {
+  if (c.senders?.length) {
+    return ['Siųsta iš:', ...c.senders.map((s) => (s.date ? `${s.email} (${s.date})` : s.email))].join('\n');
+  }
+  return c.repliedCount
+    ? `Atsakė ${c.repliedCount} kart(ų) (iš viso siųsta ${c.sentCount ?? 0} kart(ų))`
+    : c.sentCount
+      ? `Išsiųsta ${c.sentCount} kart(ų), atsakymo dar nėra`
+      : 'Dar neišsiųsta';
+}
+
+/** Portaled hover tooltip for the sent/replied badge — a plain `title`
+ * attribute and even a nested position:absolute + CSS :hover element
+ * were both tried first and rejected: a native title tooltip over a
+ * 14px icon was reported as unreliable in real use, and a CSS-only
+ * absolutely-positioned child is silently clipped by
+ * .cell-hover-editor's own `overflow-y: auto; overflow-x: hidden`
+ * (confirmed live — the tooltip's computed style was opacity:1/
+ * visibility:visible the whole time, it just never painted, since
+ * overflow clipping happens regardless of a descendant's own
+ * position:absolute). Same fix as every other popover in this app
+ * (Popover.tsx's own doc comment): render into document.body via a
+ * portal, positioned from the anchor's live getBoundingClientRect() and
+ * clamped to the viewport, so no ancestor's overflow can clip it. */
+function SentBadgeTooltip({ anchor, text }: { anchor: HTMLElement; text: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  // A real, reported bug: the initial style here used to omit
+  // `position: 'fixed'`, so the very first render (before the
+  // useLayoutEffect below ever runs) painted this div as a normal
+  // block-level element appended to document.body — full document
+  // width, not shrink-wrapped to its own text. That's the exact
+  // `offsetWidth`/`offsetHeight` the effect then measured and centered
+  // the tooltip against, landing it wildly off-position ("shows very far
+  // away") — not a race, a genuinely wrong measurement, since the effect
+  // never re-runs once `anchor`/`text` stop changing. Starting already
+  // `position: fixed` (off-screen, hidden) means the very first
+  // measurement is already the real shrink-to-fit size.
+  const [style, setStyle] = useState<CSSProperties>({ position: 'fixed', top: -9999, left: -9999, visibility: 'hidden' });
+
+  useLayoutEffect(() => {
+    if (!anchor.isConnected) return;
+    const rect = anchor.getBoundingClientRect();
+    const width = ref.current?.offsetWidth ?? 0;
+    const height = ref.current?.offsetHeight ?? 0;
+    let left = rect.left + rect.width / 2 - width / 2;
+    left = Math.max(8, Math.min(left, window.innerWidth - width - 8));
+    let top = rect.top - height - 6;
+    if (top < 8) top = rect.bottom + 6; // flip below when there's no room above
+    setStyle({ position: 'fixed', top, left, visibility: 'visible' });
+  }, [anchor, text]);
+
+  return createPortal(
+    <div ref={ref} className="cell-hover-contact-sent-tooltip" style={style}>
+      {text}
+    </div>,
+    document.body,
+  );
+}
+
 function parseTaggedEntry(text: string, statusOptionColors?: Record<string, string>): TaggedEntry | null {
   // Checked first, ahead of the fixed NOTE_TAG_COLORS below — a status-
   // change auto-log entry's text is literally the status value itself
@@ -360,6 +426,11 @@ export function CellHoverEditor({
   // again — the form doesn't need to eat screen space every time a
   // contact cell is opened just to browse existing entries.
   const [manualContactFormOpen, setManualContactFormOpen] = useState(false);
+  // The sent/replied badge's portaled hover tooltip (SentBadgeTooltip) —
+  // one at a time, cleared on mouseleave. `anchor` is the badge <span>
+  // itself, captured directly in the mouseenter handler (not read back
+  // out of this state later), so there's no stale-event-target risk.
+  const [sentTooltip, setSentTooltip] = useState<{ anchor: HTMLElement; text: string } | null>(null);
   // Which contact entry (by id) currently has SocialLookupModal open —
   // one at a time, same convention as smsComposeFor/editingContactId below.
   const [socialLookupFor, setSocialLookupFor] = useState<string | null>(null);
@@ -1570,19 +1641,41 @@ export function CellHoverEditor({
                                     <Phone className="icon" size={14} />
                                   </button>
                                 )}
-                                {(c.sentCount || c.repliedCount) && (
+                                {(c.sentCount || c.repliedCount || c.senders?.length) && (
                                   <span
                                     className={`cell-hover-contact-sent ${
-                                      c.repliedCount ? 'cell-hover-contact-sent-replied' : 'cell-hover-contact-sent-active'
+                                      // A recorded sender is treated as the strongest signal (on
+                                      // explicit request: it means this person replied, so a
+                                      // worker scanning the table for the "hottest" leads should
+                                      // see it before the plain "sent, no reply yet"/"replied via
+                                      // History push" states) — takes priority over both.
+                                      c.senders?.length
+                                        ? 'cell-hover-contact-sent-hot'
+                                        : c.repliedCount
+                                          ? 'cell-hover-contact-sent-replied'
+                                          : 'cell-hover-contact-sent-active'
                                     }`}
-                                    title={
-                                      c.repliedCount
-                                        ? `Atsakė ${c.repliedCount} kart(ų) (iš viso siųsta ${c.sentCount ?? 0} kart(ų))`
-                                        : `Išsiųsta ${c.sentCount} kart(ų), atsakymo dar nėra`
-                                    }
+                                    // No hover tooltip for the plain "Pridėti išsiųstus"
+                                    // case (sentCount only, no reply, no sender) — on
+                                    // explicit request: the badge's own number already
+                                    // says everything there is to say ("sent N times"),
+                                    // so the effect has nothing to add there. Only shows
+                                    // when there's genuinely extra info (repliedCount's
+                                    // total-vs-replied breakdown, or a "Pridėti siuntėją"
+                                    // sender list) — see SentBadgeTooltip's own doc
+                                    // comment for why this is a portaled tooltip rather
+                                    // than a `title` attribute or a plain CSS :hover child
+                                    // (both tried, both rejected).
+                                    onMouseEnter={(e) => {
+                                      if (!c.repliedCount && !c.senders?.length) return;
+                                      setSentTooltip({ anchor: e.currentTarget, text: buildSentTooltip(c) });
+                                    }}
+                                    onMouseLeave={() => setSentTooltip(null)}
                                   >
                                     <Send className="icon" size={14} />
-                                    <span className="cell-hover-contact-sent-badge">{c.repliedCount || c.sentCount}</span>
+                                    {(c.repliedCount || c.sentCount) && (
+                                      <span className="cell-hover-contact-sent-badge">{c.repliedCount || c.sentCount}</span>
+                                    )}
                                   </span>
                                 )}
                                 <button
@@ -1700,6 +1793,7 @@ export function CellHoverEditor({
           onClose={() => setApolloModalOpen(false)}
         />
       )}
+      {sentTooltip && <SentBadgeTooltip anchor={sentTooltip.anchor} text={sentTooltip.text} />}
     </>
   );
 }

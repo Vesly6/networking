@@ -20,6 +20,14 @@ export function todayISO(): string {
   return format(new Date(), 'yyyy-MM-dd');
 }
 
+/** "Pridėti siuntėją" stamps each recorded sender with the date it was
+ * added (see ContactEntry.senders' own doc comment) — dot-separated on
+ * explicit request, purely a display format (still lexically sortable
+ * like ISO, since dots don't change digit grouping). */
+export function todaySenderDate(): string {
+  return format(new Date(), 'yyyy.MM.dd');
+}
+
 export function getDatePart(value: string): string {
   return value.slice(0, 10);
 }

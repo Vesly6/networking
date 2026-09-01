@@ -1981,7 +1981,7 @@ tr.row-drop-end td {
   font-size: 0.85rem;
 }
 
-.mark-sent-results-section {
+.bulk-match-results-section {
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
@@ -1991,14 +1991,14 @@ tr.row-drop-end td {
      instead of scrolling internally. */
   min-height: 0;
 }
-.mark-sent-results-heading {
+.bulk-match-results-heading {
   display: flex;
   align-items: center;
   gap: 0.6rem;
   font-size: 0.85rem;
   font-weight: 600;
 }
-.mark-sent-results-list {
+.bulk-match-results-list {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
@@ -2009,7 +2009,7 @@ tr.row-drop-end td {
   border-radius: 6px;
   padding: 0.4rem 0.5rem;
 }
-.mark-sent-results-row {
+.bulk-match-results-row {
   display: flex;
   gap: 0.5rem;
   align-items: baseline;
@@ -2017,19 +2017,25 @@ tr.row-drop-end td {
   border-bottom: 1px solid var(--border);
   padding-bottom: 0.2rem;
 }
-.mark-sent-results-row:last-child {
+.bulk-match-results-row:last-child {
   border-bottom: none;
   padding-bottom: 0;
 }
-.mark-sent-results-company {
+.bulk-match-results-company {
   font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 40%;
 }
-.mark-sent-results-email {
+.bulk-match-results-email {
   color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bulk-match-results-sender {
+  color: var(--accent);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2037,7 +2043,7 @@ tr.row-drop-end td {
 
 /* One collapsible-free section per table inside the "✅ Pažymėti
    kontaktai" results — see MarkContactsSentModal.tsx's matchedByTable. */
-.mark-sent-results-groups {
+.bulk-match-results-groups {
   display: flex;
   flex-direction: column;
   gap: 0.6rem;
@@ -2045,12 +2051,12 @@ tr.row-drop-end td {
   max-height: 14rem;
   min-height: 0;
 }
-.mark-sent-results-group {
+.bulk-match-results-group {
   display: flex;
   flex-direction: column;
   gap: 0.3rem;
 }
-.mark-sent-results-group-heading {
+.bulk-match-results-group-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -2059,7 +2065,7 @@ tr.row-drop-end td {
   font-weight: 600;
   color: var(--text-muted);
 }
-.mark-sent-results-group .mark-sent-results-list {
+.bulk-match-results-group .bulk-match-results-list {
   max-height: 7rem;
 }
 
@@ -2790,11 +2796,43 @@ tr.row-drop-end td {
   padding: 0.2em 0.3em;
   color: var(--text-muted);
 }
+/* SentBadgeTooltip (CellHoverEditor.tsx) — portaled into document.body
+   with position:fixed set inline by JS from the badge's live
+   getBoundingClientRect(), same pattern as Popover.tsx. A plain nested
+   position:absolute child was tried first and rejected: it's silently
+   clipped by .cell-hover-editor's own `overflow-y: auto; overflow-x:
+   hidden` (confirmed live — computed opacity/visibility were correct,
+   it just never painted), the same class of clipping bug Popover.tsx's
+   own doc comment already describes for the exact same container. */
+.cell-hover-contact-sent-tooltip {
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+  font-size: 0.72rem;
+  line-height: 1.4;
+  padding: 0.35em 0.6em;
+  border-radius: 6px;
+  /* pre-line, not nowrap — a multi-sender list (buildSentTooltip) is
+     joined with real newlines, one sender per line, and should wrap
+     exactly on those, not collapse onto one line or wrap mid-word. */
+  white-space: pre-line;
+  max-width: 320px;
+  box-shadow: var(--shadow);
+  pointer-events: none;
+  z-index: 20;
+}
 .cell-hover-contact-sent-active {
   color: var(--accent);
 }
 .cell-hover-contact-sent-replied {
   color: var(--success);
+}
+/* A recorded "Pridėti siuntėją" sender — on explicit request, a fixed
+   brand-yellow rather than a theme token: this is meant to read as a
+   distinct "hot lead" flag at a glance regardless of light/dark theme,
+   not just another shade of the app's own accent palette. */
+.cell-hover-contact-sent-hot {
+  color: #c9ef30;
 }
 .cell-hover-contact-sent-badge {
   display: inline-block;

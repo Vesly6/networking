@@ -196,7 +196,13 @@ export async function syncInstantlyRepliesToTable(campaignId: string, targetTabl
     cells[colByName.get('lead_status')!] = statusLabel(lead?.lt_interest_status ?? email.i_status ?? null);
     cells[colByName.get('campaign_name')!] = campaign.name;
     cells[colByName.get('reply_text')!] = email.body?.text || (email.body?.html ? stripHtml(email.body.html) : '') || email.content_preview || '';
-    cells[colByName.get('sender_email')!] = email.from_address_email;
+    // A real, reported bug: this used to duplicate lead_email
+    // (email.from_address_email again) — sender_email is meant to be
+    // *our* mailbox this thread is attached to, which is email.eaccount
+    // (see the from_address_email !== eaccount filter above, which
+    // already relies on this exact distinction to find genuine inbound
+    // replies in the first place).
+    cells[colByName.get('sender_email')!] = email.eaccount;
     cells[colByName.get('received_at')!] = email.timestamp_email;
     cells[colByName.get('reply_subject')!] = email.subject ?? '';
 
