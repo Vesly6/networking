@@ -19,6 +19,22 @@ export interface ContactEntry {
    * before this existed, and for one that simply hasn't been searched
    * yet. */
   socialLookup?: { instagramNotFound?: boolean; facebookNotFound?: boolean };
+  /** How many times "mark as sent" (the ✉️ icon next to this contact) has
+   * been clicked — a counter, not a boolean, since the same contact can
+   * legitimately be included in more than one outreach round (a first
+   * batch that went unanswered, then a later re-send). Absent/undefined,
+   * never 0, for a contact never marked sent — same convention as
+   * socialLookup above. */
+  sentCount?: number;
+  /** How many times a reply from this contact has been pushed into this
+   * row's History via PushReplyRowsModal's automatic email match (see
+   * incrementContactRepliedCount below) — never set through any control
+   * in the Contacts editor itself. */
+  repliedCount?: number;
+}
+
+function toPositiveCount(v: unknown): number | undefined {
+  return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : undefined;
 }
 
 /** A `contact`-type cell's stored value is a JSON array of free-text
@@ -39,6 +55,8 @@ export function parseContacts(raw: string): ContactEntry[] {
         id: typeof e.id === 'string' ? e.id : randomUUID(),
         text: typeof e.text === 'string' ? e.text : formatLegacyEntryText(e),
         socialLookup: e.socialLookup && typeof e.socialLookup === 'object' ? e.socialLookup : undefined,
+        sentCount: toPositiveCount(e.sentCount),
+        repliedCount: toPositiveCount(e.repliedCount),
       }));
     }
   } catch {
@@ -130,6 +148,40 @@ export function markSocialLookupNotFound(raw: string, id: string, platform: 'ins
   return serializeContacts(
     parseContacts(raw).map((c) => (c.id === id ? { ...c, socialLookup: { ...c.socialLookup, [key]: true } } : c)),
   );
+}
+
+/** The manual "I just sent this contact something" click (CellHoverEditor's
+ * ✉️ icon) — bumps ContactEntry.sentCount. A counter, not a boolean: the
+ * same contact can be included in more than one outreach round, and
+ * clicking again after a reply already came in (re-engagement) is a
+ * legitimate, expected use, not an error. */
+export function markContactSent(raw: string, id: string): string {
+  return serializeContacts(parseContacts(raw).map((c) => (c.id === id ? { ...c, sentCount: (c.sentCount ?? 0) + 1 } : c)));
+}
+
+/** Never called from the Contacts editor UI directly — only from
+ * PushReplyRowsModal.tsx's automatic email match, the moment a reply from
+ * this contact is pushed into this row's History. */
+export function incrementContactRepliedCount(raw: string, id: string): string {
+  return serializeContacts(parseContacts(raw).map((c) => (c.id === id ? { ...c, repliedCount: (c.repliedCount ?? 0) + 1 } : c)));
+}
+
+/** Finds which specific contact entry (if any) in this row's Contacts cell
+ * owns `email` — used by PushReplyRowsModal.tsx to attribute a pushed
+ * reply to one person, not just to the row as a whole. Row-level matching
+ * (emailMatch.ts's buildEmailIndex) can succeed via a completely different
+ * column (e.g. a plain "El. paštas" text column) with no corresponding
+ * Contacts entry at all — that's a real, expected case for some tables'
+ * schemas, so returning null here is not an error, just "nothing to
+ * credit." First match wins on a duplicate email across entries (rare —
+ * addContactsDedupByEmail already prevents most at import time). */
+export function findContactIdByEmail(raw: string, email: string): string | null {
+  const target = email.trim().toLowerCase();
+  if (!target) return null;
+  const match = parseContacts(raw).find(
+    (c) => splitContactDisplayFields(c.text).find((f) => f.kind === 'email')?.value.toLowerCase() === target,
+  );
+  return match?.id ?? null;
 }
 
 /** For the collapsed (non-hovering) cell preview. */

@@ -125,7 +125,10 @@ async function findOrCreateTargetTable(name: string): Promise<TableMeta> {
 
   const now = Date.now();
   const columns: Column[] = REPLY_COLUMNS.map((id) => ({ id: randomUUID(), name: id, type: 'text' }));
-  const table: TableMeta = { id: randomUUID(), name, columns, createdAt: now, updatedAt: now };
+  // Appended at the end of the ungrouped tables, same convention every
+  // other table-creation path uses (see useWorkspaceStore.ts).
+  const order = Math.max(-1, ...useWorkspaceStore.getState().tables.map((t) => t.order)) + 1;
+  const table: TableMeta = { id: randomUUID(), name, columns, order, createdAt: now, updatedAt: now };
   await saveTable(table);
   useWorkspaceStore.setState((s) => ({ tables: [...s.tables, table] }));
   return table;

@@ -69,6 +69,14 @@ import {
   saveTable,
   updateTableColumns,
   updateTableName,
+  setTableFolder,
+  reorderTables,
+  listTableFolders,
+  createTableFolder,
+  renameTableFolder,
+  deleteTableFolder,
+  reorderTableFolders,
+  type TableFolder,
   deleteTable,
   loadRowsForTable,
   countRowsForTable,
@@ -2827,6 +2835,91 @@ app.post(
       return;
     }
     setTableBackupFlag(req.params.id, req.auth!.companyId, req.body.enabled);
+    res.json({ ok: true });
+  }),
+);
+
+// SheetTabs' right-click "Priskirti aplankui"/"Išimti iš aplanko" — same
+// requireNotWorker gate as the other table-management routes above
+// (organizing the table list is company-level, not a worker's call).
+app.patch(
+  '/api/tables/:id/folder',
+  requireNotWorker,
+  asyncHandler(async (req, res) => {
+    const folderId = typeof req.body?.folderId === 'string' ? req.body.folderId : null;
+    setTableFolder(req.params.id, folderId, req.auth!.companyId);
+    res.json({ ok: true });
+  }),
+);
+
+// SheetTabs' drag-reorder — one request for the whole batch, mirroring PUT
+// /api/rows below (a single drag can move many siblings' order at once,
+// never one request per table).
+app.put(
+  '/api/tables/reorder',
+  requireNotWorker,
+  asyncHandler(async (req, res) => {
+    if (!Array.isArray(req.body?.tables)) {
+      res.status(400).json({ error: 'Invalid "tables"' });
+      return;
+    }
+    reorderTables(req.body.tables, req.auth!.companyId);
+    res.json({ ok: true });
+  }),
+);
+
+app.get(
+  '/api/table-folders',
+  asyncHandler(async (req, res) => {
+    res.json({ folders: listTableFolders(req.auth!.companyId) });
+  }),
+);
+
+app.post(
+  '/api/table-folders',
+  requireNotWorker,
+  asyncHandler(async (req, res) => {
+    const folder = req.body as Partial<TableFolder>;
+    if (!folder?.id || typeof folder.name !== 'string' || typeof folder.order !== 'number') {
+      res.status(400).json({ error: 'Invalid folder payload' });
+      return;
+    }
+    createTableFolder(folder as TableFolder, req.auth!.companyId);
+    res.json({ ok: true });
+  }),
+);
+
+app.patch(
+  '/api/table-folders/:id',
+  requireNotWorker,
+  asyncHandler(async (req, res) => {
+    if (typeof req.body?.name !== 'string') {
+      res.status(400).json({ error: 'Invalid "name"' });
+      return;
+    }
+    renameTableFolder(req.params.id, req.body.name, req.auth!.companyId);
+    res.json({ ok: true });
+  }),
+);
+
+app.delete(
+  '/api/table-folders/:id',
+  requireNotWorker,
+  asyncHandler(async (req, res) => {
+    deleteTableFolder(req.params.id, req.auth!.companyId);
+    res.json({ ok: true });
+  }),
+);
+
+app.put(
+  '/api/table-folders/reorder',
+  requireNotWorker,
+  asyncHandler(async (req, res) => {
+    if (!Array.isArray(req.body?.folders)) {
+      res.status(400).json({ error: 'Invalid "folders"' });
+      return;
+    }
+    reorderTableFolders(req.body.folders, req.auth!.companyId);
     res.json({ ok: true });
   }),
 );

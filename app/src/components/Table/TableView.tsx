@@ -23,6 +23,7 @@ import { ColumnMenu } from './ColumnMenu';
 import { AddColumnPopover } from './AddColumnPopover';
 import { CsvImportMapping } from './CsvImportMapping';
 import { PushReplyRowsModal } from './PushReplyRowsModal';
+import { MarkContactsSentModal } from './MarkContactsSentModal';
 import { MergeContactsModal, type MergeStats } from './MergeContactsModal';
 import { ColumnHeaderMenu } from './ColumnHeaderMenu';
 import { RowHeaderMenu } from './RowHeaderMenu';
@@ -56,7 +57,7 @@ import {
   RECENT_COLORS_KEY,
   TABLE_VIEW_STATE_KEY_PREFIX,
 } from '../../constants';
-import { MoreHorizontal, Undo2, Redo2, Lock, X, GripVertical, Hash, MoreVertical, ChevronUp, ChevronDown, UserPlus } from 'lucide-react';
+import { MoreHorizontal, Undo2, Redo2, Lock, X, GripVertical, Hash, MoreVertical, ChevronUp, ChevronDown, UserPlus, Send } from 'lucide-react';
 
 interface TableViewProps {
   focusRowId: string | null;
@@ -428,6 +429,7 @@ export function TableView({
   // for its own bulk action: capture the id/row list synchronously in the
   // click handler, before any later state clear can run.
   const [pushReplyRows, setPushReplyRows] = useState<Row[] | null>(null);
+  const [markSentOpen, setMarkSentOpen] = useState(false);
   const [columnContextMenu, setColumnContextMenu] = useState<{ x: number; y: number; targetIds: string[] } | null>(null);
   // Additive alongside sort (see NumericRangeFilterPopover's own doc
   // comment) — a map so several columns can each have their own active
@@ -2471,6 +2473,13 @@ export function TableView({
                 <UserPlus className="icon" size={14} /> Pridėti kontaktus
               </button>
             )}
+            <button
+              type="button"
+              title="Įklijuokite el. pašto sąrašą — bus ieškoma atitikmenų visose darbo srities lentelėse ir pažymėta kaip išsiųsta"
+              onClick={() => setMarkSentOpen(true)}
+            >
+              <Send className="icon" size={14} /> Pridėti išsiųstus
+            </button>
           </>
         )}
         {pendingImport && (
@@ -2503,6 +2512,29 @@ export function TableView({
               setPushReplyRows(null);
               setRowRangeAnchor(null);
               setRowRangeFocus(null);
+              // Pushed rows can belong to a table other than the one
+              // currently open, but can just as easily BE this one (the
+              // Instantly reply table's own rows, or any table with a
+              // matching Contacts email) — loadTable always re-fetches
+              // fresh rather than trusting the in-memory copy (see
+              // CLAUDE.md's "always re-read on load" rule), so this is the
+              // same fix as reopening the table by hand, just automatic.
+              if (tableId) void useTableStore.getState().loadTable(tableId);
+            }}
+          />
+        )}
+        {markSentOpen && (
+          <MarkContactsSentModal
+            onClose={() => setMarkSentOpen(false)}
+            onDone={(message) => {
+              showToast(message);
+              setMarkSentOpen(false);
+              // Same reasoning as PushReplyRowsModal's onDone above — this
+              // modal writes across every workspace table, including
+              // possibly the one currently open, whose in-memory rows
+              // otherwise wouldn't reflect the new sentCount until a manual
+              // reload.
+              if (tableId) void useTableStore.getState().loadTable(tableId);
             }}
           />
         )}

@@ -44,6 +44,21 @@ function migrate(database: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS rows_by_table ON rows(table_id);
 
+    -- SheetTabs grouping buckets ("PL", "SE energy", ...) — purely an
+    -- organizational label, no effect on table data. Created here (before
+    -- the tables.folder_id ALTER TABLE below) so that column's REFERENCES
+    -- clause resolves against a table that already exists, same ordering
+    -- constraint accounts/db.ts's own news_folders/news_topics pair follows.
+    CREATE TABLE IF NOT EXISTS table_folders (
+      id TEXT PRIMARY KEY,
+      company_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      order_num INTEGER NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS table_folders_by_company ON table_folders(company_id);
+
     CREATE TABLE IF NOT EXISTS worker_actions (
       id TEXT PRIMARY KEY,
       company_id TEXT NOT NULL,
@@ -99,6 +114,36 @@ function migrate(database: Database.Database): void {
   // coverage is an intentional later step, not this pass).
   try {
     database.exec(`ALTER TABLE tables ADD COLUMN daily_backup_enabled INTEGER NOT NULL DEFAULT 0`);
+  } catch {
+    // Column already exists — nothing to do.
+  }
+
+  // Table drag-reorder + folders (SheetTabs). order_num is scoped by
+  // company_id like everything else here; on a genuinely fresh install
+  // this ALTER still runs (there's no separate "was this a fresh DB"
+  // branch — see the file's other ALTERs for the same convention) and the
+  // backfill below is a no-op since every table in that case is created
+  // afterward with a real order already set by the client.
+  try {
+    database.exec(`ALTER TABLE tables ADD COLUMN order_num INTEGER NOT NULL DEFAULT 0`);
+    // One-time backfill, only reachable the first time this ALTER succeeds
+    // (a brand-new column, every existing row just defaulted to 0) — ranks
+    // each company's existing tables by created_at so their current
+    // relative order is preserved instead of all tying at 0. O(n²)
+    // correlated subquery — fine at the dozens-of-tables-per-company scale
+    // this operates at, and it only ever runs once per database.
+    database.exec(`
+      UPDATE tables SET order_num = (
+        SELECT COUNT(*) FROM tables t2
+        WHERE t2.company_id = tables.company_id
+          AND (t2.created_at < tables.created_at OR (t2.created_at = tables.created_at AND t2.id < tables.id))
+      )
+    `);
+  } catch {
+    // Column already exists — nothing to do.
+  }
+  try {
+    database.exec(`ALTER TABLE tables ADD COLUMN folder_id TEXT REFERENCES table_folders(id) ON DELETE SET NULL`);
   } catch {
     // Column already exists — nothing to do.
   }
@@ -166,6 +211,8 @@ export interface TableMeta {
   name: string;
   columns: unknown[]; // Column[] — opaque to this server, see note above
   dailyBackupEnabled: boolean;
+  order: number;
+  folderId?: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -175,6 +222,8 @@ interface TableRow {
   name: string;
   columns_json: string;
   daily_backup_enabled: number;
+  order_num: number;
+  folder_id: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -185,13 +234,17 @@ function tableFromRow(r: TableRow): TableMeta {
     name: r.name,
     columns: JSON.parse(r.columns_json),
     dailyBackupEnabled: r.daily_backup_enabled === 1,
+    order: r.order_num,
+    folderId: r.folder_id ?? undefined,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
 }
 
 export function loadTables(companyId: string): TableMeta[] {
-  const rows = getDb().prepare(`SELECT * FROM tables WHERE company_id = ? ORDER BY created_at ASC`).all(companyId) as TableRow[];
+  const rows = getDb()
+    .prepare(`SELECT * FROM tables WHERE company_id = ? ORDER BY order_num ASC, created_at ASC`)
+    .all(companyId) as TableRow[];
   return rows.map(tableFromRow);
 }
 
@@ -211,15 +264,21 @@ export function getTable(id: string, companyId: string): TableMeta | null {
  * belongs to that same company — this is what stops a crafted request
  * from overwriting another company's table even if it somehow guessed a
  * real id (astronomically unlikely given UUIDs, but free to guard). */
+// order_num/folder_id are only ever meaningful for the INSERT branch (a
+// brand-new table) — the ON CONFLICT DO UPDATE clause deliberately leaves
+// them out, same as it already leaves out created_at, so a re-save (the
+// CSV-migration upsert path, restoreBackupAsNewTable) never clobbers a
+// table's manual order/folder placement with whatever stale value the
+// caller happened to be holding.
 export function saveTable(table: TableMeta, companyId: string): void {
   getDb()
     .prepare(
-      `INSERT INTO tables (id, name, columns_json, company_id, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)
+      `INSERT INTO tables (id, name, columns_json, order_num, folder_id, company_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET name = excluded.name, columns_json = excluded.columns_json, updated_at = excluded.updated_at
        WHERE tables.company_id = excluded.company_id`,
     )
-    .run(table.id, table.name, JSON.stringify(table.columns), companyId, table.createdAt, table.updatedAt);
+    .run(table.id, table.name, JSON.stringify(table.columns), table.order, table.folderId ?? null, companyId, table.createdAt, table.updatedAt);
 }
 
 /** Read-modify-write, matching the client's own `updateTableColumns` —
@@ -244,6 +303,107 @@ export function updateTableName(tableId: string, name: string, companyId: string
   if (!existing) return;
   database.prepare(`UPDATE tables SET name = ?, updated_at = ? WHERE id = ? AND company_id = ?`).run(name, Date.now(), tableId, companyId);
 }
+
+/** SheetTabs' right-click "Priskirti aplankui"/"Išimti iš aplanko" —
+ * folderId null ungroups the table. Same read-check-then-UPDATE shape as
+ * updateTableName above. */
+export function setTableFolder(tableId: string, folderId: string | null, companyId: string): void {
+  const database = getDb();
+  const existing = database.prepare(`SELECT id FROM tables WHERE id = ? AND company_id = ?`).get(tableId, companyId) as
+    | { id: string }
+    | undefined;
+  if (!existing) return;
+  database
+    .prepare(`UPDATE tables SET folder_id = ?, updated_at = ? WHERE id = ? AND company_id = ?`)
+    .run(folderId, Date.now(), tableId, companyId);
+}
+
+/** SheetTabs' drag-reorder — one transaction for the whole batch, same
+ * reasoning as saveRows below (a single request per drag, not one per
+ * table). Each `order` here is already scoped to whichever sibling group
+ * (ungrouped, or one specific folder) the client just reordered — this
+ * function has no opinion about groups, it just writes whatever order
+ * values it's given. */
+export function reorderTables(updates: { id: string; order: number }[], companyId: string): void {
+  if (updates.length === 0) return;
+  const database = getDb();
+  const stmt = database.prepare(`UPDATE tables SET order_num = ?, updated_at = ? WHERE id = ? AND company_id = ?`);
+  const now = Date.now();
+  const tx = database.transaction((batch: { id: string; order: number }[]) => {
+    for (const u of batch) stmt.run(u.order, now, u.id, companyId);
+  });
+  tx(updates);
+}
+
+// --- SheetTabs folders ------------------------------------------------------
+// A plain organizational grouping for a client with many tables (country x
+// sector combinations) — see types.ts's TableFolder doc comment. Modeled
+// directly on accounts/db.ts's news_folders (same nullable
+// ON DELETE SET NULL FK from tables.folder_id, same CRUD shape).
+
+export interface TableFolder {
+  id: string;
+  name: string;
+  order: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+interface TableFolderRow {
+  id: string;
+  name: string;
+  order_num: number;
+  created_at: number;
+  updated_at: number;
+}
+
+function tableFolderFromRow(r: TableFolderRow): TableFolder {
+  return { id: r.id, name: r.name, order: r.order_num, createdAt: r.created_at, updatedAt: r.updated_at };
+}
+
+export function listTableFolders(companyId: string): TableFolder[] {
+  const rows = getDb()
+    .prepare(`SELECT * FROM table_folders WHERE company_id = ? ORDER BY order_num ASC, created_at ASC`)
+    .all(companyId) as TableFolderRow[];
+  return rows.map(tableFolderFromRow);
+}
+
+/** Blind insert — the client generates the id (randomUUID(), same as every
+ * other entity in this app) and the order (append-at-the-end), so there's
+ * nothing to upsert/conflict-resolve here unlike saveTable. */
+export function createTableFolder(folder: TableFolder, companyId: string): void {
+  getDb()
+    .prepare(
+      `INSERT INTO table_folders (id, company_id, name, order_num, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+    .run(folder.id, companyId, folder.name, folder.order, folder.createdAt, folder.updatedAt);
+}
+
+export function renameTableFolder(id: string, name: string, companyId: string): void {
+  getDb()
+    .prepare(`UPDATE table_folders SET name = ?, updated_at = ? WHERE id = ? AND company_id = ?`)
+    .run(name, Date.now(), id, companyId);
+}
+
+/** Tables inside this folder are ungrouped automatically via the FK's ON
+ * DELETE SET NULL (see the folder_id ALTER TABLE above) — no manual
+ * cleanup step needed here, same as news_folders. */
+export function deleteTableFolder(id: string, companyId: string): void {
+  getDb().prepare(`DELETE FROM table_folders WHERE id = ? AND company_id = ?`).run(id, companyId);
+}
+
+/** Same shape as reorderTables above, for the folder strip itself. */
+export function reorderTableFolders(updates: { id: string; order: number }[], companyId: string): void {
+  if (updates.length === 0) return;
+  const database = getDb();
+  const stmt = database.prepare(`UPDATE table_folders SET order_num = ?, updated_at = ? WHERE id = ? AND company_id = ?`);
+  const now = Date.now();
+  const tx = database.transaction((batch: { id: string; order: number }[]) => {
+    for (const u of batch) stmt.run(u.order, now, u.id, companyId);
+  });
+  tx(updates);
+}
+// ---------------------------------------------------------------------------
 
 /** The Workspace screen's per-table "📦 daily backup" toggle (a company's
  * own super_admin — no owner gate needed here, unlike the Admin
@@ -963,11 +1123,18 @@ export function restoreBackupAsNewTable(id: string, companyId?: string): TableMe
   const targetCompanyId = companyId ?? backup.companyId;
   const now = Date.now();
   const date = new Date(backup.createdAt).toISOString().slice(0, 10);
+  // Appended at the end of the target company's ungrouped tables, same
+  // "next available order" convention the client uses when creating a
+  // table through the normal UI.
+  const nextOrder = getDb()
+    .prepare(`SELECT COALESCE(MAX(order_num), -1) + 1 AS nextOrder FROM tables WHERE company_id = ?`)
+    .get(targetCompanyId) as { nextOrder: number };
   const newTable: TableMeta = {
     id: randomUUID(),
     name: `${backup.tableName} (kopija ${date})`,
     columns: backup.columns,
     dailyBackupEnabled: false,
+    order: nextOrder.nextOrder,
     createdAt: now,
     updatedAt: now,
   };

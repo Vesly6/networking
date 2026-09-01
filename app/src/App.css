@@ -427,18 +427,50 @@ svg.icon {
 
 /* Excel-style sheet tabs, bottom of the window — a faster way to reach
    useWorkspaceStore's table list than going back to the Workspace screen.
-   overflow-x: auto (not wrap) so a long list of tables scrolls
+   .sheet-tabs-bar is the outer row (scroll arrows + the scrollable strip
+   itself + the "Visos lentelės" jump button); .sheet-tabs is just the
+   scrollable middle section — split out so the arrow/jump buttons stay
+   pinned outside the overflow-x:auto area instead of scrolling away with
+   the tabs. overflow-x: auto (not wrap) so a long list of tables scrolls
    horizontally instead of growing the bar to multiple rows, matching
-   Excel's own behavior. */
+   Excel's own behavior; min-width: 0 on the flex child is required for
+   that to actually work rather than the strip just growing to fit its
+   content (the same flex/grid min-size trap CLAUDE.md documents for the
+   calendar day cells). */
+.sheet-tabs-bar {
+  display: flex;
+  align-items: center;
+  border-top: 1px solid var(--border-strong);
+  background: var(--bg-alt);
+  flex-shrink: 0;
+}
+
 .sheet-tabs {
   display: flex;
   align-items: center;
   gap: 0.25rem;
   padding: 0.35rem 0.6rem;
-  border-top: 1px solid var(--border-strong);
-  background: var(--bg-alt);
   overflow-x: auto;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.sheet-tabs-scroll-btn,
+.sheet-tabs-jump-btn {
   flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  padding: 0.3em 0.5em;
+  align-self: stretch;
+}
+.sheet-tabs-scroll-btn:hover,
+.sheet-tabs-jump-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.sheet-tabs-jump-btn {
+  border-left: 1px solid var(--border);
 }
 
 .sheet-tab,
@@ -454,6 +486,7 @@ svg.icon {
   border: 1px solid transparent;
   background: transparent;
   color: var(--text-muted);
+  cursor: grab;
 }
 .sheet-tab:hover {
   background: var(--bg-hover);
@@ -463,6 +496,39 @@ svg.icon {
   color: var(--text);
   font-weight: 600;
   border-color: var(--border);
+}
+.sheet-tab-dragging {
+  opacity: 0.4;
+}
+.sheet-tab-drop-before {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.sheet-tab-drop-after {
+  box-shadow: inset -2px 0 0 var(--accent);
+}
+
+.sheet-tab-folder {
+  border-color: var(--border);
+  background: var(--bg);
+}
+.sheet-tab-folder-active {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* Wraps an expanded folder's own tables so they read as "inside" that
+   folder — a subtle inset background/border rather than a hard divider,
+   since these are still ordinary draggable/clickable .sheet-tab buttons
+   underneath. */
+.sheet-tab-folder-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.15rem 0.3rem;
+  margin-right: 0.15rem;
+  border-radius: 5px;
+  background: var(--bg-hover);
 }
 
 .sheet-tab-input {
@@ -481,6 +547,48 @@ svg.icon {
 .sheet-tab-add:hover {
   background: var(--bg-hover);
   color: var(--text);
+}
+
+/* "🔍 Visos lentelės" jump-list popover — a searchable, folder-grouped
+   flat list of every table, so a large workspace (dozens of tables across
+   several folders) never actually requires scanning/scrolling the tab
+   strip to find one. */
+.sheet-tabs-jump-filter {
+  width: 100%;
+  box-sizing: border-box;
+  margin-bottom: 0.4rem;
+}
+.sheet-tabs-jump-list {
+  max-height: 320px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+.sheet-tabs-jump-item {
+  text-align: left;
+  border: none;
+  background: transparent;
+  padding: 0.35em 0.5em;
+  border-radius: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sheet-tabs-jump-item:hover {
+  background: var(--bg-hover);
+}
+.sheet-tabs-jump-item-active {
+  font-weight: 600;
+  color: var(--accent);
+}
+.sheet-tabs-jump-item-folder {
+  color: var(--text-muted);
+  font-size: 0.85em;
+  margin-right: 0.4em;
+}
+.sheet-tabs-jump-empty {
+  color: var(--text-muted);
+  padding: 0.35em 0.5em;
 }
 
 .tab-badge {
@@ -1838,6 +1946,123 @@ tr.row-drop-end td {
   font-size: 0.85rem;
 }
 
+.mark-sent-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: inherit;
+  font-size: 0.85rem;
+  resize: vertical;
+}
+.mark-sent-upload {
+  align-self: flex-start;
+}
+
+.mark-sent-mapping {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.mark-sent-mapping-file {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+.mark-sent-mapping-reset {
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  padding: 0;
+  font-size: 0.85rem;
+  text-decoration: underline;
+}
+.mark-sent-mapping-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+}
+
+.mark-sent-results-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  /* Same flex-column min-height gotcha documented for .calendar-day
+     elsewhere in this file — without it a long list refuses to shrink
+     below its content height and blows out the modal's own max-height,
+     instead of scrolling internally. */
+  min-height: 0;
+}
+.mark-sent-results-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+.mark-sent-results-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  overflow-y: auto;
+  max-height: 9rem;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.4rem 0.5rem;
+}
+.mark-sent-results-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  font-size: 0.8rem;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.2rem;
+}
+.mark-sent-results-row:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+.mark-sent-results-company {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 40%;
+}
+.mark-sent-results-email {
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* One collapsible-free section per table inside the "✅ Pažymėti
+   kontaktai" results — see MarkContactsSentModal.tsx's matchedByTable. */
+.mark-sent-results-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  overflow-y: auto;
+  max-height: 14rem;
+  min-height: 0;
+}
+.mark-sent-results-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.mark-sent-results-group-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.mark-sent-results-group .mark-sent-results-list {
+  max-height: 7rem;
+}
+
 .csv-import-mapping-hint {
   margin: 0;
   font-size: 0.82rem;
@@ -2545,6 +2770,37 @@ tr.row-drop-end td {
 }
 .cell-hover-contact-edit:hover {
   background: var(--bg-hover);
+}
+
+/* The "sent/replied" tracking icon — a single icon, colored by state
+   (blue: sent, no reply yet; green: at least one reply pushed in via
+   PushReplyRowsModal.tsx's automatic email match), rather than two
+   separate icons. A plain, non-interactive indicator — not a button —
+   since both counters are now set entirely automatically: sentCount by
+   MarkContactsSentModal.tsx's bulk paste-and-match (10,000+ contacts
+   across many tables, no per-contact clicking), repliedCount by
+   PushReplyRowsModal.tsx as before. Only rendered at all once there's
+   something to show (sentCount or repliedCount truthy). */
+.cell-hover-contact-sent {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.85rem;
+  line-height: 1;
+  padding: 0.2em 0.3em;
+  color: var(--text-muted);
+}
+.cell-hover-contact-sent-active {
+  color: var(--accent);
+}
+.cell-hover-contact-sent-replied {
+  color: var(--success);
+}
+.cell-hover-contact-sent-badge {
+  display: inline-block;
+  margin-left: 0.15em;
+  font-size: 0.65rem;
+  font-weight: 600;
 }
 
 .cell-hover-contact-social-search {

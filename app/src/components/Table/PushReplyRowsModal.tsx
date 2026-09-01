@@ -4,8 +4,10 @@ import type { Row, TableMeta } from '../../types';
 import { getTable, loadRowsForTable, saveRows } from '../../db/db';
 import { useTableStore, type CellColorUpdate } from '../../store/useTableStore';
 import { buildEmailIndex } from '../../utils/emailMatch';
+import { getColumnByType } from '../../utils/row';
 import { REPLY_STORED_FIELD_ORDER, resolveReplyFields, cleanReplyText, extractLatestEmailMessages } from '../../utils/replyHistoryFormat';
 import { addNoteEntry } from '../../utils/noteHistory';
+import { incrementContactRepliedCount, findContactIdByEmail } from '../../utils/contacts';
 import { fetchInstantlyTableMap, saveInstantlyTableMapping } from '../../utils/instantlyTableMap';
 import { VISI_ATSAKYMAI_TABLE_NAME } from '../../utils/instantlyReplySync';
 
@@ -88,6 +90,9 @@ export function PushReplyRowsModal({ rows, sourceColumns, tables, currentUserNam
       }
       const destRows = await loadRowsForTable(destTableId);
       const emailIndex = buildEmailIndex(destRows, destTable.columns);
+      const contactColId = getColumnByType(destTable.columns, 'contact')?.id ?? null;
+      const contactsByRowId = new Map<string, string>();
+      let attributed = 0;
 
       // Oldest-first before processing: addNoteEntry always PREPENDS, so
       // walking replies oldest-to-newest means the final History list
@@ -145,13 +150,23 @@ export function PushReplyRowsModal({ rows, sourceColumns, tables, currentUserNam
         matchedRows.set(match.id, match);
         pushedSourceRowIds.push(replyRow.id);
         pushed++;
+
+        if (contactColId) {
+          const currentContacts = contactsByRowId.get(match.id) ?? (match.cells[contactColId] ?? '');
+          const contactId = findContactIdByEmail(currentContacts, email);
+          if (contactId) {
+            contactsByRowId.set(match.id, incrementContactRepliedCount(currentContacts, contactId));
+            attributed++;
+          }
+        }
       }
 
-      const toSave = [...matchedRows.values()].map((row) => ({
-        ...row,
-        cells: { ...row.cells, [historyColId]: historyByRowId.get(row.id)! },
-        updatedAt: Date.now(),
-      }));
+      const toSave = [...matchedRows.values()].map((row) => {
+        const cells: Row['cells'] = { ...row.cells, [historyColId]: historyByRowId.get(row.id)! };
+        const updatedContacts = contactsByRowId.get(row.id);
+        if (contactColId && updatedContacts !== undefined) cells[contactColId] = updatedContacts;
+        return { ...row, cells, updatedAt: Date.now() };
+      });
       if (toSave.length > 0) await saveRows(toSave);
 
       // Color the pushed SOURCE rows (in "Visi atsakymai", the currently
@@ -169,7 +184,10 @@ export function PushReplyRowsModal({ rows, sourceColumns, tables, currentUserNam
 
       if (rememberMapping && singleCampaignName) await saveInstantlyTableMapping(singleCampaignName, destTable.name);
 
-      onDone(`„${destTable.name}“: pridėta ${pushed}, praleista (nerasta atitikmens): ${skipped}`);
+      onDone(
+        `„${destTable.name}“: pridėta ${pushed}, praleista (nerasta atitikmens): ${skipped}` +
+          (contactColId ? `, priskirta konkrečiam kontaktui: ${attributed}` : ''),
+      );
     } catch (err) {
       onDone(err instanceof Error ? err.message : 'Nepavyko perkelti į lentelę');
     } finally {

@@ -1,5 +1,5 @@
 import { openDB, type IDBPDatabase, type DBSchema } from 'idb';
-import type { Row, TableMeta } from '../types';
+import type { Row, TableMeta, TableFolder } from '../types';
 import type { TranscriptionRecord, SmsLogRecord } from '../utils/callsApi';
 import type { CallStatRecord } from '../utils/callStats';
 import { localApiRequest } from '../utils/localApi';
@@ -139,6 +139,59 @@ export async function updateTableBackupFlag(tableId: string, enabled: boolean): 
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ enabled }),
+  });
+}
+
+/** SheetTabs' right-click "Priskirti aplankui"/"Išimti iš aplanko" —
+ * folderId null ungroups the table. */
+export async function setTableFolder(tableId: string, folderId: string | null): Promise<void> {
+  await localApiRequest(`/api/tables/${encodeURIComponent(tableId)}/folder`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ folderId }),
+  });
+}
+
+/** SheetTabs' drag-reorder — one bulk request for the whole batch, same
+ * "never one request per item" reasoning as saveRows below. */
+export async function reorderTablesDB(updates: { id: string; order: number }[]): Promise<void> {
+  await localApiRequest('/api/tables/reorder', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tables: updates }),
+  });
+}
+
+export async function loadTableFolders(): Promise<TableFolder[]> {
+  const { folders } = await localApiRequest<{ folders: TableFolder[] }>('/api/table-folders');
+  return folders;
+}
+
+export async function createTableFolderDB(folder: TableFolder): Promise<void> {
+  await localApiRequest('/api/table-folders', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(folder),
+  });
+}
+
+export async function renameTableFolderDB(id: string, name: string): Promise<void> {
+  await localApiRequest(`/api/table-folders/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+}
+
+export async function deleteTableFolderDB(id: string): Promise<void> {
+  await localApiRequest(`/api/table-folders/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+export async function reorderTableFoldersDB(updates: { id: string; order: number }[]): Promise<void> {
+  await localApiRequest('/api/table-folders/reorder', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ folders: updates }),
   });
 }
 

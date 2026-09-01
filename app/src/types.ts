@@ -36,6 +36,28 @@ export interface TableMeta {
    * cached/local shapes may not carry it; the server always sends a real
    * boolean. */
   dailyBackupEnabled?: boolean;
+  /** Manual sort order among sibling tables — "siblings" being either "all
+   * ungrouped tables" or "all tables in the same folder" (see folderId
+   * below), NOT one shared order space across both groups. Sequential,
+   * reassigned on every drag-reorder or folder move in SheetTabs, same
+   * convention as Row.order. */
+  order: number;
+  /** Which TableFolder (if any) this table is grouped under in SheetTabs.
+   * null/undefined = ungrouped. */
+  folderId?: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** A SheetTabs grouping bucket ("PL", "SE energy", ...) — purely an
+ * organizational label for a client with many tables (country/sector
+ * combinations); has no effect on table data itself. See TableMeta.order's
+ * own comment for why folders get their own separate order space rather
+ * than sharing one with tables. */
+export interface TableFolder {
+  id: string;
+  name: string;
+  order: number;
   createdAt: number;
   updatedAt: number;
 }

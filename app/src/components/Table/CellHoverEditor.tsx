@@ -35,7 +35,7 @@ import { getAllTranscriptions, saveSmsLogEntry, getAllSmsLog } from '../../db/db
 import { ApolloContactSearchModal } from './ApolloContactSearchModal';
 import { SocialLookupModal } from './SocialLookupModal';
 import { Popover } from '../Popover';
-import { Copy, Check, Square, Hourglass, Mic, Bot, ChevronDown, Search, Save, X, Mail, Phone, PenLine } from 'lucide-react';
+import { Copy, Check, Square, Hourglass, Mic, Bot, ChevronDown, Search, Save, X, Mail, Phone, PenLine, Send } from 'lucide-react';
 
 interface CellHoverEditorProps {
   anchor: HTMLElement;
@@ -1569,6 +1569,21 @@ export function CellHoverEditor({
                                   >
                                     <Phone className="icon" size={14} />
                                   </button>
+                                )}
+                                {(c.sentCount || c.repliedCount) && (
+                                  <span
+                                    className={`cell-hover-contact-sent ${
+                                      c.repliedCount ? 'cell-hover-contact-sent-replied' : 'cell-hover-contact-sent-active'
+                                    }`}
+                                    title={
+                                      c.repliedCount
+                                        ? `Atsakė ${c.repliedCount} kart(ų) (iš viso siųsta ${c.sentCount ?? 0} kart(ų))`
+                                        : `Išsiųsta ${c.sentCount} kart(ų), atsakymo dar nėra`
+                                    }
+                                  >
+                                    <Send className="icon" size={14} />
+                                    <span className="cell-hover-contact-sent-badge">{c.repliedCount || c.sentCount}</span>
+                                  </span>
                                 )}
                                 <button
                                   type="button"

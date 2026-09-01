@@ -1,6 +1,22 @@
 import { create } from 'zustand';
-import type { Column, Row, TableMeta } from '../types';
-import { deleteTableDB, getTable, loadRowsForTable, loadTables, saveRows, saveTable, updateTableBackupFlag, updateTableName } from '../db/db';
+import type { Column, Row, TableMeta, TableFolder } from '../types';
+import {
+  deleteTableDB,
+  getTable,
+  loadRowsForTable,
+  loadTables,
+  saveRows,
+  saveTable,
+  updateTableBackupFlag,
+  updateTableName,
+  setTableFolder,
+  reorderTablesDB,
+  loadTableFolders,
+  createTableFolderDB,
+  renameTableFolderDB,
+  deleteTableFolderDB,
+  reorderTableFoldersDB,
+} from '../db/db';
 import { randomUUID } from '../utils/uuid';
 
 const LAST_ACTIVE_KEY = 'cold-crm:last-active-table';
@@ -46,6 +62,7 @@ function buildSeedRows(tableId: string): Row[] {
 
 interface WorkspaceState {
   tables: TableMeta[];
+  folders: TableFolder[];
   activeTableId: string | null;
   ready: boolean;
   /** Set when `init()` fails outright (most likely: the table-data
@@ -111,10 +128,37 @@ interface WorkspaceState {
    * persist shape as renameTable/deleteTable above. */
   setTableBackupFlag: (id: string, enabled: boolean) => void;
   setActiveTable: (id: string | null) => void;
+  /** SheetTabs' drag-reorder and right-click "Priskirti aplankui"/"Išimti
+   * iš aplanko" both funnel through this one action — both are really the
+   * same operation: place this table into a target group (null = the
+   * ungrouped strip, or a specific folder), before a given sibling or
+   * appended at the end (beforeTableId null). Reassigns `order`
+   * sequentially across just that target group (siblings sharing the same
+   * folderId), never touching any other group's order values. */
+  moveTable: (tableId: string, target: { folderId: string | null; beforeTableId: string | null }) => void;
+  /** Same shape as moveTable, for the folder strip itself — folders are
+   * always one flat group, so there's no "which group" parameter. */
+  moveFolder: (folderId: string, beforeFolderId: string | null) => void;
+  createFolder: (name: string) => Promise<TableFolder | null>;
+  renameFolder: (id: string, name: string) => void;
+  deleteFolder: (id: string) => void;
+}
+
+/** Append-at-the-end convention shared by every table-creation path in
+ * this store (and mirrored server-side in restoreBackupAsNewTable/
+ * instantlyReplySync.ts's own findOrCreateTargetTable) — the next order
+ * value among the CURRENT set of sibling tables sharing the same folderId
+ * (undefined/null = the ungrouped group). New tables are always ungrouped;
+ * duplicateTable is the one caller that passes the source's own folderId,
+ * so a copy lands alongside its original rather than always at the very
+ * end of the ungrouped strip. */
+function nextTableOrder(tables: TableMeta[], folderId: string | null = null): number {
+  return Math.max(-1, ...tables.filter((t) => (t.folderId ?? null) === folderId).map((t) => t.order)) + 1;
 }
 
 export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   tables: [],
+  folders: [],
   activeTableId: null,
   ready: false,
   initError: null,
@@ -122,13 +166,14 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
 
   init: async () => {
     try {
-      let tables = await loadTables();
+      let [tables, folders] = await Promise.all([loadTables(), loadTableFolders()]);
       if (tables.length === 0) {
         const now = Date.now();
         const table: TableMeta = {
           id: randomUUID(),
           name: 'Lentelė 1',
           columns: buildSeedColumns(),
+          order: 0,
           createdAt: now,
           updatedAt: now,
         };
@@ -136,10 +181,15 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         await saveRows(buildSeedRows(table.id));
         tables = [table];
       }
-      tables = [...tables].sort((a, b) => a.createdAt - b.createdAt);
+      // loadTables()/loadTableFolders() already sort server-side
+      // (order_num ASC, created_at ASC) — this re-sort only matters for the
+      // fresh-install branch above, whose single seed table is trivially
+      // already in order.
+      tables = [...tables].sort((a, b) => a.order - b.order);
+      folders = [...folders].sort((a, b) => a.order - b.order);
       const savedActiveId = localStorage.getItem(LAST_ACTIVE_KEY);
       const activeTableId = tables.some((t) => t.id === savedActiveId) ? savedActiveId : null;
-      set({ tables, activeTableId, ready: true, initError: null });
+      set({ tables, folders, activeTableId, ready: true, initError: null });
     } catch {
       // Server unreachable (down, wrong VITE_API_BASE_URL, phone off the
       // Mac's wifi, etc). Deliberately doesn't set ready: true — App.tsx's
@@ -155,6 +205,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       id: randomUUID(),
       name: name.trim() || `Lentelė ${get().tables.length + 1}`,
       columns: buildSeedColumns(),
+      order: nextTableOrder(get().tables),
       createdAt: now,
       updatedAt: now,
     };
@@ -179,6 +230,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       id: randomUUID(),
       name: name.trim() || `Lentelė ${get().tables.length + 1}`,
       columns: [],
+      order: nextTableOrder(get().tables),
       createdAt: now,
       updatedAt: now,
     };
@@ -222,6 +274,11 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         id: randomUUID(),
         name: `${source.name} (kopija)`,
         columns,
+        // Lands alongside the source (same folder, or ungrouped), not
+        // always appended to the ungrouped strip — see nextTableOrder's
+        // own doc comment.
+        order: nextTableOrder(get().tables, source.folderId ?? null),
+        folderId: source.folderId ?? null,
         createdAt: now,
         updatedAt: now,
       };
@@ -316,5 +373,108 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     set({ activeTableId: id });
     if (id) localStorage.setItem(LAST_ACTIVE_KEY, id);
     else localStorage.removeItem(LAST_ACTIVE_KEY);
+  },
+
+  moveTable: (tableId, { folderId, beforeTableId }) => {
+    const all = get().tables;
+    const moving = all.find((t) => t.id === tableId);
+    if (!moving) return;
+    // The sibling group this table is landing in — everything else that
+    // already shares the target folderId, excluding the table being moved
+    // itself (whether or not it was already in that group).
+    const siblings = all.filter((t) => t.id !== tableId && (t.folderId ?? null) === folderId);
+    const insertAt = beforeTableId ? siblings.findIndex((t) => t.id === beforeTableId) : -1;
+    const reordered = insertAt === -1 ? [...siblings, moving] : [...siblings.slice(0, insertAt), moving, ...siblings.slice(insertAt)];
+    const orderById = new Map(reordered.map((t, i) => [t.id, i]));
+    const folderChanged = (moving.folderId ?? null) !== folderId;
+    set({
+      tables: all.map((t) =>
+        orderById.has(t.id) ? { ...t, order: orderById.get(t.id)!, folderId: t.id === tableId ? (folderId ?? undefined) : t.folderId } : t,
+      ),
+    });
+    Promise.all([
+      reorderTablesDB([...orderById.entries()].map(([id, order]) => ({ id, order }))),
+      ...(folderChanged ? [setTableFolder(tableId, folderId)] : []),
+    ])
+      .then(() => set({ actionError: null }))
+      .catch((err) => {
+        set({
+          actionError: err instanceof Error ? `Nepavyko perkelti lentelės — ${err.message}` : 'Nepavyko perkelti lentelės serveryje',
+        });
+      });
+  },
+
+  moveFolder: (folderId, beforeFolderId) => {
+    const all = get().folders;
+    const moving = all.find((f) => f.id === folderId);
+    if (!moving) return;
+    const siblings = all.filter((f) => f.id !== folderId);
+    const insertAt = beforeFolderId ? siblings.findIndex((f) => f.id === beforeFolderId) : -1;
+    const reordered = insertAt === -1 ? [...siblings, moving] : [...siblings.slice(0, insertAt), moving, ...siblings.slice(insertAt)];
+    const updates = reordered.map((f, i) => ({ id: f.id, order: i }));
+    const orderById = new Map(updates.map((u) => [u.id, u.order]));
+    set({ folders: all.map((f) => (orderById.has(f.id) ? { ...f, order: orderById.get(f.id)! } : f)) });
+    reorderTableFoldersDB(updates)
+      .then(() => set({ actionError: null }))
+      .catch((err) => {
+        set({
+          actionError: err instanceof Error ? `Nepavyko perkelti aplanko — ${err.message}` : 'Nepavyko perkelti aplanko serveryje',
+        });
+      });
+  },
+
+  createFolder: async (name) => {
+    const trimmed = name.trim();
+    if (!trimmed) return null;
+    const now = Date.now();
+    const folder: TableFolder = {
+      id: randomUUID(),
+      name: trimmed,
+      order: Math.max(-1, ...get().folders.map((f) => f.order)) + 1,
+      createdAt: now,
+      updatedAt: now,
+    };
+    set({ folders: [...get().folders, folder] });
+    try {
+      await createTableFolderDB(folder);
+      set({ actionError: null });
+      return folder;
+    } catch (err) {
+      set({
+        folders: get().folders.filter((f) => f.id !== folder.id),
+        actionError: err instanceof Error ? `Nepavyko sukurti aplanko — ${err.message}` : 'Nepavyko sukurti aplanko serveryje',
+      });
+      return null;
+    }
+  },
+
+  renameFolder: (id, name) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    set({ folders: get().folders.map((f) => (f.id === id ? { ...f, name: trimmed, updatedAt: Date.now() } : f)) });
+    renameTableFolderDB(id, trimmed)
+      .then(() => set({ actionError: null }))
+      .catch((err) => {
+        set({
+          actionError: err instanceof Error ? `Nepavyko pervadinti aplanko — ${err.message}` : 'Nepavyko pervadinti aplanko serveryje',
+        });
+      });
+  },
+
+  deleteFolder: (id) => {
+    // Optimistically mirrors the server's own ON DELETE SET NULL FK —
+    // tables that were in this folder become ungrouped locally too,
+    // immediately, rather than waiting on the next full reload.
+    set({
+      folders: get().folders.filter((f) => f.id !== id),
+      tables: get().tables.map((t) => (t.folderId === id ? { ...t, folderId: undefined } : t)),
+    });
+    deleteTableFolderDB(id)
+      .then(() => set({ actionError: null }))
+      .catch((err) => {
+        set({
+          actionError: err instanceof Error ? `Nepavyko ištrinti aplanko — ${err.message}` : 'Nepavyko ištrinti aplanko serveryje',
+        });
+      });
   },
 }));

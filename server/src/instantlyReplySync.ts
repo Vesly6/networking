@@ -131,7 +131,11 @@ function findOrCreateTargetTable(companyId: string, name: string): TableMeta {
 
   const now = Date.now();
   const columns: SyncColumn[] = REPLY_COLUMNS.map((id) => ({ id: randomUUID(), name: id, type: 'text' }));
-  const table: TableMeta = { id: randomUUID(), name, columns, dailyBackupEnabled: false, createdAt: now, updatedAt: now };
+  // Appended at the end of the company's ungrouped tables, same convention
+  // as every other table-creation path (see tableData/db.ts's
+  // restoreBackupAsNewTable for the identical query).
+  const nextOrder = loadTables(companyId).reduce((max, t) => Math.max(max, t.order), -1) + 1;
+  const table: TableMeta = { id: randomUUID(), name, columns, dailyBackupEnabled: false, order: nextOrder, createdAt: now, updatedAt: now };
   saveTable(table, companyId);
   return table;
 }
