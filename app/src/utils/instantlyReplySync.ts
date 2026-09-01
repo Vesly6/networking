@@ -2,7 +2,7 @@ import { randomUUID } from './uuid';
 import type { Column, Row, TableMeta } from '../types';
 import { getTable, saveTable, updateTableColumns, loadRowsForTable, saveRows } from '../db/db';
 import { useWorkspaceStore } from '../store/useWorkspaceStore';
-import { fetchInstantlyEmails, fetchInstantlyLeads, fetchInstantlyCampaign, INTEREST_STATUS_LABELS, type InstantlyLead } from './instantlyApi';
+import { fetchInstantlyEmails, fetchInstantlyLeads, fetchInstantlyCampaign, fetchInstantlyCampaigns, INTEREST_STATUS_LABELS, type InstantlyLead } from './instantlyApi';
 
 /** Pulls every *reply* (inbound email, not our own send) for a campaign
  * out of Instantly's Unibox and lands each one as a row in a named CRM
@@ -226,4 +226,89 @@ export async function syncInstantlyRepliesToTable(campaignId: string, targetTabl
     tableId: table.id,
     tableName: table.name,
   };
+}
+
+export interface AllCampaignsSyncProgress {
+  campaignIndex: number;
+  campaignCount: number;
+  campaignName: string;
+}
+
+export interface AllCampaignsSyncResult {
+  campaignsProcessed: number;
+  campaignsFailed: number;
+  totalCreated: number;
+  totalFound: number;
+  totalSkippedDuplicate: number;
+  failures: { campaignId: string; campaignName: string; error: string }[];
+  tableName: string;
+}
+
+/** "Eksportuoti visas kampanijas" — on explicit request, a single button
+ * covering every campaign instead of the one-at-a-time flow above,
+ * specifically because selecting a campaign first (a separate step
+ * before the per-campaign export button even renders) turned out to be
+ * a real, reported point of confusion — a page reload silently clears
+ * that selection, so the button disappears and it's easy to mistake
+ * "I forgot to reselect a campaign" for "the export is broken". This
+ * doesn't replace the per-campaign button (still useful for a quick
+ * single re-sync); it's additive.
+ *
+ * Fetches the full campaign list up front (paginated) so progress can
+ * report "N of M", not just "N processed so far, total unknown" — a
+ * large account can have this take many minutes (every campaign's own
+ * pagination is still paced at REQUEST_GAP_MS per Instantly's 20 req/min
+ * cap, and campaigns run strictly one after another, never in parallel,
+ * since they'd all compete for that same account-wide budget), so
+ * onProgress exists specifically to keep that legible rather than
+ * looking indistinguishable from a hang.
+ *
+ * A single failing campaign (e.g. deleted mid-run, a real API error)
+ * doesn't abort the whole pass — it's recorded in `failures` and the
+ * loop moves on, so one bad campaign can't block every other one from
+ * getting its replies synced. */
+export async function syncAllInstantlyCampaignsRepliesToTable(
+  targetTableName: string,
+  onProgress?: (progress: AllCampaignsSyncProgress) => void,
+): Promise<AllCampaignsSyncResult> {
+  const campaigns: { id: string; name: string }[] = [];
+  let cursor: string | undefined;
+  let first = true;
+  for (;;) {
+    if (!first) await sleep(REQUEST_GAP_MS);
+    first = false;
+    const page = await withRateLimitRetry(() => fetchInstantlyCampaigns({ limit: 100, starting_after: cursor }));
+    for (const c of page.items) campaigns.push({ id: c.id, name: c.name });
+    if (!page.next_starting_after) break;
+    cursor = page.next_starting_after;
+  }
+
+  let totalCreated = 0;
+  let totalFound = 0;
+  let totalSkippedDuplicate = 0;
+  let campaignsProcessed = 0;
+  let tableName = targetTableName;
+  const failures: AllCampaignsSyncResult['failures'] = [];
+
+  for (let i = 0; i < campaigns.length; i++) {
+    const campaign = campaigns[i];
+    onProgress?.({ campaignIndex: i + 1, campaignCount: campaigns.length, campaignName: campaign.name });
+    try {
+      const result = await syncInstantlyRepliesToTable(campaign.id, targetTableName);
+      totalCreated += result.created;
+      totalFound += result.repliesFound;
+      totalSkippedDuplicate += result.skippedDuplicate;
+      tableName = result.tableName;
+      campaignsProcessed++;
+    } catch (err) {
+      failures.push({ campaignId: campaign.id, campaignName: campaign.name, error: err instanceof Error ? err.message : String(err) });
+    }
+    // A gap between campaigns too, not just within one campaign's own
+    // pagination loop — back-to-back campaigns would otherwise burst
+    // right at the boundary (this campaign's last call, the next
+    // campaign's getCampaign call) with zero spacing between them.
+    if (i < campaigns.length - 1) await sleep(REQUEST_GAP_MS);
+  }
+
+  return { campaignsProcessed, campaignsFailed: failures.length, totalCreated, totalFound, totalSkippedDuplicate, failures, tableName };
 }

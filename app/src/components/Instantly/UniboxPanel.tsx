@@ -3,7 +3,12 @@ import { useInstantlyInboxStore, type UniboxThread, type UniboxViewMode } from '
 import { useInstantlyAccountsStore } from '../../store/useInstantlyAccountsStore';
 import { useInstantlyCampaignsStore } from '../../store/useInstantlyCampaignsStore';
 import { useToastStore } from '../../store/useToastStore';
-import { syncInstantlyRepliesToTable, VISI_ATSAKYMAI_TABLE_NAME } from '../../utils/instantlyReplySync';
+import {
+  syncInstantlyRepliesToTable,
+  syncAllInstantlyCampaignsRepliesToTable,
+  VISI_ATSAKYMAI_TABLE_NAME,
+  type AllCampaignsSyncProgress,
+} from '../../utils/instantlyReplySync';
 import {
   INTEREST_STATUS_LABELS,
   INTEREST_STATUS_COLORS,
@@ -494,6 +499,14 @@ export function UniboxPanel() {
   const [campaignsOpen, setCampaignsOpen] = useState(false);
   const [campaignSearch, setCampaignSearch] = useState('');
   const [syncingReplies, setSyncingReplies] = useState(false);
+  // "Eksportuoti visas kampanijas" — a single-button alternative to the
+  // per-campaign flow above, see syncAllInstantlyCampaignsRepliesToTable's
+  // own doc comment for why. null while idle; set to the live progress
+  // while a full run is in flight, so the button can show "Kampanija 3
+  // iš 12: Q3 Outreach…" instead of a bare spinner that's easy to mistake
+  // for a hang on a run that can legitimately take many minutes.
+  const [allCampaignsProgress, setAllCampaignsProgress] = useState<AllCampaignsSyncProgress | null>(null);
+  const [syncingAllCampaigns, setSyncingAllCampaigns] = useState(false);
   // Two INDEPENDENT collapse toggles — not one combined listVisible flag
   // like an earlier version of this had. That version auto-collapsed the
   // whole filters+list column the instant a thread opened, on the
@@ -746,6 +759,48 @@ export function UniboxPanel() {
                   {syncingReplies ? 'Sinchronizuojama…' : <><Download className="icon" size={16} /> Eksportuoti atsakymus į lentelę</>}
                 </button>
               )}
+              {/* "Eksportuoti VISAS kampanijas" — doesn't need a campaign
+               * selected first, on explicit request: picking one campaign
+               * before this button even renders (above) was a real,
+               * reported point of confusion (a page reload silently clears
+               * that selection, so the button just disappears). Runs every
+               * campaign one after another — see
+               * syncAllInstantlyCampaignsRepliesToTable's own doc comment
+               * for why this can legitimately take a long time and why
+               * that's shown as live progress, not a bare spinner. */}
+              <button
+                type="button"
+                className="instantly-status-row"
+                disabled={syncingReplies || syncingAllCampaigns}
+                onClick={async () => {
+                  setSyncingAllCampaigns(true);
+                  setAllCampaignsProgress(null);
+                  try {
+                    const result = await syncAllInstantlyCampaignsRepliesToTable(VISI_ATSAKYMAI_TABLE_NAME, setAllCampaignsProgress);
+                    const failureNote =
+                      result.campaignsFailed > 0 ? `, nepavyko: ${result.campaignsFailed} kampanij(ų)` : '';
+                    showToast(
+                      `„${result.tableName}": apdorota ${result.campaignsProcessed} kampanijų, pridėta ${result.totalCreated} atsakymų ` +
+                        `(rasta ${result.totalFound}, praleista pasikartojančių: ${result.totalSkippedDuplicate}${failureNote})`,
+                    );
+                  } catch (err) {
+                    showToast(err instanceof Error ? err.message : 'Nepavyko sinchronizuoti visų kampanijų');
+                  } finally {
+                    setSyncingAllCampaigns(false);
+                    setAllCampaignsProgress(null);
+                  }
+                }}
+              >
+                {syncingAllCampaigns ? (
+                  allCampaignsProgress
+                    ? `Kampanija ${allCampaignsProgress.campaignIndex} iš ${allCampaignsProgress.campaignCount}: ${allCampaignsProgress.campaignName}…`
+                    : 'Kraunamas kampanijų sąrašas…'
+                ) : (
+                  <>
+                    <Download className="icon" size={16} /> Eksportuoti VISAS kampanijas
+                  </>
+                )}
+              </button>
             </div>
 
             <div className="instantly-unibox-sidebar-title">Pašto dėžutė</div>
