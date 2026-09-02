@@ -6,6 +6,7 @@ import { useSuperAdminStore } from './store/useSuperAdminStore';
 import { usePendingPhoneSearchStore } from './store/usePendingPhoneSearchStore';
 import { useToastStore } from './store/useToastStore';
 import { useReminderStore } from './store/useReminderStore';
+import { useInstantlyInboxStore } from './store/useInstantlyInboxStore';
 import { TableView } from './components/Table/TableView';
 import { CalendarView } from './components/Calendar/CalendarView';
 import { WorkspaceView } from './components/Workspace/WorkspaceView';
@@ -211,6 +212,26 @@ function App() {
     }
     return companyTabs;
   }, [user]);
+
+  // Green "Paštas" nav badge — count of unread threads currently marked
+  // "Interested" in Instantly, account-wide (not scoped to whatever
+  // Unibox's own viewMode/filters happen to be, unlike that store's own
+  // `unreadCount` — see interestedUnreadCount's own doc comment).
+  // Deliberately its own poll, separate from the reminder one above
+  // (60s) — this hits Instantly's real, rate-limited API (20 req/min
+  // account-wide, shared with everything else this app does against that
+  // account), so it's paced much less aggressively; 3 minutes is
+  // frequent enough for an ambient nav badge without meaningfully eating
+  // into that shared budget. Gated on allowedTabs so a company without
+  // the Instantly tab enabled never fires this at all.
+  const interestedUnreadCount = useInstantlyInboxStore((s) => s.interestedUnreadCount);
+  const refreshInterestedUnreadCount = useInstantlyInboxStore((s) => s.refreshInterestedUnreadCount);
+  useEffect(() => {
+    if (!token || !allowedTabs.has('instantly')) return;
+    void refreshInterestedUnreadCount();
+    const interval = setInterval(() => void refreshInterestedUnreadCount(), 180_000);
+    return () => clearInterval(interval);
+  }, [token, allowedTabs, refreshInterestedUnreadCount]);
 
   // Not part of allowedTabs/Tab — News lives on the Workspace screen
   // (WorkspaceView), not as an in-table tab, so it isn't scoped to any
@@ -680,6 +701,7 @@ function App() {
                   }}
                 >
                   Paštas
+                  {interestedUnreadCount > 0 && <span className="tab-badge tab-badge-interested">{interestedUnreadCount}</span>}
                 </button>
               )}
               {allowedTabs.has('email') && (

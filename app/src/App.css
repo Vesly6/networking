@@ -606,6 +606,14 @@ svg.icon {
   background: var(--danger);
 }
 
+/* "Paštas" nav badge — unread "Interested" Instantly replies (App.tsx's
+   interestedUnreadCount). A fixed brand-green, not a theme token, same
+   "read as its own specific signal regardless of light/dark theme"
+   reasoning as the sent-badge's own #c9ef30 lime elsewhere in this app. */
+.tab-badge-interested {
+  background: #30ae5c;
+}
+
 .app-main {
   flex: 1;
   min-height: 0;

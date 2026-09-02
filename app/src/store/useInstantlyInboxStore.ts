@@ -75,6 +75,19 @@ interface InstantlyInboxState {
   loadMore: () => Promise<void>;
   refreshUnreadCount: () => Promise<void>;
 
+  /** The green "Paštas" nav-tab badge (App.tsx) — how many *unread*
+   * threads currently have i_status === 1 ("Interested"), account-wide,
+   * regardless of whatever viewMode/filters Unibox itself happens to be
+   * showing right now (unlike `unreadCount` above, which is deliberately
+   * scoped to just the currently-loaded/filtered thread list). Paginates
+   * through every is_unread:true page itself and derives the count from
+   * that real data — same "never trust a separate count endpoint" lesson
+   * as refreshUnreadCount's own doc comment above (the real,
+   * reported /emails/unread/count mismatch bug), just applied to a fresh,
+   * dedicated fetch instead of one already sitting in `threads`. */
+  interestedUnreadCount: number;
+  refreshInterestedUnreadCount: () => Promise<void>;
+
   // Server-side filters (re-fetch from page 1 when any changes) — a real
   // inbox's most-used filters, modeled on Instantly's own "More" menu
   // (Inbox/Unread only/Reminders only/Scheduled emails/Sent), plus which
@@ -228,6 +241,27 @@ export const useInstantlyInboxStore = create<InstantlyInboxState>((set, get) => 
     }
   },
 
+  interestedUnreadCount: 0,
+  refreshInterestedUnreadCount: async () => {
+    try {
+      const emails: UniboxThreadEmail[] = [];
+      let cursor: string | undefined;
+      for (;;) {
+        const page = await fetchInstantlyEmails({ limit: 100, is_unread: true, starting_after: cursor });
+        emails.push(...page.items);
+        if (!page.next_starting_after) break;
+        cursor = page.next_starting_after;
+      }
+      const threads = groupIntoThreads(emails);
+      const count = threads.filter((t) => t.hasUnread && t.latest.i_status === 1).length;
+      set({ interestedUnreadCount: count });
+    } catch {
+      // Non-critical — same "badge just stays at its last known value"
+      // fallback as refreshUnreadCount above (a transient network blip
+      // shouldn't flash the nav badge to 0).
+    }
+  },
+
   openThreadId: null,
   setOpenThreadId: (id) => set({ openThreadId: id }),
 
@@ -242,6 +276,14 @@ export const useInstantlyInboxStore = create<InstantlyInboxState>((set, get) => 
         );
         return { threads, unreadCount: countUnread(threads) };
       });
+      // Fire-and-forget — keeps the nav badge (App.tsx) from sitting
+      // stale until its next periodic poll if the thread just marked
+      // read happened to be an unread "Interested" one. A fresh fetch
+      // rather than a local decrement, same "never trust a shortcut over
+      // real data" reasoning as this whole count already follows — this
+      // thread and whatever produced interestedUnreadCount aren't
+      // guaranteed to be the same fetch.
+      void get().refreshInterestedUnreadCount();
     } catch (err) {
       set({ error: err instanceof Error ? err.message : 'Nepavyko pažymėti kaip perskaityto' });
     } finally {
@@ -272,6 +314,7 @@ export const useInstantlyInboxStore = create<InstantlyInboxState>((set, get) => 
         );
         return { threads, unreadCount: countUnread(threads) };
       });
+      void get().refreshInterestedUnreadCount();
     } catch (err) {
       set({ error: err instanceof Error ? err.message : 'Nepavyko pažymėti kaip neperskaityto' });
     } finally {
@@ -339,6 +382,7 @@ export const useInstantlyInboxStore = create<InstantlyInboxState>((set, get) => 
             : t,
         ),
       }));
+      void get().refreshInterestedUnreadCount();
       return true;
     } catch (err) {
       set({ error: err instanceof Error ? err.message : 'Nepavyko atnaujinti statuso' });
