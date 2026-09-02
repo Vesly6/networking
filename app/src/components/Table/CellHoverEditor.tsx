@@ -35,7 +35,7 @@ import { getAllTranscriptions, saveSmsLogEntry, getAllSmsLog } from '../../db/db
 import { ApolloContactSearchModal } from './ApolloContactSearchModal';
 import { SocialLookupModal } from './SocialLookupModal';
 import { Popover } from '../Popover';
-import { Copy, Check, Square, Hourglass, Mic, Bot, ChevronDown, Search, Save, X, Mail, Phone, PenLine, Send } from 'lucide-react';
+import { Copy, Check, Square, Hourglass, Mic, Bot, ChevronDown, Search, Save, X, Mail, Phone, PenLine, Send, History } from 'lucide-react';
 
 interface CellHoverEditorProps {
   anchor: HTMLElement;
@@ -185,34 +185,27 @@ interface TaggedEntry {
 // rendering; a prefix/suffix check is still the only way to find a
 // neatsiliepė/LinkedIn-request entry, since neither has a fixed stored
 // flag for it — see the original getHistoryEntryColor this replaced.
-/** Tooltip text for the ✉️ sent/replied badge below. On explicit
- * request, a recorded "Pridėti siuntėją" sender list (see
- * ContactEntry.senders' own doc comment) replaces the plain sent-count
- * text entirely rather than appending to it — just the mailbox/date
- * pairs, newest first (senders is already stored in that order — see
- * addContactSender), one per line so a growing list (10+ campaigns over
- * time) stays readable rather than running together on one line.
- *
- * Deliberately never phrases sentCount as "iš viso siųsta N kartų"
- * ("sent N times in total") — a real, reported point of confusion:
- * sentCount and repliedCount are two fully independent counters, each
- * only ever bumped by its own bulk action (markContactSent via "Pridėti
- * išsiųstus", incrementContactRepliedCount via "Perkelti į lentelę" —
- * see their own doc comments in utils/contacts.ts). A contact can
- * genuinely have repliedCount:1, sentCount:0 — they DID reply, the
- * outreach just was never run through "Pridėti išsiųstus" for this
- * specific person. Phrasing sentCount as a total send count read as "we
- * never emailed this person," which isn't what sentCount:0 actually
- * means (see markContactSent/incrementContactRepliedCount's own updated
- * doc comments for the same point) — this wording names what
- * sentCount:0 really is (unmarked bookkeeping), not a claim about
- * reality. */
-function buildSentTooltip(c: ContactEntry): string {
-  if (c.senders?.length) {
-    return ['Siųsta iš:', ...c.senders.map((s) => (s.date ? `${s.email} (${s.date})` : s.email))].join('\n');
-  }
-  const sentPart = c.sentCount ? `Pažymėta išsiųsta: ${c.sentCount} kart(ų)` : 'Išsiuntimas nepažymėtas (žr. „Pridėti išsiųstus“)';
-  return c.repliedCount ? `Atsakė ${c.repliedCount} kart(ų) · ${sentPart}` : sentPart;
+/** Tooltip text for each of the three independent contact badges below
+ * (cell-hover-contact-badges) — one function per badge now that each is
+ * its own element instead of one badge that swapped color/number
+ * depending on priority. Kept as three small functions rather than one
+ * combined string builder specifically so each badge's text only ever
+ * talks about *that* badge's own action — the old combined version
+ * mentioned sentCount even on the replied badge (and vice versa), which
+ * read as one counter commenting on the other's state rather than each
+ * badge being self-contained. */
+function buildSentBadgeTooltip(c: ContactEntry): string {
+  return `Pridėti išsiųstus: pažymėta ${c.sentCount ?? 0} kart(ų)`;
+}
+function buildRepliedBadgeTooltip(c: ContactEntry): string {
+  return `Perkelti į lentelę: atsakė ${c.repliedCount ?? 0} kart(ų)`;
+}
+/** Newest first (senders is already stored in that order — see
+ * addContactSender), one mailbox/date pair per line so a growing list
+ * (10+ campaigns over time) stays readable rather than running together
+ * on one line. */
+function buildSendersBadgeTooltip(c: ContactEntry): string {
+  return ['Siųsta iš:', ...(c.senders ?? []).map((s) => (s.date ? `${s.email} (${s.date})` : s.email))].join('\n');
 }
 
 /** Portaled hover tooltip for the sent/replied badge — a plain `title`
@@ -1642,82 +1635,109 @@ export function CellHoverEditor({
                                   </div>
                                 )}
                               </div>
-                              <div className="cell-hover-contact-actions">
-                                {CONTACT_CALL_BUTTON_ENABLED && phone && (
+                              {/* Icon row + badge row share this column wrapper
+                                  specifically so the badges hug the *icon row's*
+                                  own bottom edge, not the whole main-row's — a
+                                  real, reported bug: with the badges as a plain
+                                  sibling after the whole info+actions row, a
+                                  contact with a taller info column (extra
+                                  fields, social icons) pushed the badges visibly
+                                  below the icons instead of snug beneath them,
+                                  since the row's overall height then follows the
+                                  taller info side, not the actions side. */}
+                              <div className="cell-hover-contact-actions-col">
+                                <div className="cell-hover-contact-actions">
+                                  {CONTACT_CALL_BUTTON_ENABLED && phone && (
+                                    <button
+                                      type="button"
+                                      className="cell-hover-contact-call"
+                                      title={`Skambinti ${phone}`}
+                                      onClick={() => void callContact(c.text)}
+                                    >
+                                      <Phone className="icon" size={14} />
+                                    </button>
+                                  )}
                                   <button
                                     type="button"
-                                    className="cell-hover-contact-call"
-                                    title={`Skambinti ${phone}`}
-                                    onClick={() => void callContact(c.text)}
+                                    className="cell-hover-contact-social-search"
+                                    title="Ieškoti Instagram / Facebook (AI)"
+                                    onClick={() => setSocialLookupFor(c.id)}
                                   >
-                                    <Phone className="icon" size={14} />
+                                    <Search className="icon" size={14} />
                                   </button>
-                                )}
-                                {(c.sentCount || c.repliedCount || c.senders?.length) && (
-                                  <span
-                                    className={`cell-hover-contact-sent ${
-                                      // A recorded sender is treated as the strongest signal (on
-                                      // explicit request: it means this person replied, so a
-                                      // worker scanning the table for the "hottest" leads should
-                                      // see it before the plain "sent, no reply yet"/"replied via
-                                      // History push" states) — takes priority over both.
-                                      c.senders?.length
-                                        ? 'cell-hover-contact-sent-hot'
-                                        : c.repliedCount
-                                          ? 'cell-hover-contact-sent-replied'
-                                          : 'cell-hover-contact-sent-active'
-                                    }`}
-                                    // Shows on every badge state, including the plain
-                                    // "Pridėti išsiųstus" one — briefly removed on request,
-                                    // restored on a follow-up request once it became clear
-                                    // this is exactly the explanation a new user needs:
-                                    // sentCount/repliedCount are two independent counters
-                                    // (see buildSentTooltip's own doc comment), so "sent 0
-                                    // times" here means "never run through Pridėti
-                                    // išsiųstus", not "definitely never emailed" — worth
-                                    // surfacing every time, not just when repliedCount/
-                                    // senders are also present. See SentBadgeTooltip's own
-                                    // doc comment for why this is a portaled tooltip rather
-                                    // than a `title` attribute or a plain CSS :hover child
-                                    // (both tried, both rejected).
-                                    onMouseEnter={(e) => setSentTooltip({ anchor: e.currentTarget, text: buildSentTooltip(c) })}
-                                    onMouseLeave={() => setSentTooltip(null)}
-                                  >
-                                    <Send className="icon" size={14} />
-                                    {(c.repliedCount || c.sentCount) && (
-                                      <span className="cell-hover-contact-sent-badge">{c.repliedCount || c.sentCount}</span>
+                                  {canEditContacts && (
+                                    <button
+                                      type="button"
+                                      className="cell-hover-contact-edit"
+                                      title="Redaguoti kontaktą"
+                                      onClick={() => startEditingContact(c)}
+                                    >
+                                      <PenLine className="icon" size={14} />
+                                    </button>
+                                  )}
+                                  {canDeleteContacts && (
+                                    <button
+                                      type="button"
+                                      className="cell-hover-contact-remove"
+                                      title="Pašalinti kontaktą"
+                                      onClick={() => {
+                                        void removeContact(c.id);
+                                      }}
+                                    >
+                                      <X className="icon" size={14} />
+                                    </button>
+                                  )}
+                                </div>
+                                {(!!c.sentCount || !!c.repliedCount || !!c.senders?.length) && (
+                                  <div className="cell-hover-contact-badges">
+                                    {/* Three independent badges, not one badge that swaps
+                                        color/number — on explicit request, so all three
+                                        actions ("Pridėti išsiųstus"/"Perkelti į lentelę"/
+                                        "Pridėti siuntėją") stay visible and countable at
+                                        once instead of the highest-priority one hiding the
+                                        others. Rendered in this fixed order with
+                                        justify-content: flex-end (see the CSS) — that's
+                                        all "always starts under the X/remove button, the
+                                        next one appended toward Edit" needs: a flex row
+                                        packs only the badges that actually have data with
+                                        no gaps, so a contact with just one badge shows it
+                                        hugging the right edge, and a second one appends to
+                                        its left, without tracking "which was added first"
+                                        as separate state. */}
+                                    {!!c.sentCount && (
+                                      <span
+                                        className="cell-hover-contact-sent cell-hover-contact-sent-active"
+                                        title="Pridėti išsiųstus"
+                                        onMouseEnter={(e) => setSentTooltip({ anchor: e.currentTarget, text: buildSentBadgeTooltip(c) })}
+                                        onMouseLeave={() => setSentTooltip(null)}
+                                      >
+                                        <Send className="icon" size={14} />
+                                        <span className="cell-hover-contact-sent-badge">{c.sentCount}</span>
+                                      </span>
                                     )}
-                                  </span>
-                                )}
-                                <button
-                                  type="button"
-                                  className="cell-hover-contact-social-search"
-                                  title="Ieškoti Instagram / Facebook (AI)"
-                                  onClick={() => setSocialLookupFor(c.id)}
-                                >
-                                  <Search className="icon" size={14} />
-                                </button>
-                                {canEditContacts && (
-                                  <button
-                                    type="button"
-                                    className="cell-hover-contact-edit"
-                                    title="Redaguoti kontaktą"
-                                    onClick={() => startEditingContact(c)}
-                                  >
-                                    <PenLine className="icon" size={14} />
-                                  </button>
-                                )}
-                                {canDeleteContacts && (
-                                  <button
-                                    type="button"
-                                    className="cell-hover-contact-remove"
-                                    title="Pašalinti kontaktą"
-                                    onClick={() => {
-                                      void removeContact(c.id);
-                                    }}
-                                  >
-                                    <X className="icon" size={14} />
-                                  </button>
+                                    {!!c.repliedCount && (
+                                      <span
+                                        className="cell-hover-contact-sent cell-hover-contact-sent-replied"
+                                        title="Perkelti į lentelę"
+                                        onMouseEnter={(e) => setSentTooltip({ anchor: e.currentTarget, text: buildRepliedBadgeTooltip(c) })}
+                                        onMouseLeave={() => setSentTooltip(null)}
+                                      >
+                                        <History className="icon" size={14} />
+                                        <span className="cell-hover-contact-sent-badge">{c.repliedCount}</span>
+                                      </span>
+                                    )}
+                                    {!!c.senders?.length && (
+                                      <span
+                                        className="cell-hover-contact-sent cell-hover-contact-sent-hot"
+                                        title="Pridėti siuntėją"
+                                        onMouseEnter={(e) => setSentTooltip({ anchor: e.currentTarget, text: buildSendersBadgeTooltip(c) })}
+                                        onMouseLeave={() => setSentTooltip(null)}
+                                      >
+                                        <Mail className="icon" size={14} />
+                                        <span className="cell-hover-contact-sent-badge">{c.senders.length}</span>
+                                      </span>
+                                    )}
+                                  </div>
                                 )}
                               </div>
                             </div>

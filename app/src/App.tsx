@@ -7,6 +7,7 @@ import { usePendingPhoneSearchStore } from './store/usePendingPhoneSearchStore';
 import { useToastStore } from './store/useToastStore';
 import { useReminderStore } from './store/useReminderStore';
 import { useInstantlyInboxStore } from './store/useInstantlyInboxStore';
+import { useIntegrationsStatusStore } from './store/useIntegrationsStatusStore';
 import { TableView } from './components/Table/TableView';
 import { CalendarView } from './components/Calendar/CalendarView';
 import { WorkspaceView } from './components/Workspace/WorkspaceView';
@@ -232,6 +233,19 @@ function App() {
     const interval = setInterval(() => void refreshInterestedUnreadCount(), 180_000);
     return () => clearInterval(interval);
   }, [token, allowedTabs, refreshInterestedUnreadCount]);
+
+  // Dims the Paieška nav tab (below) when this company has no Apollo key
+  // configured, instead of letting a click land on a tab that immediately
+  // fails with an IntegrationNotConfiguredError — a real, reported
+  // complaint ("не хочу загружать юзера"). Loaded once per session
+  // (the store's own `loaded` guard no-ops a repeat call), same
+  // fire-and-forget-on-token pattern as every other per-session fetch here.
+  const loadIntegrationsStatus = useIntegrationsStatusStore((s) => s.load);
+  const apolloConfigured = useIntegrationsStatusStore((s) => s.status?.apolloApiKey ?? true);
+  useEffect(() => {
+    if (!token) return;
+    void loadIntegrationsStatus();
+  }, [token, loadIntegrationsStatus]);
 
   // Not part of allowedTabs/Tab — News lives on the Workspace screen
   // (WorkspaceView), not as an in-table tab, so it isn't scoped to any
@@ -670,8 +684,13 @@ function App() {
               {allowedTabs.has('search') && (
                 <button
                   type="button"
-                  className={tab === 'search' ? 'active' : ''}
+                  className={`${tab === 'search' ? 'active' : ''} ${apolloConfigured ? '' : 'nav-tab-unconfigured'}`}
+                  title={apolloConfigured ? undefined : 'Apollo API dar nesukonfigūruota'}
                   onClick={() => {
+                    if (!apolloConfigured) {
+                      showToast('Apollo API dar nesukonfigūruota — susisiekite su administratoriumi');
+                      return;
+                    }
                     setTab('search');
                     setMobileNavOpen(false);
                   }}

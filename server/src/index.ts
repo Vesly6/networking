@@ -1107,6 +1107,21 @@ function patchIntegrations(companyId: string, body: Record<string, unknown>): vo
   upsertCompanyIntegrations(companyId, patch);
 }
 
+// A regular company session (including a worker) never sees the
+// admin-managed Integracijos panel, but the frontend still needs to know
+// *whether* a given integration is configured — e.g. to dim the Paieška
+// nav tab instead of letting the user click into it and hit an
+// IntegrationNotConfiguredError. Reuses the same field-presence data
+// integrationsStatus() already computes for the admin dashboard; booleans
+// only, no secret ever reaches this response, so a plain requireAuth
+// session (not requireNotWorker/requireSuperAdmin) is enough to read it.
+app.get(
+  '/api/integrations/status',
+  asyncHandler(async (req, res) => {
+    res.json(integrationsStatus(req.auth!.companyId));
+  }),
+);
+
 const DATE_RE = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
 
 app.get(

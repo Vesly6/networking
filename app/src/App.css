@@ -614,6 +614,17 @@ svg.icon {
   background: #30ae5c;
 }
 
+/* Paieška nav tab when this company has no Apollo key configured — same
+   dimmed-not-hidden treatment as .cell-hover-apollo-search-btn:disabled
+   (opacity 0.6), so it reads as "not set up yet" instead of a normal,
+   clickable tab. Stays visible (Funkcijos still controls that) and stays
+   clickable — the click shows a toast instead of switching tabs, rather
+   than letting the user land on a broken Paieška screen and hit a raw
+   IntegrationNotConfiguredError. */
+.nav-tab-unconfigured {
+  opacity: 0.6;
+}
+
 .app-main {
   flex: 1;
   min-height: 0;
@@ -2580,6 +2591,23 @@ tr.row-drop-end td {
   flex: 0 0 auto;
 }
 
+/* Wraps .cell-hover-contact-actions (icon row) and .cell-hover-contact-badges
+   (see below) in one column so the badges hug the icon row's own bottom
+   edge, not the whole .cell-hover-contact-main-row's — fixes a real, reported
+   bug: with the badges as a plain sibling after the whole info+actions row,
+   a contact with a taller info column (extra fields, social icons) pushed
+   the badges visibly below the icons instead of snug beneath them, since
+   the row's overall height then followed the taller info side, not the
+   actions side. flex: 0 0 auto matches what .cell-hover-contact-actions
+   itself used to carry directly, so the info block still claims all the
+   leftover row width exactly as before. */
+.cell-hover-contact-actions-col {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  flex: 0 0 auto;
+}
+
 /* Matches the table row-flash animation's color language (same accent
    blue) — briefly marks the one contact entry a Calls-tab "🔍 Ieškoti"
    jump actually matched, since a Contacts column can hold several people
@@ -2795,6 +2823,23 @@ tr.row-drop-end td {
    across many tables, no per-contact clicking), repliedCount by
    PushReplyRowsModal.tsx as before. Only rendered at all once there's
    something to show (sentCount or repliedCount truthy). */
+/* Row of up to 3 independent badges (Pridėti išsiųstus/Perkelti į
+   lentelę/Pridėti siuntėją), sitting below the action-icons row
+   (search/edit/remove) rather than inline with them — on explicit
+   request, so a contact with several logged actions doesn't crowd the
+   icon row itself. flex-end packs only the badges that actually have
+   data with no gap between them, so the first one present always sits
+   flush against the right edge (roughly under the remove/X button
+   above) and each additional one appends to its left — see this row's
+   own JSX comment for why that needs no "which was added first"
+   tracking, just this alignment plus a fixed render order. */
+.cell-hover-contact-badges {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.3rem;
+  margin-top: 0.15rem;
+}
 .cell-hover-contact-sent {
   flex: 0 0 auto;
   display: inline-flex;
@@ -2918,6 +2963,16 @@ tr.row-drop-end td {
   min-width: 0;
   width: auto;
   padding: 0.3rem 0.1rem;
+}
+/* .filter-accordion-title has no white-space rule of its own (the Paieška
+   sidebar's wider accordion never needed one) — here, sharing the row with
+   the Apollo button, the title's natural width doesn't fit and this
+   min-width:0 flex item shrinks below it, wrapping "+ Pridėti kontaktą
+   rankiniu būdu" onto two lines. Truncate instead. */
+.cell-hover-contact-manual-toggle .filter-accordion-title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .cell-hover-contact-manual-body {
