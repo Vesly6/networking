@@ -195,17 +195,17 @@ interface TaggedEntry {
  * read as one counter commenting on the other's state rather than each
  * badge being self-contained. */
 function buildSentBadgeTooltip(c: ContactEntry): string {
-  return `Pridėti išsiųstus: pažymėta ${c.sentCount ?? 0} kart(ų)`;
+  return `Išsiuntėm Jam/Jai (${c.sentCount ?? 0}) laiškų seką`;
 }
 function buildRepliedBadgeTooltip(c: ContactEntry): string {
-  return `Perkelti į lentelę: atsakė ${c.repliedCount ?? 0} kart(ų)`;
+  return `Gavome (${c.repliedCount ?? 0}) atsakymų nuo Jos/Jo`;
 }
 /** Newest first (senders is already stored in that order — see
  * addContactSender), one mailbox/date pair per line so a growing list
  * (10+ campaigns over time) stays readable rather than running together
  * on one line. */
 function buildSendersBadgeTooltip(c: ContactEntry): string {
-  return ['Siųsta iš:', ...(c.senders ?? []).map((s) => (s.date ? `${s.email} (${s.date})` : s.email))].join('\n');
+  return (c.senders ?? []).map((s) => `Išsiuntėm Jam/Jai laišką iš: ${s.email}${s.date ? ` (${s.date})` : ''}`).join('\n');
 }
 
 /** Portaled hover tooltip for the sent/replied badge — a plain `title`
@@ -1704,10 +1704,15 @@ export function CellHoverEditor({
                                         hugging the right edge, and a second one appends to
                                         its left, without tracking "which was added first"
                                         as separate state. */}
+                                    {/* No `title` attribute here — a native title tooltip
+                                        over a 14px icon was already tried and rejected (see
+                                        this section's own doc comment above) in favor of the
+                                        portaled SentBadgeTooltip below, and adding one back
+                                        just shows a second, unstyled browser tooltip on a
+                                        long hover, with its own shorter/stale wording. */}
                                     {!!c.sentCount && (
                                       <span
                                         className="cell-hover-contact-sent cell-hover-contact-sent-active"
-                                        title="Pridėti išsiųstus"
                                         onMouseEnter={(e) => setSentTooltip({ anchor: e.currentTarget, text: buildSentBadgeTooltip(c) })}
                                         onMouseLeave={() => setSentTooltip(null)}
                                       >
@@ -1718,7 +1723,6 @@ export function CellHoverEditor({
                                     {!!c.repliedCount && (
                                       <span
                                         className="cell-hover-contact-sent cell-hover-contact-sent-replied"
-                                        title="Perkelti į lentelę"
                                         onMouseEnter={(e) => setSentTooltip({ anchor: e.currentTarget, text: buildRepliedBadgeTooltip(c) })}
                                         onMouseLeave={() => setSentTooltip(null)}
                                       >
@@ -1729,7 +1733,6 @@ export function CellHoverEditor({
                                     {!!c.senders?.length && (
                                       <span
                                         className="cell-hover-contact-sent cell-hover-contact-sent-hot"
-                                        title="Pridėti siuntėją"
                                         onMouseEnter={(e) => setSentTooltip({ anchor: e.currentTarget, text: buildSendersBadgeTooltip(c) })}
                                         onMouseLeave={() => setSentTooltip(null)}
                                       >
