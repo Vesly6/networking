@@ -1,12 +1,12 @@
 import { create } from 'zustand';
 import {
   fetchInstantlyEmails,
-  fetchInstantlyUnreadCount,
   replyToInstantlyEmail,
   forwardInstantlyEmail,
   markInstantlyThreadRead,
   markInstantlyEmailUnread,
   updateInstantlyLeadInterestStatus,
+  isOutgoingInstantlyEmail,
   type UniboxThreadEmail,
 } from '../utils/instantlyApi';
 
@@ -22,30 +22,28 @@ export interface UniboxThread {
   hasUnread: boolean;
 }
 
-/** Mirrors the 5 options in Instantly's own "More" menu (see the
- * reference screenshot this was built from) — "reminders"/"scheduled"
- * pass the matching (confirmed-unreliable, see fetchInstantlyEmails'
- * own doc comment) server query params on a best-effort basis, but
- * "unread"/"sent" are the two this app can also verify/enforce
- * client-side against fields that do come back reliably (is_unread,
- * and isOutgoing() in UniboxPanel.tsx for "sent"). */
-export type UniboxViewMode = 'inbox' | 'unread' | 'reminders' | 'scheduled' | 'sent';
+/** Originally mirrored all 5 options in Instantly's own "More" menu
+ * (Inbox/Unread only/Reminders only/Scheduled emails/Sent); "reminders"
+ * and "sent" were dropped on explicit request — not needed day to day,
+ * and each click into either was one more avoidable request against the
+ * account's shared 20 req/min Instantly budget (a real, current concern —
+ * see index.ts's instantlyWebhookState doc comment for the contention
+ * incident that made this budget worth protecting more carefully). Sent
+ * mail itself is untouched — a thread's own outgoing messages still show
+ * inline for context wherever a thread is open, this only removes the
+ * dedicated "just show me what I sent" filter and its own fetch. */
+export type UniboxViewMode = 'inbox' | 'unread' | 'scheduled';
 
-// Confirmed live, twice, against the real account: Instantly's own
-// /emails/unread/count endpoint can report a nonzero count (e.g. "1")
-// while NOT ONE message in /emails — unfiltered, is_unread=true
-// filtered, or paginated hundreds deep — actually carries is_unread:
-// true. That mismatch was the exact bug reported here: the subnav/
-// "Tik neperskaityti" badge kept showing a stale number that clicking
-// refresh could never resolve, because there was nothing behind it to
-// fetch. countUnread() derives the badge from the SAME thread data the
-// list itself renders, so the two can never visibly disagree again —
-// the trade-off is this only reflects unread mail within whatever's
-// currently loaded/filtered (viewMode/filterMailbox/filterCampaignId),
-// not a true account-wide total, which is an acceptable cost for "the
-// number always matches what's on screen."
-function countUnread(threads: UniboxThread[]): number {
-  return threads.filter((t) => t.hasUnread).length;
+// A thread only counts as "unread" if it has an unread *incoming*
+// message — a message we sent ourselves can apparently also carry
+// is_unread: true in Instantly's data (confirmed live: purely-outbound
+// threads with zero replies were showing up as unread), which isn't a
+// meaningful "you have something to read" signal for a cold-outreach
+// tool. isOutgoingInstantlyEmail is the same from_address_email===
+// eaccount check this app already uses server-side (instantlyReplySync.ts)
+// to tell a genuine inbound reply apart from our own sent mail.
+function hasUnreadIncoming(messages: UniboxThreadEmail[]): boolean {
+  return messages.some((m) => m.is_unread && !isOutgoingInstantlyEmail(m));
 }
 
 function groupIntoThreads(emails: UniboxThreadEmail[]): UniboxThread[] {
@@ -59,7 +57,7 @@ function groupIntoThreads(emails: UniboxThreadEmail[]): UniboxThread[] {
   const threads: UniboxThread[] = [];
   for (const [threadId, messages] of byThread) {
     const sorted = [...messages].sort((a, b) => b.timestamp_email.localeCompare(a.timestamp_email));
-    threads.push({ threadId, messages: sorted, latest: sorted[0], hasUnread: sorted.some((m) => m.is_unread) });
+    threads.push({ threadId, messages: sorted, latest: sorted[0], hasUnread: hasUnreadIncoming(sorted) });
   }
   return threads.sort((a, b) => b.latest.timestamp_email.localeCompare(a.latest.timestamp_email));
 }
@@ -179,13 +177,12 @@ export const useInstantlyInboxStore = create<InstantlyInboxState>((set, get) => 
       const page = await fetchInstantlyEmails({
         limit: 50,
         is_unread: viewMode === 'unread' ? true : undefined,
-        has_reminder: viewMode === 'reminders' ? true : undefined,
         scheduled_only: viewMode === 'scheduled' ? true : undefined,
         eaccount: filterMailbox ?? undefined,
         campaign_id: filterCampaignId ?? undefined,
       });
       const threads = groupIntoThreads(page.items);
-      set({ threads, nextCursor: page.next_starting_after ?? null, ready: true, unreadCount: countUnread(threads) });
+      set({ threads, nextCursor: page.next_starting_after ?? null, ready: true });
     } catch (err) {
       set({ error: err instanceof Error ? err.message : 'Nepavyko įkelti pokalbių', ready: true });
     }
@@ -200,7 +197,6 @@ export const useInstantlyInboxStore = create<InstantlyInboxState>((set, get) => 
         limit: 50,
         starting_after: nextCursor,
         is_unread: viewMode === 'unread' ? true : undefined,
-        has_reminder: viewMode === 'reminders' ? true : undefined,
         scheduled_only: viewMode === 'scheduled' ? true : undefined,
         eaccount: filterMailbox ?? undefined,
         campaign_id: filterCampaignId ?? undefined,
@@ -212,7 +208,7 @@ export const useInstantlyInboxStore = create<InstantlyInboxState>((set, get) => 
       // conversation as more pages load.
       const allSoFar = [...get().threads.flatMap((t) => t.messages), ...page.items];
       const threads = groupIntoThreads(allSoFar);
-      set({ threads, nextCursor: page.next_starting_after ?? null, unreadCount: countUnread(threads) });
+      set({ threads, nextCursor: page.next_starting_after ?? null });
     } catch (err) {
       set({ error: err instanceof Error ? err.message : 'Nepavyko įkelti daugiau pokalbių' });
     } finally {
@@ -220,22 +216,46 @@ export const useInstantlyInboxStore = create<InstantlyInboxState>((set, get) => 
     }
   },
 
-  // A best-effort PEEK only — for showing a rough "you might have new
-  // mail" hint on the subnav badge before Unibox has ever loaded any
-  // thread data in this session (from InstantlyView.tsx's own mount
-  // effect, and its header refresh button while on Analitika/Pašto
-  // dėžutės, where there's no thread list to derive a real count from
-  // instead). Deliberately NOT called from refresh()/loadMore()/
-  // markThreadRead()/markThreadUnread() above anymore — see countUnread's
-  // own doc comment for why trusting this endpoint once real thread data
-  // exists caused a real, reported bug (the badge and the visible list
-  // silently disagreeing, with no way for a refresh click to reconcile
-  // them since this endpoint's own number wasn't backed by anything the
-  // list endpoint would ever actually return).
+  // The subnav "Unibox {unreadCount}" badge's one source of truth — a
+  // real, reported bug (twice over) forced this into its current shape:
+  //
+  // 1. Trusting Instantly's own /emails/unread/count endpoint directly
+  //    (confirmed live: it could report a nonzero count while not one
+  //    message in /emails — unfiltered, is_unread=true filtered, or
+  //    paginated hundreds deep — actually carried is_unread: true).
+  // 2. The fix for that swapped in deriving the badge from whichever
+  //    thread page happened to be currently loaded (countUnread(threads),
+  //    called from refresh()/loadMore()) — better, but still wrong: while
+  //    viewing "Inbox" (viewMode 'inbox', page 1 of 50, unfiltered by read
+  //    state), the badge only reflected unread threads *within that one
+  //    page*. Confirmed live: badge showed "1" while sitting in Inbox, but
+  //    clicking "Neperskaityti" — a dedicated is_unread:true server fetch,
+  //    unbounded by whatever Inbox's own page 1 contained — showed 6. The
+  //    two were never actually the same query, so there was no reason to
+  //    expect them to agree.
+  //
+  // Fixed by making this the *only* place unreadCount is ever set,
+  // computed the same mode/filter-independent way refreshInterestedUnreadCount
+  // below already does: paginate every is_unread:true page directly (not
+  // trust a separate count endpoint), group into threads, and count only
+  // those with a genuine unread *incoming* message (hasUnreadIncoming —
+  // see its own doc comment for why an outgoing message can't count).
+  // Called on mount, after refresh()/markThreadRead()/markThreadUnread(),
+  // and via the manual refresh button — never derived from whatever page
+  // the Inbox/Sent/Reminders view currently happens to have loaded, so it
+  // can no longer disagree with what clicking "Neperskaityti" shows.
   refreshUnreadCount: async () => {
     try {
-      const { count } = await fetchInstantlyUnreadCount();
-      set({ unreadCount: count });
+      const emails: UniboxThreadEmail[] = [];
+      let cursor: string | undefined;
+      for (;;) {
+        const page = await fetchInstantlyEmails({ limit: 100, is_unread: true, starting_after: cursor });
+        emails.push(...page.items);
+        if (!page.next_starting_after) break;
+        cursor = page.next_starting_after;
+      }
+      const threads = groupIntoThreads(emails);
+      set({ unreadCount: threads.filter((t) => t.hasUnread).length });
     } catch {
       // Non-critical — the badge just stays at its last known value.
     }
@@ -270,19 +290,20 @@ export const useInstantlyInboxStore = create<InstantlyInboxState>((set, get) => 
     set((s) => ({ markingThreadIds: new Set(s.markingThreadIds).add(threadId) }));
     try {
       await markInstantlyThreadRead(threadId);
-      set((s) => {
-        const threads = s.threads.map((t) =>
+      set((s) => ({
+        threads: s.threads.map((t) =>
           t.threadId === threadId ? { ...t, hasUnread: false, messages: t.messages.map((m) => ({ ...m, is_unread: false })) } : t,
-        );
-        return { threads, unreadCount: countUnread(threads) };
-      });
-      // Fire-and-forget — keeps the nav badge (App.tsx) from sitting
-      // stale until its next periodic poll if the thread just marked
-      // read happened to be an unread "Interested" one. A fresh fetch
-      // rather than a local decrement, same "never trust a shortcut over
-      // real data" reasoning as this whole count already follows — this
-      // thread and whatever produced interestedUnreadCount aren't
-      // guaranteed to be the same fetch.
+        ),
+      }));
+      // Fire-and-forget, both of them — keeps the subnav badge and the
+      // nav badge (App.tsx) from sitting stale until their next periodic
+      // poll. Real fetches rather than a local decrement, same "never
+      // trust a shortcut over real data" reasoning refreshUnreadCount's
+      // own doc comment already explains — this thread's local update
+      // above and what a fresh account-wide count would say aren't
+      // guaranteed to match (e.g. another unread message could exist in
+      // this same thread beyond what's currently loaded).
+      void get().refreshUnreadCount();
       void get().refreshInterestedUnreadCount();
     } catch (err) {
       set({ error: err instanceof Error ? err.message : 'Nepavyko pažymėti kaip perskaityto' });
@@ -306,14 +327,14 @@ export const useInstantlyInboxStore = create<InstantlyInboxState>((set, get) => 
       // groupIntoThreads' `messages.some(m => m.is_unread)` compute
       // hasUnread: true again for the whole thread.
       await markInstantlyEmailUnread(thread.latest.id);
-      set((s) => {
-        const threads = s.threads.map((t) =>
-          t.threadId === threadId
-            ? { ...t, hasUnread: true, messages: t.messages.map((m) => (m.id === t.latest.id ? { ...m, is_unread: true } : m)) }
-            : t,
-        );
-        return { threads, unreadCount: countUnread(threads) };
-      });
+      set((s) => ({
+        threads: s.threads.map((t) => {
+          if (t.threadId !== threadId) return t;
+          const messages = t.messages.map((m) => (m.id === t.latest.id ? { ...m, is_unread: true } : m));
+          return { ...t, messages, hasUnread: hasUnreadIncoming(messages) };
+        }),
+      }));
+      void get().refreshUnreadCount();
       void get().refreshInterestedUnreadCount();
     } catch (err) {
       set({ error: err instanceof Error ? err.message : 'Nepavyko pažymėti kaip neperskaityto' });

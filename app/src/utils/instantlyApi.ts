@@ -359,6 +359,22 @@ export const MORE_INTEREST_STATUSES: Array<number | null> = [0, -1, -2, -3, -4];
 // without touching how the other fields resolve.
 export type UniboxThreadEmail = InstantlyEmail & { is_unread: boolean };
 
+/** A message is "ours" (sent by whichever of the connected mailboxes
+ * handled this thread) exactly when its own from-address IS the mailbox
+ * account — confirmed directly against real data (72/28 split on a real
+ * account) rather than trusting the documented-but-unverified `ue_type`
+ * enum. Moved here (was a local UniboxPanel.tsx helper) so
+ * useInstantlyInboxStore.ts can apply the identical "is this an incoming
+ * reply, not our own sent mail" check when computing which threads count
+ * as unread — same underlying signal instantlyReplySync.ts's
+ * from_address_email !== eaccount filter already relies on server-side to
+ * find genuine inbound replies in the first place, just phrased as "is
+ * outgoing" instead of "is incoming" here since that's what call sites
+ * need more often (bubble direction, Sent-view filtering). */
+export function isOutgoingInstantlyEmail(message: UniboxThreadEmail): boolean {
+  return message.from_address_email === message.eaccount;
+}
+
 export async function fetchInstantlyEmails(params: {
   limit?: number;
   starting_after?: string;

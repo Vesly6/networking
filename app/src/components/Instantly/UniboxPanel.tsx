@@ -14,9 +14,10 @@ import {
   INTEREST_STATUS_COLORS,
   PRIMARY_INTEREST_STATUSES,
   MORE_INTEREST_STATUSES,
+  isOutgoingInstantlyEmail as isOutgoing,
   type UniboxThreadEmail,
 } from '../../utils/instantlyApi';
-import { Inbox, Mail, AlarmClock, Clock, Send, X, Link, ChevronRight, CornerUpRight, CornerUpLeft, Download, type LucideIcon } from 'lucide-react';
+import { Inbox, Mail, Clock, X, Link, ChevronRight, CornerUpRight, CornerUpLeft, Download, type LucideIcon } from 'lucide-react';
 
 /** The "Daugiau" section — originally modeled directly on a screenshot of
  * Instantly's own real "More" menu (Inbox/Unread only/Reminders
@@ -26,22 +27,20 @@ import { Inbox, Mail, AlarmClock, Clock, Send, X, Link, ChevronRight, CornerUpRi
  * always-open sidebar section (second filter block, right after
  * Statusas — see the "сделаем проще" request), that extra prominence
  * stopped being necessary, so it moved back to matching Instantly's own
- * original order (Inbox first, Unread second). Both maps' key order
+ * original order (Inbox first, Unread second). "Tik priminimai"/"Išsiųsti"
+ * were dropped later on explicit request — see UniboxViewMode's own doc
+ * comment (useInstantlyInboxStore.ts) for why. Both maps' key order
  * drives the render below directly (Object.keys(VIEW_MODE_LABELS)), so
  * reordering here is the only change needed. */
 const VIEW_MODE_LABELS: Record<UniboxViewMode, string> = {
   inbox: 'Inbox',
   unread: 'Tik neperskaityti',
-  reminders: 'Tik priminimai',
   scheduled: 'Suplanuoti laiškai',
-  sent: 'Išsiųsti',
 };
 const VIEW_MODE_ICONS: Record<UniboxViewMode, LucideIcon> = {
   inbox: Inbox,
   unread: Mail,
-  reminders: AlarmClock,
   scheduled: Clock,
-  sent: Send,
 };
 
 function formatTimestamp(iso: string): string {
@@ -54,15 +53,6 @@ function formatTimestamp(iso: string): string {
 
 function daysAgo(iso: string): number {
   return Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000));
-}
-
-/** A message is "ours" (sent by whichever of the connected mailboxes
- * handled this thread) exactly when its own from-address IS the mailbox
- * account — confirmed directly against real data (72/28 split on a real
- * account) rather than trusting the documented-but-unverified `ue_type`
- * enum. */
-function isOutgoing(message: UniboxThreadEmail): boolean {
-  return message.from_address_email === message.eaccount;
 }
 
 interface Party {
@@ -466,6 +456,7 @@ export function UniboxPanel() {
   const nextCursor = useInstantlyInboxStore((s) => s.nextCursor);
   const loadMoreLoading = useInstantlyInboxStore((s) => s.loadMoreLoading);
   const refresh = useInstantlyInboxStore((s) => s.refresh);
+  const refreshUnreadCount = useInstantlyInboxStore((s) => s.refreshUnreadCount);
   const loadMore = useInstantlyInboxStore((s) => s.loadMore);
   const viewMode = useInstantlyInboxStore((s) => s.viewMode);
   const setViewMode = useInstantlyInboxStore((s) => s.setViewMode);
@@ -533,6 +524,13 @@ export function UniboxPanel() {
     void refresh();
     void refreshAccounts();
     void refreshCampaigns();
+    // Re-checked every time this panel (re)mounts — it unmounts whenever
+    // InstantlyView's own subTab switches away from 'inbox' (unlike the
+    // top-level Paštas tab, which stays mounted CSS-hidden), so this is
+    // the natural point to catch up the subnav badge with whatever
+    // arrived while the user was on Analitika/Pašto dėžutės/elsewhere,
+    // rather than only ever refreshing it once for the whole session.
+    void refreshUnreadCount();
     // Only on mount — filter changes trigger their own refresh() from the
     // store's setViewMode/setFilterMailbox/setFilterCampaignId actions.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -564,16 +562,26 @@ export function UniboxPanel() {
     () => (statusFilter === 'all' ? tabFiltered : tabFiltered.filter((t) => (t.latest.i_status ?? null) === statusFilter)),
     [tabFiltered, statusFilter],
   );
-  // "Sent" and "Reminders only" (the "More" menu) are re-checked
-  // client-side on top of whatever the server-side has_reminder/
-  // scheduled_only params did — confirmed live those two silently no-op
-  // server-side rather than actually filtering, so this is what actually
-  // makes them correct rather than just cosmetic. "Sent" has no server
-  // param at all; isOutgoing() (already used for bubble direction) is
-  // the same reliable signal reused here.
+  // "Inbox" excluding threads with no incoming message at all — a real,
+  // reported bug: a purely-outbound thread (a cold email with zero replies
+  // yet) has nothing to show in an *inbox*, but with no directional filter
+  // here it showed up anyway, indistinguishable from a real reply thread
+  // until opened. Matches the mental model this was built to ("Inbox =
+  // incoming messages/replies, Sent = what we sent" — a thread stays in
+  // Inbox once it *has* a reply even if we've since sent a follow-up, same
+  // as any normal mail client's threading; it just never appears there
+  // purely off our own outbound mail with nothing back yet).
   const viewModeFiltered = useMemo(() => {
-    if (viewMode === 'sent') return statusFiltered.filter((t) => isOutgoing(t.latest));
-    if (viewMode === 'reminders') return statusFiltered.filter((t) => t.messages.some((m) => m.reminder_ts));
+    if (viewMode === 'inbox') return statusFiltered.filter((t) => t.messages.some((m) => !isOutgoing(m)));
+    // The server-side is_unread:true fetch behind this view mode isn't
+    // direction-aware either (see useInstantlyInboxStore.ts's
+    // hasUnreadIncoming doc comment — a message we sent ourselves can
+    // apparently also carry is_unread: true), so re-check client-side
+    // against the same `hasUnread` every thread already carries — this is
+    // what actually keeps this list's count matching the subnav badge's
+    // (both now derive from the identical "has an unread incoming
+    // message" definition).
+    if (viewMode === 'unread') return statusFiltered.filter((t) => t.hasUnread);
     return statusFiltered;
   }, [statusFiltered, viewMode]);
   const filteredThreads = useMemo(() => {
