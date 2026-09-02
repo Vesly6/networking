@@ -5772,8 +5772,22 @@ tr.row-drop-end td {
   justify-content: center;
 }
 
+/* 160 -> 190 on explicit request — at 160, "Tik neperskaityti" (the
+   longest of the DAUGIAU rows) had no room left for its own
+   .instantly-status-count badge once a real 2-3 digit unread count
+   pushed the row past the available ~143px content width: the label
+   wrapped onto two lines and the badge ended up squeezed flush against
+   the sidebar's own right edge, reading as cut off even though nothing
+   was technically clipped by overflow. Measured directly (forcing the
+   row to its natural, unwrapped width): "Tik neperskaityti" + a 3-digit
+   count needs ~172px including the row's own padding, so 190px leaves a
+   small buffer rather than sizing to the exact minimum. This is the one
+   shared width every .instantly-status-row/.instantly-unibox-sidebar
+   select draws from, so it's a single change rather than a per-row fix —
+   incidentally also stops "Tik priminimai"/"Suplanuoti laiškai" from
+   wrapping, without touching any of their own styling. */
 .instantly-unibox-sidebar {
-  flex: 0 0 160px;
+  flex: 0 0 190px;
   min-width: 0;
   display: flex;
   flex-direction: column;
