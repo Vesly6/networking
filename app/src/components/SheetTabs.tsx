@@ -11,9 +11,11 @@ import {
 import type { TableMeta } from '../types';
 import { useWorkspaceStore } from '../store/useWorkspaceStore';
 import { useAuthStore } from '../store/useAuthStore';
+import { useToastStore } from '../store/useToastStore';
 import { confirmDialog } from '../store/useConfirmStore';
 import { confirmDeleteTable } from '../utils/confirmDeleteTable';
-import { countRowsForTable } from '../db/db';
+import { countRowsForTable, getTable, loadRowsForTable } from '../db/db';
+import { exportRowsToCsv, downloadCsv, sanitizeFilename } from '../utils/csv';
 import { ContextMenu } from './ContextMenu';
 import { Popover } from './Popover';
 
@@ -61,6 +63,7 @@ export function SheetTabs() {
   const renameFolder = useWorkspaceStore((s) => s.renameFolder);
   const deleteFolder = useWorkspaceStore((s) => s.deleteFolder);
   const currentUser = useAuthStore((s) => s.user);
+  const showToast = useToastStore((s) => s.show);
   // Same hard block as WorkspaceView.tsx's own table cards, and for the
   // identical reason — this is a second, faster entry point to the exact
   // same four actions (rename/new/duplicate/delete), so it needs the same
@@ -133,6 +136,42 @@ export function SheetTabs() {
   const commitFolderRename = () => {
     if (editingFolderId) renameFolder(editingFolderId, editingFolderName);
     setEditingFolderId(null);
+  };
+
+  // Folder right-click → "Eksportuoti visas CSV" — on explicit request, a
+  // per-table CSV download for every table in the folder in one action,
+  // rather than opening each table individually and exporting it by hand.
+  // Deliberately N separate downloaded files, not one combined file — a
+  // folder's tables can have completely different column sets (a folder
+  // is just an organizational grouping, not a schema guarantee), so
+  // there's no single sensible column set to merge them into; matches
+  // how "Eksportuoti CSV" already works per-table everywhere else in this
+  // app. Fetches each table fresh (getTable/loadRowsForTable) rather than
+  // trusting tablesByFolder's own cached TableMeta.columns, for the same
+  // "always re-read on load" reason documented throughout this app (a
+  // column added since the workspace list last loaded wouldn't be in the
+  // cached copy). Downloads are triggered one at a time with a short gap
+  // — firing many browser downloads in the same tick is what actually
+  // trips a browser's own "site is downloading multiple files" prompt/
+  // block, not something rate-limited on this app's own side.
+  const exportFolderCsv = async (folderId: string, folderName: string) => {
+    const folderTables = tablesByFolder.get(folderId) ?? [];
+    if (folderTables.length === 0) {
+      showToast(`Aplankas „${folderName}“ tuščias — nėra ką eksportuoti.`);
+      return;
+    }
+    showToast(`Eksportuojama: ${folderTables.length} lentelė(ių)…`);
+    let exported = 0;
+    for (const t of folderTables) {
+      const fresh = await getTable(t.id);
+      if (!fresh) continue;
+      const rows = await loadRowsForTable(t.id);
+      const csv = exportRowsToCsv(fresh.columns, rows);
+      downloadCsv(`${sanitizeFilename(folderName)}_${sanitizeFilename(fresh.name)}.csv`, csv);
+      exported++;
+      if (exported < folderTables.length) await new Promise((r) => setTimeout(r, 250));
+    }
+    showToast(`Aplankas „${folderName}“: atsisiųsta ${exported} CSV failų.`);
   };
 
   const commitNewFolder = async () => {
@@ -576,6 +615,18 @@ export function SheetTabs() {
             }}
           >
             Pervadinti aplanką
+          </button>
+          <button
+            type="button"
+            className="context-menu-item"
+            onClick={() => {
+              const id = folderMenu.id;
+              const name = folderMenu.name;
+              setFolderMenu(null);
+              void exportFolderCsv(id, name);
+            }}
+          >
+            Eksportuoti visas CSV
           </button>
           <button
             type="button"

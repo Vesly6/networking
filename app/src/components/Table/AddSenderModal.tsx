@@ -7,7 +7,7 @@ import { saveRows } from '../../db/db';
 import { getPrimaryLabel } from '../../utils/row';
 import { EMAIL_SEARCH_PATTERN, findContactIdByEmail, addContactSender } from '../../utils/contacts';
 import { findContactCandidates } from '../../utils/contactBulkMatch';
-import { parseCsvFile, downloadCsv } from '../../utils/csv';
+import { parseCsvFile, downloadCsv, sanitizeFilename } from '../../utils/csv';
 import { todaySenderDate } from '../../utils/date';
 
 interface AddSenderModalProps {
@@ -41,10 +41,6 @@ function guessColumnIndex(headers: string[], patterns: RegExp[]): number {
     if (idx !== -1) return idx;
   }
   return -1;
-}
-
-function sanitizeFilename(name: string): string {
-  return name.replace(/[^\p{L}\p{N}_-]+/gu, '_').replace(/^_+|_+$/g, '') || 'lentele';
 }
 
 /** "Pridėti siuntėją" — the sibling bulk action to MarkContactsSentModal

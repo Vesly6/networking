@@ -73,3 +73,12 @@ export function downloadCsv(filename: string, csvContent: string): void {
   document.body.removeChild(link);
   URL.revokeObjectURL(url);
 }
+
+/** A table/folder name is free-text (can hold quotes, slashes, emoji,
+ * ...) — strip it down to something every OS accepts as a filename
+ * rather than trusting it verbatim. Shared by every per-table/per-folder
+ * CSV download (MarkContactsSentModal, AddSenderModal, SheetTabs'
+ * folder export) — factored out here once a third consumer needed it. */
+export function sanitizeFilename(name: string): string {
+  return name.replace(/[^\p{L}\p{N}_-]+/gu, '_').replace(/^_+|_+$/g, '') || 'be_pavadinimo';
+}

@@ -7,7 +7,7 @@ import { saveRows } from '../../db/db';
 import { getPrimaryLabel } from '../../utils/row';
 import { EMAIL_SEARCH_PATTERN, findContactIdByEmail, markContactSent } from '../../utils/contacts';
 import { findContactCandidates } from '../../utils/contactBulkMatch';
-import { parseCsvFile, downloadCsv } from '../../utils/csv';
+import { parseCsvFile, downloadCsv, sanitizeFilename } from '../../utils/csv';
 
 interface MarkContactsSentModalProps {
   onClose: () => void;
@@ -45,10 +45,6 @@ function guessEmailColumnIndex(headers: string[]): number {
 /** A table name is free-text (can hold quotes, slashes, emoji, ...) —
  * strip it down to something every OS accepts as a filename rather than
  * trusting it verbatim. */
-function sanitizeFilename(name: string): string {
-  return name.replace(/[^\p{L}\p{N}_-]+/gu, '_').replace(/^_+|_+$/g, '') || 'lentele';
-}
-
 /** Bulk "mark as sent" — the third mapping in the sent/replied tracking
  * feature, replacing an earlier per-contact click that turned out to be
  * the wrong shape for the real workflow (10,000+ contacts across dozens
