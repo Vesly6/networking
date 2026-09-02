@@ -58,6 +58,7 @@ import {
   PRESET_COLORS,
   RECENT_COLORS_KEY,
   TABLE_VIEW_STATE_KEY_PREFIX,
+  TABLE_SCROLL_ROW_KEY_PREFIX,
 } from '../../constants';
 import { MoreHorizontal, Undo2, Redo2, Lock, X, GripVertical, Hash, MoreVertical, ChevronUp, ChevronDown, UserPlus, Send, Mail } from 'lucide-react';
 
@@ -279,6 +280,37 @@ function saveViewState(
     // localStorage can throw (quota exceeded, private-browsing
     // restrictions) — persistence here is a nice-to-have, not required
     // for the table itself to keep working.
+  }
+}
+
+/** Per-table "where was I scrolled to" — on explicit request: switching
+ * tables (or away and back) always reset to row 1, which read as broken
+ * on a large table someone was working through in order. A ROW ID, not a
+ * raw pixel scrollTop or even a bare index — ids survive a sort/search
+ * reshuffling filteredSortedRows between visits (an index wouldn't still
+ * point at the same row), and scrollToRowIndex below resolves an id back
+ * to whatever index it currently sits at via the virtualizer's own
+ * estimated/cached sizes, never raw pixels, so this keeps working
+ * correctly even if row heights changed since the id was saved. A
+ * separate localStorage key from the view-state blob above (see
+ * TABLE_SCROLL_ROW_KEY_PREFIX's own doc comment) since this updates on
+ * every scroll tick, not just on a deliberate filter/sort change. */
+function loadSavedScrollRowId(tableId: string | null): string | null {
+  if (!tableId) return null;
+  try {
+    return localStorage.getItem(`${TABLE_SCROLL_ROW_KEY_PREFIX}${tableId}`);
+  } catch {
+    return null;
+  }
+}
+
+function saveScrollRowId(tableId: string | null, rowId: string | null) {
+  if (!tableId) return;
+  try {
+    if (rowId) localStorage.setItem(`${TABLE_SCROLL_ROW_KEY_PREFIX}${tableId}`, rowId);
+    else localStorage.removeItem(`${TABLE_SCROLL_ROW_KEY_PREFIX}${tableId}`);
+  } catch {
+    // Same "nice-to-have, not required" reasoning as saveViewState above.
   }
 }
 
@@ -1022,6 +1054,93 @@ export function TableView({
     if (index >= 0) scrollToRowIndex(index);
   };
 
+  // Per-table scroll position — a real, reported gap: switching tables (or
+  // away and back) always landed on row 1, even on a large table someone
+  // was working through in order. loadSavedScrollRowId/saveScrollRowId
+  // (this file's own top-level helpers) persist a row *id*, not a raw
+  // pixel scrollTop or even a bare index — an id survives a sort/search
+  // reshuffling filteredSortedRows between visits, and scrollToIndex below
+  // always resolves it against the virtualizer's own current
+  // estimated/cached sizes, never raw pixels, so this keeps working
+  // correctly even if row heights changed since the id was saved.
+  //
+  // tableIdRef mirrors the "always current" ref pattern filteredSortedRowsRef
+  // already uses — the scroll listener effect below attaches exactly once
+  // (empty deps, same reasoning as the header-drag effect above: tableScrollRef
+  // .current is the same DOM node for this component's whole lifetime, which
+  // spans every table switch since this view never unmounts on one — see
+  // App.tsx's own doc comment on why Table/Calendar/Calls stay mounted), so it
+  // needs a ref rather than a closed-over `tableId` to always save against
+  // whichever table is actually active at the moment a scroll happens.
+  const tableIdRef = useRef(tableId);
+  tableIdRef.current = tableId;
+  // Guards the restore effect below against re-firing (and yanking the
+  // view back to the saved row) on every ordinary re-render/data refresh
+  // within the *same* table — it should only ever act once per genuine
+  // table switch. Deliberately not reset on unmount since this component
+  // never unmounts between switches; a fresh mount naturally starts at
+  // null anyway.
+  const restoredScrollForTableIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const scrollEl = tableScrollRef.current;
+    if (!scrollEl) return;
+    // Debounced rather than saving on every scroll event — this can fire
+    // dozens of times a second during a drag-scroll/momentum scroll, and
+    // only the value once scrolling actually settles matters for "where
+    // was I when I left".
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+    const handleScroll = () => {
+      if (timeout) clearTimeout(timeout);
+      timeout = setTimeout(() => {
+        // range (not getVirtualItems()) is the actually-visible span
+        // without overscan padding — getVirtualItems() would report a row
+        // several positions above the real top of the viewport as "first",
+        // since overscan renders extra rows above/below for smooth
+        // scrolling.
+        const startIndex = rowVirtualizer.range?.startIndex;
+        const row = startIndex === undefined ? undefined : filteredSortedRowsRef.current[startIndex];
+        saveScrollRowId(tableIdRef.current, row?.id ?? null);
+      }, 250);
+    };
+    scrollEl.addEventListener('scroll', handleScroll, { passive: true });
+    return () => {
+      scrollEl.removeEventListener('scroll', handleScroll);
+      if (timeout) clearTimeout(timeout);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    // Already restored for this exact table (or there's no table/no rows
+    // loaded for it yet) — do nothing. rows.length in the dep array is
+    // what lets this correctly wait out loadTable()'s own async fetch:
+    // right after tableId changes, rows briefly still holds the *previous*
+    // table's data (or is empty), so restoring immediately would either
+    // silently no-op against the wrong rows or find nothing; this re-runs
+    // again once the new table's rows actually arrive.
+    if (!tableId || restoredScrollForTableIdRef.current === tableId || rows.length === 0) return;
+    restoredScrollForTableIdRef.current = tableId;
+    const savedRowId = loadSavedScrollRowId(tableId);
+    if (!savedRowId) return;
+    // A real, found bug: calling rowVirtualizer.scrollToIndex() directly
+    // in this effect silently no-opped (stayed at row 1) — the virtualizer
+    // hadn't yet re-measured against the new table's row count/total size
+    // at the exact moment this effect's body runs, in the same commit as
+    // `rows` itself just changed. requestAnimationFrame defers one paint,
+    // same fix (and reasoning) already established elsewhere in this file
+    // for the identical class of problem — see handleAddRow's own
+    // `requestAnimationFrame(() => scrollToRowId(id))` and the
+    // focusContact effect's retry loop above.
+    requestAnimationFrame(() => {
+      const index = filteredSortedRowsRef.current.findIndex((r) => r.id === savedRowId);
+      // align: 'start' (not scrollToRowIndex's own 'center') and no
+      // 'smooth' behavior — this should feel like "you're back exactly
+      // where you left", not a fresh jump-and-animate the way clicking a
+      // calendar entry or the Name Box does.
+      if (index >= 0) rowVirtualizer.scrollToIndex(index, { align: 'start' });
+    });
+  }, [tableId, rows.length, rowVirtualizer]);
 
   // Search still blocks drag/insert — a search-filtered view isn't the
   // table's real row order, so "drag to position N" or "insert above this

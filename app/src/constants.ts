@@ -20,6 +20,16 @@ export const RECENT_COLORS_KEY = 'cold-crm:recent-colors';
  * table can never silently filter a different one after a reload. */
 export const TABLE_VIEW_STATE_KEY_PREFIX = 'cold-crm:table-view-state:';
 
+/** Prefix for the per-table *scroll position* key — a separate,
+ * dedicated localStorage entry from TABLE_VIEW_STATE_KEY_PREFIX above
+ * (see TableView.tsx's persistScrollRowId/restoreScrollPosition), not
+ * folded into that same blob. Scroll position updates far more often
+ * (on every scroll tick) than search/sort do, and nothing else in the UI
+ * needs to react to it as React state — writing it straight to
+ * localStorage on its own key avoids re-running the view-state save
+ * effect (and its JSON.stringify of the whole blob) on every scroll. */
+export const TABLE_SCROLL_ROW_KEY_PREFIX = 'cold-crm:table-scroll-row:';
+
 export const PRESET_COLORS = [
   '#fecaca',
   '#fed7aa',
