@@ -18,6 +18,7 @@ import { countRowsForTable, getTable, loadRowsForTable } from '../db/db';
 import { exportRowsToCsv, downloadCsv, sanitizeFilename } from '../utils/csv';
 import { ContextMenu } from './ContextMenu';
 import { Popover } from './Popover';
+import { Folder, Search } from 'lucide-react';
 
 interface TableMenuState {
   x: number;
@@ -443,7 +444,7 @@ export function SheetTabs() {
                   }}
                   title="Spustelėkite, kad išskleistumėte/suskleistumėte — vilkite, kad pakeistumėte tvarką, dešiniuoju paspaudimu pervadinkite ar ištrinkite"
                 >
-                  📁 {folder.name} ({folderTables.length})
+                  <Folder className="icon" size={14} /> {folder.name} ({folderTables.length})
                 </button>
               )}
               {isExpanded && (
@@ -476,7 +477,7 @@ export function SheetTabs() {
           setJumpAnchor(e.currentTarget);
         }}
       >
-        🔍
+        <Search className="icon" size={14} />
       </button>
       {jumpAnchor && (
         <Popover anchor={jumpAnchor} width={280}>
@@ -499,7 +500,11 @@ export function SheetTabs() {
                   setJumpAnchor(null);
                 }}
               >
-                {folderName && <span className="sheet-tabs-jump-item-folder">📁 {folderName}</span>}
+                {folderName && (
+                  <span className="sheet-tabs-jump-item-folder">
+                    <Folder className="icon" size={12} /> {folderName}
+                  </span>
+                )}
                 {table.name}
               </button>
             ))}
@@ -585,7 +590,7 @@ export function SheetTabs() {
                     setMenu(null);
                   }}
                 >
-                  📁 {f.name}
+                  <Folder className="icon" size={14} /> {f.name}
                 </button>
               ))}
               <button

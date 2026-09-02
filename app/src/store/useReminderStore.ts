@@ -103,7 +103,7 @@ export const useReminderStore = create<ReminderState>((set) => {
           const row: Row = { id: rowData.id, tableId: group.tableId, cells: rowData.cells, order: 0, createdAt: 0, updatedAt: 0 };
           const label = getPrimaryLabel(row, group.columns);
           const contactName = getLinkedContactName(row, group.columns);
-          const title = '📞 Laikas skambinti';
+          const title = 'Laikas skambinti';
           const body = contactName ? `${label} — ${contactName}` : label;
 
           notifiedKeys.add(key);

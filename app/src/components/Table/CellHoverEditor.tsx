@@ -944,7 +944,7 @@ export function CellHoverEditor({
           key={platform}
           src={SOCIAL_ICON_SRC[platform]}
           alt={SOCIAL_ICON_LABEL[platform]}
-          title={`AI paieška atlikta — ${SOCIAL_ICON_LABEL[platform]} profilis nerastas. Spauskite 🔍, kad bandytumėte dar kartą.`}
+          title={`AI paieška atlikta — ${SOCIAL_ICON_LABEL[platform]} profilis nerastas. Spauskite paieškos mygtuką, kad bandytumėte dar kartą.`}
           className="cell-hover-social-icon cell-hover-social-icon-not-found"
         />
       );

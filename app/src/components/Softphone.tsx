@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { Phone, PhoneOff } from 'lucide-react';
+import { Phone } from 'lucide-react';
 import { fetchWebrtcKey } from '../utils/webrtcApi';
 import { useToastStore } from '../store/useToastStore';
 import { useTableStore } from '../store/useTableStore';
@@ -136,11 +136,16 @@ export function Softphone() {
   return (
     <button
       type="button"
-      className="softphone-toggle"
+      // On explicit request — one plain phone icon regardless of state,
+      // no crossed-out/PhoneOff variant. The toggle's own on/off state is
+      // shown through whether the button is present in its "raised" resting
+      // spot (widget hidden) vs. tucked in above the widget (widget
+      // shown) and the title tooltip, not through swapping icons.
+      className={`softphone-toggle ${softphoneHidden ? 'softphone-toggle-hidden' : ''}`}
       title={softphoneHidden ? 'Rodyti telefono programėlę' : 'Slėpti telefono programėlę'}
       onClick={toggleSoftphoneHidden}
     >
-      {softphoneHidden ? <PhoneOff className="icon" size={18} /> : <Phone className="icon" size={18} />}
+      <Phone className="icon" size={18} />
     </button>
   );
 }

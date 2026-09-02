@@ -443,6 +443,23 @@ svg.icon {
   border-top: 1px solid var(--border-strong);
   background: var(--bg-alt);
   flex-shrink: 0;
+  /* Reserves room on the right so the "Visos lentelės" search button (the
+     last child, at the bar's own right edge) never ends up sitting behind
+     the Zadarma softphone widget/its toggle (Softphone.tsx) — both are
+     position:fixed to the same viewport bottom-right corner this bar's
+     own right edge naturally lands on too, in normal document flow,
+     purely a coincidence of both wanting "the bottom-right corner". A
+     real, reported bug: the widget's own collapsed root
+     (.zdrm-webphone, confirmed 348px wide) was rendering directly on top
+     of the search button, silently eating its clicks
+     (document.elementFromPoint at the button's own screen position
+     resolved to the widget's DOM, not the button). 56px always clears the
+     show/hide toggle alone (40px button + margin); the wider reservation
+     below adds room for the full widget whenever it's actually shown. */
+  padding-right: 64px;
+}
+:root:not([data-softphone-hidden='true']) .sheet-tabs-bar {
+  padding-right: 380px;
 }
 
 .sheet-tabs {
