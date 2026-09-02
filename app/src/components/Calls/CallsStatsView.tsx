@@ -211,7 +211,7 @@ export function CallsStatsView() {
           <div className="calls-stats-card-label">
             Išlaidos
             {summary.totalCost !== null && summary.callsWithoutCost > 0 && (
-              <span title="Dalis šio laikotarpio skambučių dar neturi žinomos kainos (nepavyko susieti su Zadarma sąskaitos duomenimis).">
+              <span title="Dalis šio laikotarpio skambučių dar neturi žinomos kainos (nepavyko susieti su sąskaitos duomenimis).">
                 {' '}
                 (dar {summary.callsWithoutCost} be kainos)
               </span>

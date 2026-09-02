@@ -254,20 +254,33 @@ function asyncHandler(fn: (req: Request, res: Response) => Promise<void>) {
 // credentials replaced the single shared server/.env — previously any
 // authenticated user of any company could hit any integration route
 // regardless of whether it was actually set up for them.
-class IntegrationNotConfiguredError extends Error {}
-
-// Every one of these messages used to say "enter it yourself in API
-// raktai" — no longer universally true now that API-key management moved
-// to owner-only (a company's own super_admin/worker can't reach that
-// screen at all anymore, see WorkspaceView.tsx's own doc comment). Says
-// "susisiekite su administratoriumi" instead, which is accurate
-// regardless of who's actually seeing the error.
-const NOT_CONFIGURED_HINT = 'susisiekite su administratoriumi, kad sukonfigūruotų API raktą.';
+//
+// The message is deliberately the same fixed, provider-agnostic string
+// for every one of the requireXCreds() helpers below — on explicit
+// request, after a real, reported regression: this app went through a
+// pass specifically to strip third-party provider names (Apollo, Zadarma,
+// ...) out of anything a user could see, and this class was the one place
+// that reintroduced them, since each call site used to interpolate its
+// own provider's name into the thrown message (`Apollo dar
+// nesukonfigūruota — ...`, `Zadarma dar nesukonfigūruota — ...`), which
+// the error-mapping middleware then forwarded to the client verbatim as
+// the 409's `error` field. Naming *which* integration is missing isn't
+// actually needed to act on this error either way — "susisiekite su
+// administratoriumi" is the same next step regardless of which one it
+// is — so there's no argument for reintroducing a per-provider variant
+// later; every call site should keep using this exact class with no
+// arguments.
+const NOT_CONFIGURED_MESSAGE = 'Integracija dar nesukonfigūruota — susisiekite su administratoriumi, kad ją sukonfigūruotų.';
+class IntegrationNotConfiguredError extends Error {
+  constructor() {
+    super(NOT_CONFIGURED_MESSAGE);
+  }
+}
 
 function requireZadarmaCreds(companyId: string): { key: string; secret: string } {
   const integrations = getCompanyIntegrations(companyId);
   if (!integrations?.zadarmaApiKey || !integrations?.zadarmaApiSecret) {
-    throw new IntegrationNotConfiguredError(`Zadarma dar nesukonfigūruota — ${NOT_CONFIGURED_HINT}`);
+    throw new IntegrationNotConfiguredError();
   }
   return { key: integrations.zadarmaApiKey, secret: integrations.zadarmaApiSecret };
 }
@@ -275,7 +288,7 @@ function requireZadarmaCreds(companyId: string): { key: string; secret: string }
 function requireInstantlyKey(companyId: string): string {
   const integrations = getCompanyIntegrations(companyId);
   if (!integrations?.instantlyApiKey) {
-    throw new IntegrationNotConfiguredError(`Instantly dar nesukonfigūruota — ${NOT_CONFIGURED_HINT}`);
+    throw new IntegrationNotConfiguredError();
   }
   return integrations.instantlyApiKey;
 }
@@ -283,7 +296,7 @@ function requireInstantlyKey(companyId: string): string {
 function requireApolloKey(companyId: string): string {
   const integrations = getCompanyIntegrations(companyId);
   if (!integrations?.apolloApiKey) {
-    throw new IntegrationNotConfiguredError(`Apollo dar nesukonfigūruota — ${NOT_CONFIGURED_HINT}`);
+    throw new IntegrationNotConfiguredError();
   }
   return integrations.apolloApiKey;
 }
@@ -291,7 +304,7 @@ function requireApolloKey(companyId: string): string {
 function requireSerperKey(companyId: string): string {
   const integrations = getCompanyIntegrations(companyId);
   if (!integrations?.serperApiKey) {
-    throw new IntegrationNotConfiguredError(`Serper dar nesukonfigūruota — ${NOT_CONFIGURED_HINT}`);
+    throw new IntegrationNotConfiguredError();
   }
   return integrations.serperApiKey;
 }
@@ -299,7 +312,7 @@ function requireSerperKey(companyId: string): string {
 function requireOpenaiKey(companyId: string): string {
   const integrations = getCompanyIntegrations(companyId);
   if (!integrations?.openaiApiKey) {
-    throw new IntegrationNotConfiguredError(`OpenAI dar nesukonfigūruota — ${NOT_CONFIGURED_HINT}`);
+    throw new IntegrationNotConfiguredError();
   }
   return integrations.openaiApiKey;
 }
@@ -314,7 +327,7 @@ function optionalOpenaiKey(companyId: string): string | undefined {
 function requireAnthropicKey(companyId: string): string {
   const integrations = getCompanyIntegrations(companyId);
   if (!integrations?.anthropicApiKey) {
-    throw new IntegrationNotConfiguredError(`Anthropic dar nesukonfigūruota — ${NOT_CONFIGURED_HINT}`);
+    throw new IntegrationNotConfiguredError();
   }
   return integrations.anthropicApiKey;
 }
@@ -322,7 +335,7 @@ function requireAnthropicKey(companyId: string): string {
 function requireElevenlabsKey(companyId: string): string {
   const integrations = getCompanyIntegrations(companyId);
   if (!integrations?.elevenlabsApiKey) {
-    throw new IntegrationNotConfiguredError(`ElevenLabs dar nesukonfigūruota — ${NOT_CONFIGURED_HINT}`);
+    throw new IntegrationNotConfiguredError();
   }
   return integrations.elevenlabsApiKey;
 }
@@ -1369,7 +1382,7 @@ app.post(
     const creds = requireZadarmaCreds(req.auth!.companyId);
     const from = getCompanyIntegrations(req.auth!.companyId)?.zadarmaCallerNumber;
     if (!from) {
-      res.status(409).json({ error: `Skambinančio numerio dar nesukonfigūruota — ${NOT_CONFIGURED_HINT}` });
+      res.status(409).json({ error: 'Skambinančio numerio dar nesukonfigūruota — susisiekite su administratoriumi, kad jį sukonfigūruotų.' });
       return;
     }
     const result = await requestCallback({ from, to }, creds);
@@ -3314,39 +3327,60 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
     res.status(500).json({ error: err.message });
     return;
   }
+  // Every branch below logs the real err.message/err.raw server-side (for
+  // actual debugging) but sends the client a fixed, provider-agnostic
+  // message instead of err.message itself — a second, deeper layer of the
+  // same provider-name leak this session's audit found and fixed above
+  // (IntegrationNotConfiguredError's own doc comment has the full story).
+  // Most of these modules' own hardcoded error strings were already
+  // written generically ("Calls service", "AI service", ...), but several
+  // fall back to passing a provider's own raw upstream error text straight
+  // through untouched (e.g. zadarma.ts's `json?.message`, apollo.ts's/
+  // instantly.ts's/serper.ts's own `message` derivations) whenever the
+  // provider's response happens to include one — text this app has no
+  // control over and can't guarantee never mentions the provider by name.
+  // Sanitizing centrally here, once, closes that off for every current and
+  // future throw site across all of these modules at once, rather than
+  // relying on each individual call site remembering to phrase its own
+  // message generically forever. LinkedIn is deliberately excluded below —
+  // unlike these, it isn't a hidden backend implementation detail; the
+  // whole tab is named "LinkedIn" and built around LinkedIn-specific
+  // concepts the user directly interacts with, so genericizing just its
+  // error text would be inconsistent (and pointless) without also hiding
+  // the tab itself, which hasn't been asked for.
   if (err instanceof ZadarmaApiError) {
-    console.error('Zadarma API error:', err.message, err.raw);
-    res.status(502).json({ error: err.message });
+    console.error('Calls integration error:', err.message, err.raw);
+    res.status(502).json({ error: 'Nepavyko atlikti veiksmo skambučių paslaugoje. Pabandykite dar kartą.' });
     return;
   }
   if (err instanceof TranscriptionError) {
-    console.error('ElevenLabs error:', err.message);
-    res.status(502).json({ error: err.message });
+    console.error('Transcription integration error:', err.message);
+    res.status(502).json({ error: 'Nepavyko atlikti transkripcijos. Pabandykite dar kartą.' });
     return;
   }
   if (err instanceof ContactParseError || err instanceof SummarizeError || err instanceof LinkedInReplyError) {
-    console.error('OpenAI error:', err.message);
-    res.status(502).json({ error: err.message });
+    console.error('AI integration error:', err.message);
+    res.status(502).json({ error: 'Nepavyko gauti atsakymo iš AI paslaugos. Pabandykite dar kartą.' });
     return;
   }
   if (err instanceof ApolloApiError) {
-    console.error('Apollo API error:', err.message, err.raw);
-    res.status(502).json({ error: err.message });
+    console.error('Search/data integration error:', err.message, err.raw);
+    res.status(502).json({ error: 'Nepavyko gauti duomenų iš išorinės paslaugos. Pabandykite dar kartą.' });
     return;
   }
   if (err instanceof InstantlyApiError) {
-    console.error('Instantly API error:', err.message, err.raw);
-    res.status(502).json({ error: err.message });
+    console.error('Mail integration error:', err.message, err.raw);
+    res.status(502).json({ error: 'Nepavyko atlikti veiksmo pašto paslaugoje. Pabandykite dar kartą.' });
     return;
   }
   if (err instanceof SerperError) {
-    console.error('serper.dev error:', err.message);
-    res.status(502).json({ error: err.message });
+    console.error('Search integration error:', err.message);
+    res.status(502).json({ error: 'Nepavyko atlikti paieškos. Pabandykite dar kartą.' });
     return;
   }
   if (err instanceof EmailGenerateError) {
-    console.error('Anthropic error:', err.message);
-    res.status(502).json({ error: err.message });
+    console.error('AI integration error:', err.message);
+    res.status(502).json({ error: 'Nepavyko sugeneruoti el. laiško teksto. Pabandykite dar kartą.' });
     return;
   }
   if (err instanceof LinkedInBrowserError || err instanceof LinkedInPageError) {

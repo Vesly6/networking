@@ -120,7 +120,7 @@ export function WebhookLogPanel() {
           <RefreshCw className="icon" size={14} /> Atnaujinti
         </button>
         <span className="instantly-hint">
-          Kiekvienas įrašas — vienas iš Instantly gautas webhook įvykis. „Apdorota“ reiškia, kad atsakymai buvo
+          Kiekvienas įrašas — vienas gautas webhook įvykis. „Apdorota“ reiškia, kad atsakymai buvo
           sinchronizuoti į lentelę „Visi atsakymai“ — jei nori, kad jie atsirastų konkrečioje įmonės lentelėje,
           juos vis tiek reikia rankiniu būdu perkelti („Perkelti į lentelę“ mygtukas). Spustelėkite eilutę, kad
           pamatytumėte pilną gautą duomenų turinį (JSON).

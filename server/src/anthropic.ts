@@ -95,7 +95,7 @@ export async function generateEmail(params: GenerateEmailParams, apiKey: string)
   const json: any = await res.json().catch(() => null);
   if (!res.ok || !json) {
     const apiMessage = json?.error?.message;
-    if (res.status === 401) throw new EmailGenerateError('Invalid Anthropic API key — check ANTHROPIC_API_KEY in server/.env');
+    if (res.status === 401) throw new EmailGenerateError('AI service rejected the configured API key');
     if (res.status === 429) throw new EmailGenerateError('AI service rate limit exceeded — wait and try again');
     throw new EmailGenerateError(apiMessage ?? `AI service request failed (HTTP ${res.status})`);
   }

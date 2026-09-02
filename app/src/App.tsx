@@ -685,10 +685,10 @@ function App() {
                 <button
                   type="button"
                   className={`${tab === 'search' ? 'active' : ''} ${apolloConfigured ? '' : 'nav-tab-unconfigured'}`}
-                  title={apolloConfigured ? undefined : 'Apollo API dar nesukonfigūruota'}
+                  title={apolloConfigured ? undefined : 'Integracija dar nesukonfigūruota'}
                   onClick={() => {
                     if (!apolloConfigured) {
-                      showToast('Apollo API dar nesukonfigūruota — susisiekite su administratoriumi');
+                      showToast('Integracija dar nesukonfigūruota — susisiekite su administratoriumi');
                       return;
                     }
                     setTab('search');
