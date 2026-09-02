@@ -567,7 +567,15 @@ export function CellHoverEditor({
       // already uses below fixes this on mobile while leaving desktop
       // completely unaffected (innerWidth there is always well above
       // 480+2*MARGIN, so this min() never actually engages).
-      const minWidth = mode === 'contact' ? 340 : 480;
+      // 340 → 420 on explicit request — at 340, "+ Pridėti kontaktą
+      // rankiniu būdu" (the manual-add-contact toggle's own label, sharing
+      // its row with the Apollo "Paieška" button) didn't fit and had to
+      // truncate with an ellipsis; the user asked for the box to grow
+      // instead of the text staying cut off. The ellipsis rule on
+      // .cell-hover-contact-manual-toggle .filter-accordion-title (App.css)
+      // stays in place regardless, as a fallback for a narrow phone
+      // viewport where maxWidth below still caps this.
+      const minWidth = mode === 'contact' ? 420 : 480;
       const maxWidth = window.innerWidth - MARGIN * 2;
       const width = Math.min(Math.max(rect.width, minWidth), maxWidth);
       const left = Math.max(MARGIN, Math.min(rect.left, window.innerWidth - width - MARGIN));

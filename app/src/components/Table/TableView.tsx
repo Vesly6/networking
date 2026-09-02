@@ -192,7 +192,7 @@ function loadPersistedViewState(tableId: string | null): {
   search: string;
   numericFilters: Record<string, NumericRangeFilter>;
   colorFilters: Record<string, string>;
-  replyStatusFilters: Record<string, string>;
+  replyStatusFilters: Record<string, string[]>;
   searchTags: string[];
 } {
   if (!tableId) return { search: '', numericFilters: {}, colorFilters: {}, replyStatusFilters: {}, searchTags: [] };
@@ -226,13 +226,29 @@ function loadPersistedViewState(tableId: string | null): {
       parsed.colorFilters && typeof parsed.colorFilters === 'object' && !Array.isArray(parsed.colorFilters)
         ? (parsed.colorFilters as Record<string, string>)
         : {};
-    // Same reasoning/shape as colorFilters, for the "Filtruoti pagal
-    // atsakymo statusą" column-menu item — columnId -> either a specific
-    // lead_status label or ANY_REPLY_FILTER_VALUE.
-    const replyStatusFilters =
+    // Same reasoning as colorFilters, for the "Filtruoti pagal atsakymo
+    // statusą" column-menu item — columnId -> an array of selected values
+    // (specific lead_status labels and/or ANY_REPLY_FILTER_VALUE), OR'd
+    // together (see the filteredSortedRows memo below). Also tolerates a
+    // bare string here — this filter shipped single-select first and
+    // stored one string per column; multi-select then changed the shape
+    // to string[], and an old localStorage value written by that earlier
+    // version would otherwise silently vanish (parsed as neither a valid
+    // array nor rejected) the first time a returning user reopened a
+    // table instead of just carrying their one prior selection forward.
+    const rawReplyStatusFilters =
       parsed.replyStatusFilters && typeof parsed.replyStatusFilters === 'object' && !Array.isArray(parsed.replyStatusFilters)
-        ? (parsed.replyStatusFilters as Record<string, string>)
+        ? (parsed.replyStatusFilters as Record<string, unknown>)
         : {};
+    const replyStatusFilters = Object.fromEntries(
+      Object.entries(rawReplyStatusFilters)
+        .map(([columnId, value]): [string, string[]] => {
+          if (Array.isArray(value)) return [columnId, value.filter((v): v is string => typeof v === 'string')];
+          if (typeof value === 'string') return [columnId, [value]];
+          return [columnId, []];
+        })
+        .filter(([, values]) => values.length > 0),
+    );
     // Committed search tags (the "type a word, press Enter, it sticks as
     // a chip" filtering — see the search-input onKeyDown below) — on
     // explicit request: working through one niche/segment over several
@@ -250,7 +266,7 @@ function saveViewState(
   search: string,
   numericFilters: Record<string, NumericRangeFilter>,
   colorFilters: Record<string, string>,
-  replyStatusFilters: Record<string, string>,
+  replyStatusFilters: Record<string, string[]>,
   searchTags: string[],
 ) {
   if (!tableId) return;
@@ -377,12 +393,15 @@ export function TableView({
   // spalvą" — columnId -> the one hex color currently filtered to.
   const [colorFilters, setColorFilters] = useState<Record<string, string>>(() => loadPersistedViewState(tableId).colorFilters);
   // Same shape/persistence again, for "Filtruoti pagal atsakymo statusą" —
-  // columnId -> either one lead_status label or ANY_REPLY_FILTER_VALUE
-  // ("has a reply, any status"). See the filteredSortedRows memo below for
-  // the matching logic and ColumnReplyStatusFilterPopover's own doc
-  // comment for why this only ever matches NoteEntry.replyFields entries,
-  // never a hand-typed comment.
-  const [replyStatusFilters, setReplyStatusFilters] = useState<Record<string, string>>(
+  // columnId -> an array of selected values (lead_status labels and/or
+  // ANY_REPLY_FILTER_VALUE), OR'd together within a column — on explicit
+  // request, multiple statuses ([Interesting] + [Not interesting]) show
+  // rows matching *either*, not rows that would somehow have to match
+  // both at once. See the filteredSortedRows memo below for the matching
+  // logic and ColumnReplyStatusFilterPopover's own doc comment for why
+  // this only ever matches NoteEntry.replyFields entries, never a
+  // hand-typed comment.
+  const [replyStatusFilters, setReplyStatusFilters] = useState<Record<string, string[]>>(
     () => loadPersistedViewState(tableId).replyStatusFilters,
   );
   // Committed search-box tags — on explicit request: typing a word and
@@ -764,12 +783,18 @@ export function TableView({
     // entry pushed in from an Instantly reply — see NoteEntry in
     // noteHistory.ts) rather than the cell's raw text, so a hand-typed
     // manual comment can never match here regardless of its content.
-    const activeReplyStatusFilterEntries = Object.entries(replyStatusFilters);
+    // Several columns still AND together (a row must satisfy every
+    // filtered column), but the statuses *within* one column's selection
+    // are OR'd — on explicit request ("[Interesting] + [Not interesting]
+    // → show either"), since a single reply entry only ever carries one
+    // status, so requiring a match against every checked one at once
+    // could never show anything past the first checkbox.
+    const activeReplyStatusFilterEntries = Object.entries(replyStatusFilters).filter(([, values]) => values.length > 0);
     if (activeReplyStatusFilterEntries.length > 0) {
       visible = visible.filter((row) =>
-        activeReplyStatusFilterEntries.every(([columnId, status]) => {
+        activeReplyStatusFilterEntries.every(([columnId, selected]) => {
           const entries = parseNoteHistory(row.cells[columnId] ?? '');
-          return entries.some((e) => e.replyFields && (status === ANY_REPLY_FILTER_VALUE || e.replyFields.lead_status === status));
+          return entries.some((e) => e.replyFields && (selected.includes(ANY_REPLY_FILTER_VALUE) || selected.includes(e.replyFields.lead_status)));
         }),
       );
     }
@@ -2719,8 +2744,25 @@ export function TableView({
                 anchor={anchor}
                 columnName={column.name}
                 availableStatuses={availableStatuses}
-                current={replyStatusFilters[replyStatusFilterColumnId]}
-                onApply={(value) => setReplyStatusFilters((prev) => ({ ...prev, [replyStatusFilterColumnId]: value }))}
+                current={replyStatusFilters[replyStatusFilterColumnId] ?? []}
+                onToggle={(value) =>
+                  setReplyStatusFilters((prev) => {
+                    const current = prev[replyStatusFilterColumnId] ?? [];
+                    const next = current.includes(value) ? current.filter((v) => v !== value) : [...current, value];
+                    if (next.length === 0) {
+                      const rest = { ...prev };
+                      delete rest[replyStatusFilterColumnId];
+                      return rest;
+                    }
+                    return { ...prev, [replyStatusFilterColumnId]: next };
+                  })
+                }
+                onSelectAll={() =>
+                  setReplyStatusFilters((prev) => ({
+                    ...prev,
+                    [replyStatusFilterColumnId]: [ANY_REPLY_FILTER_VALUE, ...availableStatuses],
+                  }))
+                }
                 onClear={() =>
                   setReplyStatusFilters((prev) => {
                     const next = { ...prev };
