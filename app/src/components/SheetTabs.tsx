@@ -504,7 +504,7 @@ export function SheetTabs() {
                   <span className="sheet-tabs-jump-item-folder">
                     <Folder className="icon" size={12} /> {folderName}
                   </span>
-                )}
+                )}{' '}
                 {table.name}
               </button>
             ))}
