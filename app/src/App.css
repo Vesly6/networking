@@ -6829,6 +6829,74 @@ tr.row-drop-end td {
   background: var(--bg-alt);
 }
 
+/* React Flow's own chrome (Controls/+−/Fit View/Lock, Background dots,
+   edges, the drag-selection box, connection handles, MiniMap if one's
+   ever added, the corner attribution link) — a real, reported contrast
+   bug in Dark Mode: React Flow's default palette is a fixed light theme
+   (@xyflow/react/dist/style.css's --xy-*-default values), so Controls
+   read as barely-visible dark-on-dark once the rest of the app switched
+   to Dark Mode. CampaignGraphEditor.tsx's colorMode={theme} prop already
+   makes React Flow apply its own built-in .light/.dark class (so its
+   *own* dark palette activates as a correct fallback and its internal
+   behavior stays consistent with "look up the right default"), but the
+   values below take it further: every one of these --xy-* custom
+   properties is bound directly to this app's own already
+   theme-aware tokens (var(--bg), var(--border), var(--accent), ...)
+   instead of React Flow's generic gray dark palette, so the graph reads
+   as a native part of this app's own theme system in both modes, not a
+   separately-styled embedded widget — and since these tokens already
+   flip between light/dark at :root (index.css), this block needs no
+   [data-theme="dark"] duplicate of its own; it just rides along. */
+.linkedin-graph-canvas .react-flow {
+  --xy-background-color: transparent;
+  --xy-background-pattern-color: var(--border-strong);
+
+  --xy-edge-stroke: var(--border-strong);
+  --xy-edge-stroke-selected: var(--accent);
+  --xy-edge-label-background-color: var(--bg);
+  --xy-edge-label-color: var(--text);
+  --xy-connectionline-stroke: var(--accent);
+
+  --xy-node-background-color: var(--bg);
+  --xy-node-color: var(--text);
+  --xy-node-border: 1px solid var(--border);
+
+  --xy-handle-background-color: var(--text-muted);
+  --xy-handle-border-color: var(--bg);
+
+  --xy-selection-background-color: color-mix(in srgb, var(--accent) 12%, transparent);
+  --xy-selection-border: 1px dotted var(--accent);
+
+  --xy-controls-button-background-color: var(--bg);
+  --xy-controls-button-background-color-hover: var(--bg-hover);
+  --xy-controls-button-color: var(--text);
+  --xy-controls-button-color-hover: var(--accent);
+  --xy-controls-button-border-color: var(--border);
+  --xy-controls-box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+
+  --xy-minimap-background-color: var(--bg);
+  --xy-minimap-mask-background-color: color-mix(in srgb, var(--bg-alt) 65%, transparent);
+  --xy-minimap-node-background-color: var(--border-strong);
+  --xy-minimap-node-stroke-color: var(--border);
+
+  --xy-attribution-background-color: color-mix(in srgb, var(--bg-alt) 70%, transparent);
+}
+/* The one hardcoded (not --xy-* variable-driven) color left in React
+   Flow's own stylesheet — the attribution link's own text color. */
+.linkedin-graph-canvas .react-flow__attribution a {
+  color: var(--text-muted);
+}
+/* React Flow's Controls container has no border of its own by default
+   (just the per-button border-bottom + an outer box-shadow) — added so
+   the whole control cluster reads as one clearly-bounded element against
+   the canvas background, in both themes, rather than relying on the
+   shadow alone (which is far less visible against a dark canvas). */
+.linkedin-graph-canvas .react-flow__controls {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
 .linkedin-flow-node {
   min-width: 190px;
   max-width: 240px;

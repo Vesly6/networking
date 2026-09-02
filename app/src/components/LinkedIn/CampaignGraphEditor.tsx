@@ -17,6 +17,7 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { Play, X } from 'lucide-react';
+import { useThemeStore } from '../../store/useThemeStore';
 import { useLinkedInCampaignsStore } from '../../store/useLinkedInCampaignsStore';
 import type { LinkedInSequenceNodeType } from '../../utils/linkedinCampaignsApi';
 import { ACTION_NODE_TYPES, CONDITION_NODE_TYPES, NODE_TYPE_META, isConditionType } from '../../utils/linkedinNodeTypes';
@@ -120,6 +121,18 @@ function newNodeId(): string {
 }
 
 function EditorInner({ campaignId }: { campaignId: string }) {
+  // React Flow's own colorMode system (not a separate/independent toggle
+  // of its own) — this is what applies the .light/.dark class its base
+  // stylesheet's --xy-*-default variables key off, so a real, reported
+  // contrast bug (Controls' +/-/Fit View/Lock buttons barely visible in
+  // Dark Mode) is fixed by following the app's own theme automatically
+  // rather than needing a second, unrelated theme decision inside the
+  // graph. The actual colors themselves are further overridden below
+  // (App.css's .linkedin-graph-canvas .react-flow block) to this app's
+  // own --bg/--border/--accent tokens rather than React Flow's generic
+  // built-in dark palette, so the graph reads as part of this app, not a
+  // visually distinct embedded widget.
+  const theme = useThemeStore((s) => s.theme);
   const graphNodesDb = useLinkedInCampaignsStore((s) => s.graphNodes);
   const graphEdgesDb = useLinkedInCampaignsStore((s) => s.graphEdges);
   const graphReady = useLinkedInCampaignsStore((s) => s.graphReady);
@@ -359,6 +372,7 @@ function EditorInner({ campaignId }: { campaignId: string }) {
           onConnect={onConnect}
           nodeTypes={nodeTypes}
           deleteKeyCode={['Backspace', 'Delete']}
+          colorMode={theme}
           fitView
         >
           <Background />
