@@ -1,8 +1,10 @@
 import { useEffect } from 'react';
+import { Phone, PhoneOff } from 'lucide-react';
 import { fetchWebrtcKey } from '../utils/webrtcApi';
 import { useToastStore } from '../store/useToastStore';
 import { useTableStore } from '../store/useTableStore';
 import { startIncomingCallWatcher } from '../utils/incomingCallBridge';
+import { useSoftphoneVisibilityStore } from '../store/useSoftphoneVisibilityStore';
 
 // Zadarma's widget loader (app/index.html) defines this on `window` — it's
 // a plain classic <script>, not an npm package, so there's no type for it
@@ -51,10 +53,16 @@ const SOFTPHONE_ENABLED = true;
  * its own dialpad/incoming-call UI) — a standalone browser phone, separate
  * from the callback-based 📞 buttons in Contacts (see CLAUDE.md: Zadarma's
  * widget has no documented "dial this number" API, so it can't be driven
- * from our own UI). Renders nothing itself; the widget draws its own DOM
- * outside React once initialized. Mount once, near the app root. */
+ * from our own UI). The widget itself draws its own DOM outside React once
+ * initialized — this component's only own rendered output is the small
+ * show/hide toggle floating near its corner (useSoftphoneVisibilityStore;
+ * see App.css's `:root[data-softphone-hidden]` rule for the actual
+ * hide/show mechanism, a plain CSS toggle that never touches the widget's
+ * own code or styling). Mount once, near the app root. */
 export function Softphone() {
   const showToast = useToastStore((s) => s.show);
+  const softphoneHidden = useSoftphoneVisibilityStore((s) => s.hidden);
+  const toggleSoftphoneHidden = useSoftphoneVisibilityStore((s) => s.toggle);
 
   useEffect(() => {
     if (!SOFTPHONE_ENABLED) return;
@@ -124,5 +132,15 @@ export function Softphone() {
     });
   }, []);
 
-  return null;
+  if (!SOFTPHONE_ENABLED) return null;
+  return (
+    <button
+      type="button"
+      className="softphone-toggle"
+      title={softphoneHidden ? 'Rodyti telefono programėlę' : 'Slėpti telefono programėlę'}
+      onClick={toggleSoftphoneHidden}
+    >
+      {softphoneHidden ? <PhoneOff className="icon" size={18} /> : <Phone className="icon" size={18} />}
+    </button>
+  );
 }

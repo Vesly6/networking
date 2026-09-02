@@ -7313,6 +7313,51 @@ tr.row-drop-end td {
   }
 }
 
+/* Show/hide the widget on demand (useSoftphoneVisibilityStore) — on
+   explicit request, purely a visibility toggle layered on top of Zadarma's
+   own widget, same "our own CSS reaching into their DOM, no change to
+   their own styling/behavior" precedent as the mobile scale-down rule
+   above. display: none (not visibility/opacity) so it's also out of the
+   tab order and takes no layout space while hidden. */
+:root[data-softphone-hidden='true'] .zdrm-webphone {
+  display: none !important;
+}
+
+/* The toggle button itself (Softphone.tsx) — floats just above the
+   widget's own bottom-right corner (widget offset is right:10px;
+   bottom:5px, see Softphone.tsx's zadarmaWidgetFn call) so it stays
+   reachable and in the same visual neighborhood regardless of whether the
+   widget is currently shown or hidden. */
+.softphone-toggle {
+  position: fixed;
+  right: 14px;
+  bottom: 5px;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-muted);
+  box-shadow: var(--shadow);
+  cursor: pointer;
+}
+.softphone-toggle:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+/* Once the widget itself is shown, its own bottom-right corner already
+   occupies this spot — the toggle moves up out of the way rather than
+   sitting on top of the widget's own controls. Collapsed widget height
+   confirmed live at 61px (see the doc comment on .zdrm-webphone above);
+   68px clears it with a small gap. */
+:root:not([data-softphone-hidden='true']) .softphone-toggle {
+  bottom: 68px;
+}
+
 /* Email Generator tab — ported from a standalone Chrome extension
    (Desktop/Email-Extention), restyled with this app's own tokens instead
    of the extension's own dark-theme-specific palette. */
