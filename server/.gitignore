@@ -10,4 +10,6 @@ table-data.sqlite
 table-data.sqlite-*
 accounts.sqlite
 accounts.sqlite-*
+instantly-webhook-log.sqlite
+instantly-webhook-log.sqlite-*
 *.tsbuildinfo

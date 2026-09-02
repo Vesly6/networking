@@ -141,6 +141,16 @@ import {
   updateLeadInterestStatus,
 } from './instantly.js';
 import { syncInstantlyCampaignReplies, ensureVisiAtsakymaiTable, VISI_ATSAKYMAI_TABLE_NAME } from './instantlyReplySync.js';
+import {
+  insertWebhookEvent,
+  recordResponseSent,
+  recordIgnored,
+  recordProcessingStarted,
+  recordCoalesced,
+  recordSuccess,
+  recordError,
+  listWebhookEvents,
+} from './instantlyWebhookLog/db.js';
 import { LinkedInBrowserError, humanDelay } from './linkedin/browser.js';
 import { LinkedInPageError, getLinkedInStatus, sendConnectionRequest, replyInThread, searchLeads } from './linkedin/page.js';
 import { logAction, getRecentActions } from './linkedin/db.js';
@@ -587,40 +597,79 @@ app.post('/api/zadarma/sms-webhook', (req, res) => {
 // payload itself (which may not even carry the reply's own body text) —
 // syncInstantlyCampaignReplies re-derives the authoritative truth from a
 // real Instantly API call afterward.
-const instantlyWebhookState = new Map<string, { running: boolean; rerunPending: boolean }>();
+// Keyed by companyId ALONE, not companyId:campaignId — a real, found bug
+// fixed alongside adding the persisted log below. The old per-campaign key
+// let syncs for two *different* campaigns run fully concurrently, each
+// independently pacing itself at REQUEST_GAP_MS (~17 req/min) against
+// instantly.ts's calls — fine for one caller, but nothing stopped several
+// campaigns' replies landing close together from summing to well past
+// Instantly's actual 20 req/min *account-wide* cap, since the cap is per
+// API key, not per campaign. That produces exactly the symptom reported —
+// "iногда быстро, иногда очень долго, иногда непонятно" — real 429s from
+// sustained multi-campaign contention that withRateLimitRetry's single
+// 25s-wait-then-one-retry can't fully absorb, with nothing before this
+// logging existed to show it ever happened. Serializing per company (one
+// campaign syncs at a time; others queue in pendingCampaignIds) trades a
+// little latency for staying inside the budget predictably.
+interface CompanyWebhookSyncState {
+  running: boolean;
+  pendingCampaignIds: Set<string>;
+}
+const instantlyWebhookState = new Map<string, CompanyWebhookSyncState>();
 
-async function runInstantlyWebhookSync(companyId: string, campaignId: string) {
-  const key = `${companyId}:${campaignId}`;
-  const state = instantlyWebhookState.get(key) ?? { running: false, rerunPending: false };
-  instantlyWebhookState.set(key, state);
+async function runInstantlyWebhookSync(companyId: string, campaignId: string, eventLogId: string) {
+  const state = instantlyWebhookState.get(companyId) ?? { running: false, pendingCampaignIds: new Set<string>() };
+  instantlyWebhookState.set(companyId, state);
   if (state.running) {
-    // A sync for this exact company+campaign is already in flight (e.g.
-    // several replies landed within seconds of each other) — same
+    // A sync for this company (any campaign) is already in flight — same
     // don't-run-two-overlapping-passes reasoning as the LinkedIn
     // scheduler's own tickInProgress lock (see its doc comment: a real,
     // reproduced "4 duplicate log rows" bug from exactly this class of
-    // race). Marking rerunPending instead of starting a second pass means
-    // whatever arrived mid-run still gets picked up, just after the
-    // current pass finishes rather than concurrently with it.
-    state.rerunPending = true;
+    // race). Queuing this campaign id instead of starting a second pass
+    // means it still gets picked up, right after the current pass
+    // finishes rather than concurrently with it and competing for the
+    // same rate-limit budget.
+    state.pendingCampaignIds.add(campaignId);
+    recordCoalesced(eventLogId);
     return;
   }
   state.running = true;
+  recordProcessingStarted(eventLogId);
   try {
     const apiKey = getCompanyIntegrations(companyId)?.instantlyApiKey ?? undefined;
     if (!apiKey) {
       console.warn('[instantly-webhook] no Instantly API key configured for company', companyId, '— skipping sync');
+      recordIgnored(eventLogId, 'no_api_key');
       return;
     }
     const result = await syncInstantlyCampaignReplies(companyId, apiKey, campaignId, VISI_ATSAKYMAI_TABLE_NAME);
     console.log('[instantly-webhook] synced campaign', campaignId, 'for company', companyId, result);
+    recordSuccess(eventLogId, {
+      repliesFound: result.repliesFound,
+      rowsCreated: result.created,
+      skippedDuplicate: result.skippedDuplicate,
+      tableId: result.tableId,
+      tableName: result.tableName,
+    });
   } catch (err) {
     console.error('[instantly-webhook] sync failed for campaign', campaignId, 'company', companyId, err);
+    recordError(eventLogId, err instanceof Error ? err.message : String(err));
   } finally {
     state.running = false;
-    if (state.rerunPending) {
-      state.rerunPending = false;
-      void runInstantlyWebhookSync(companyId, campaignId);
+    if (state.pendingCampaignIds.size > 0) {
+      const [nextCampaignId] = state.pendingCampaignIds;
+      state.pendingCampaignIds.delete(nextCampaignId);
+      // This catch-up pass gets its own log row (a synthetic rawBody, not
+      // a real webhook POST) so it's just as visible in the log as a
+      // directly-triggered one, rather than silently folding into the
+      // pass that just finished.
+      const rerunLogId = insertWebhookEvent({
+        companyId,
+        eventType: 'reply_received',
+        campaignId: nextCampaignId,
+        rawBody: JSON.stringify({ synthetic: true, reason: 'coalesced_rerun_after_queued_wait' }),
+      });
+      void runInstantlyWebhookSync(companyId, nextCampaignId, rerunLogId);
     }
   }
 }
@@ -628,20 +677,28 @@ async function runInstantlyWebhookSync(companyId: string, campaignId: string) {
 app.post('/api/instantly/webhook/:companyId', (req, res) => {
   const { companyId } = req.params;
   const body = (req.body ?? {}) as Record<string, unknown>;
-  console.log('[instantly-webhook] POST received', { companyId, body });
   const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : null);
   const eventType = str(body.event_type);
   const campaignId = str(body.campaign_id);
+  // Inserted before anything else — even a request that somehow crashes
+  // the process immediately afterward (a real risk on Render's free tier;
+  // see dataDir.ts's own doc comment on its idle-restart/redeploy
+  // behavior) still leaves a real, queryable row proving the POST
+  // actually arrived, with the exact time it arrived.
+  const eventLogId = insertWebhookEvent({ companyId, eventType, campaignId, rawBody: JSON.stringify(body) });
+  console.log('[instantly-webhook] POST received', { companyId, body, eventLogId });
   // Always ack quickly — Instantly retries 3x within 30s on a failed/slow
   // response, and syncInstantlyCampaignReplies can take a while (paced,
   // rate-limited, paginated real API calls), so the actual sync runs as a
   // fire-and-forget background call rather than blocking this response.
   res.status(200).json({ ok: true });
+  recordResponseSent(eventLogId, 200);
   if (eventType !== 'reply_received' || !campaignId) {
     console.log('[instantly-webhook] ignored (not a reply_received event, or missing campaign_id)', { companyId, eventType, campaignId });
+    recordIgnored(eventLogId, 'ignored');
     return;
   }
-  void runInstantlyWebhookSync(companyId, campaignId);
+  void runInstantlyWebhookSync(companyId, campaignId, eventLogId);
 });
 
 // --- Independent super-admin (platform-wide admin dashboard) ---------
@@ -1756,6 +1813,24 @@ app.get(
   asyncHandler(async (req, res) => {
     const result = await pollWebhookResult(req.params.requestId, requireApolloKey(req.auth!.companyId));
     res.json(result);
+  }),
+);
+
+// Read side of the webhook event log (instantlyWebhookLog/db.ts) — lets a
+// company's own session see exactly what happened to its last N webhook
+// deliveries (receivedAt/responseSentAt/processingStartedAt/
+// processingFinishedAt/outcome/error/counts/which table got written),
+// answering "did it even arrive, and if so where did it stop" without
+// needing raw server console access. No requireNotWorker gate: this is
+// diagnostic, not sensitive company data, and a worker debugging "why
+// didn't my reply show up" is exactly who'd want to check it.
+app.get(
+  '/api/instantly/webhook-log',
+  asyncHandler(async (req, res) => {
+    const { limit } = req.query;
+    const parsedLimit = typeof limit === 'string' ? Number(limit) : NaN;
+    const effectiveLimit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? Math.min(parsedLimit, 500) : 100;
+    res.json({ events: listWebhookEvents(req.auth!.companyId, effectiveLimit) });
   }),
 );
 

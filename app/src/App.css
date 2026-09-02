@@ -5441,6 +5441,61 @@ tr.row-drop-end td {
   font-size: 0.85rem;
 }
 
+/* WebhookLogPanel — a plain, read-only diagnostic table, same "simple,
+   separate ruleset, no spreadsheet machinery" reasoning App.css already
+   documents for .calls-table (this has no selection/resize/virtualization
+   needs either). table-layout: fixed + explicit widths for the same
+   "a row appearing/disappearing shouldn't reflow every other column"
+   reason as everywhere else that shows up in this app. */
+.instantly-webhook-log-table-wrap {
+  overflow-x: auto;
+}
+.instantly-webhook-log-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+.instantly-webhook-log-table th {
+  text-align: left;
+  padding: 0.4em 0.6em;
+  border-bottom: 1px solid var(--border-strong);
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.instantly-webhook-log-table td {
+  padding: 0.4em 0.6em;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.instantly-webhook-log-table th:nth-child(1),
+.instantly-webhook-log-table td:nth-child(1) {
+  width: 12%;
+}
+.instantly-webhook-log-table th:nth-child(2),
+.instantly-webhook-log-table td:nth-child(2) {
+  width: 18%;
+}
+.instantly-webhook-log-table th:nth-child(3),
+.instantly-webhook-log-table td:nth-child(3),
+.instantly-webhook-log-table th:nth-child(4),
+.instantly-webhook-log-table td:nth-child(4),
+.instantly-webhook-log-table th:nth-child(5),
+.instantly-webhook-log-table td:nth-child(5) {
+  width: 10%;
+}
+.instantly-webhook-log-table th:nth-child(6),
+.instantly-webhook-log-table td:nth-child(6) {
+  width: 12%;
+}
+.instantly-webhook-log-table th:nth-child(7),
+.instantly-webhook-log-table td:nth-child(7) {
+  width: 28%;
+  white-space: normal;
+}
+
 .instantly-list {
   display: flex;
   flex-direction: column;

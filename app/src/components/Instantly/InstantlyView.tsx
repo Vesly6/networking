@@ -3,8 +3,9 @@ import { useInstantlyInboxStore } from '../../store/useInstantlyInboxStore';
 import { AccountsPanel } from './AccountsPanel';
 import { UniboxPanel } from './UniboxPanel';
 import { AnalyticsPanel } from './AnalyticsPanel';
+import { WebhookLogPanel } from './WebhookLogPanel';
 
-type SubTab = 'inbox' | 'accounts' | 'analytics';
+type SubTab = 'inbox' | 'accounts' | 'analytics' | 'webhookLog';
 
 interface InstantlyViewProps {
   /** Whether App.tsx's own top-level nav currently has this tab active —
@@ -58,11 +59,15 @@ export function InstantlyView({ active }: InstantlyViewProps) {
         <button type="button" className={subTab === 'accounts' ? 'active' : ''} onClick={() => setSubTab('accounts')}>
           Pašto dėžutės
         </button>
+        <button type="button" className={subTab === 'webhookLog' ? 'active' : ''} onClick={() => setSubTab('webhookLog')}>
+          Webhook žurnalas
+        </button>
       </nav>
 
       {subTab === 'inbox' && <UniboxPanel />}
       {subTab === 'analytics' && <AnalyticsPanel />}
       {subTab === 'accounts' && <AccountsPanel />}
+      {subTab === 'webhookLog' && <WebhookLogPanel />}
     </div>
   );
 }
