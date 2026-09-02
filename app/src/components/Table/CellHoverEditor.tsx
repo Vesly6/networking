@@ -195,17 +195,20 @@ interface TaggedEntry {
  * read as one counter commenting on the other's state rather than each
  * badge being self-contained. */
 function buildSentBadgeTooltip(c: ContactEntry): string {
-  return `Išsiuntėm Jam/Jai (${c.sentCount ?? 0}) laiškų seką`;
+  return `Išsiuntėm Jam/Jai (${c.sentCount ?? 0}) laiškų sekas/ą`;
 }
 function buildRepliedBadgeTooltip(c: ContactEntry): string {
-  return `Gavome (${c.repliedCount ?? 0}) atsakymų nuo Jos/Jo`;
+  return `Gavome (${c.repliedCount ?? 0}) atsakymus/ų nuo Jos/Jo`;
 }
 /** Newest first (senders is already stored in that order — see
- * addContactSender), one mailbox/date pair per line so a growing list
- * (10+ campaigns over time) stays readable rather than running together
- * on one line. */
+ * addContactSender), one mailbox/date pair per line — on explicit
+ * request, so 3-5+ mailboxes stay individually readable instead of
+ * running together into one long comma-separated line. The intro phrase
+ * is a header on its own line, not repeated per mailbox — only the list
+ * below it grows as more senders are added. */
 function buildSendersBadgeTooltip(c: ContactEntry): string {
-  return (c.senders ?? []).map((s) => `Išsiuntėm Jam/Jai laišką iš: ${s.email}${s.date ? ` (${s.date})` : ''}`).join('\n');
+  const lines = (c.senders ?? []).map((s) => (s.date ? `${s.email} (${s.date})` : s.email));
+  return ['Išsiuntėm Jam/Jai laišką iš:', ...lines].join('\n');
 }
 
 /** Portaled hover tooltip for the sent/replied badge — a plain `title`
