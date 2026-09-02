@@ -642,7 +642,23 @@ async function runInstantlyWebhookSync(companyId: string, campaignId: string, ev
       recordIgnored(eventLogId, 'no_api_key');
       return;
     }
-    const result = await syncInstantlyCampaignReplies(companyId, apiKey, campaignId, VISI_ATSAKYMAI_TABLE_NAME);
+    // Defense in depth alongside instantly.ts's own per-request 30s
+    // timeout: this bounds the *whole* sync (every paginated call plus
+    // the REQUEST_GAP_MS pacing between them), so a hang anywhere in that
+    // chain — not just inside a single fetch — can't wedge this
+    // company's queue forever. Confirmed live in production this was a
+    // real risk: since the lock below is company-wide (see its own doc
+    // comment), one stuck sync silently blocked every later webhook event
+    // for the same company behind it, with nothing timing it out. The
+    // watchdog firing doesn't stop the underlying syncInstantlyCampaignReplies
+    // call (no AbortController threaded through it), just stops *this
+    // company's queue* from waiting on it indefinitely — a late,
+    // orphaned resolution afterward is logged but otherwise harmless.
+    const WATCHDOG_MS = 3 * 60 * 1000;
+    const result = await Promise.race([
+      syncInstantlyCampaignReplies(companyId, apiKey, campaignId, VISI_ATSAKYMAI_TABLE_NAME),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`Sync watchdog timeout after ${WATCHDOG_MS}ms`)), WATCHDOG_MS)),
+    ]);
     console.log('[instantly-webhook] synced campaign', campaignId, 'for company', companyId, result);
     recordSuccess(eventLogId, {
       repliesFound: result.repliesFound,

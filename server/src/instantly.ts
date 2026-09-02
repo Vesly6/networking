@@ -31,6 +31,18 @@ async function callInstantly<T>(path: string, options: CallOptions = {}, apiKey:
   const { method = 'GET', query, body } = options;
   let res: Response;
   try {
+    // No timeout here was a real, found bug: a stalled TCP connection to
+    // Instantly's API would hang this fetch forever — never resolving,
+    // never rejecting. That's tolerable in isolation, but became a much
+    // bigger problem once instantlyWebhookLog's company-wide sync lock
+    // shipped (index.ts's instantlyWebhookState): a single hung request
+    // inside one campaign's sync now holds that lock indefinitely,
+    // silently blocking *every other* campaign's webhook-triggered sync
+    // for the same company behind it — confirmed live in production
+    // (instantly-webhook-log.sqlite showed one event stuck at outcome
+    // null/"Vykdoma…" for 4+ minutes while dozens of later events queued
+    // up behind it). 30s matches this app's other external-API timeouts
+    // (see serper.ts's own).
     res = await fetch(`${API_BASE}${path}${buildQuery(query)}`, {
       method,
       headers: {
@@ -38,8 +50,12 @@ async function callInstantly<T>(path: string, options: CallOptions = {}, apiKey:
         ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(30000),
     });
-  } catch {
+  } catch (err) {
+    if (err instanceof Error && err.name === 'TimeoutError') {
+      throw new InstantlyApiError('Email service request timed out', 0, null);
+    }
     throw new InstantlyApiError('Could not reach the email service', 0, null);
   }
 
