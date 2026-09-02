@@ -197,7 +197,10 @@ export function markSocialLookupNotFound(raw: string, id: string, platform: 'ins
  * ✉️ icon) — bumps ContactEntry.sentCount. A counter, not a boolean: the
  * same contact can be included in more than one outreach round, and
  * clicking again after a reply already came in (re-engagement) is a
- * legitimate, expected use, not an error. */
+ * legitimate, expected use, not an error. Independent of repliedCount —
+ * see incrementContactRepliedCount's own doc comment for the one
+ * exception (a reply floors sentCount to at least 1, since replying to
+ * zero sends isn't a real state). */
 export function markContactSent(raw: string, id: string): string {
   return serializeContacts(parseContacts(raw).map((c) => (c.id === id ? { ...c, sentCount: (c.sentCount ?? 0) + 1 } : c)));
 }
@@ -226,9 +229,26 @@ export function addContactSender(raw: string, id: string, senderEmail: string, d
 
 /** Never called from the Contacts editor UI directly — only from
  * PushReplyRowsModal.tsx's automatic email match, the moment a reply from
- * this contact is pushed into this row's History. */
+ * this contact is pushed into this row's History.
+ *
+ * Also floors sentCount to at least 1 — a real, reported logical gap:
+ * sentCount and repliedCount are bumped by two entirely independent
+ * bulk actions ("Pridėti išsiųstus" vs. "Perkelti į lentelę"), so a
+ * contact could genuinely show repliedCount:1, sentCount:0 — not
+ * because nothing was ever sent (they clearly replied to *something*),
+ * but because this specific person was never run through "Pridėti
+ * išsiųstus". Left otherwise independent on purpose: this only ever
+ * raises sentCount to 1 as a floor, it doesn't try to keep the two
+ * counters in lockstep afterward (a contact can legitimately be sent to
+ * 3 times and reply once, or reply to 2 separate threads off one
+ * marked send) — see buildSentTooltip's own doc comment for the
+ * matching UI-wording fix. */
 export function incrementContactRepliedCount(raw: string, id: string): string {
-  return serializeContacts(parseContacts(raw).map((c) => (c.id === id ? { ...c, repliedCount: (c.repliedCount ?? 0) + 1 } : c)));
+  return serializeContacts(
+    parseContacts(raw).map((c) =>
+      c.id === id ? { ...c, repliedCount: (c.repliedCount ?? 0) + 1, sentCount: Math.max(c.sentCount ?? 0, 1) } : c,
+    ),
+  );
 }
 
 /** Finds which specific contact entry (if any) in this row's Contacts cell

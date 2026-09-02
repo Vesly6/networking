@@ -191,16 +191,28 @@ interface TaggedEntry {
  * text entirely rather than appending to it — just the mailbox/date
  * pairs, newest first (senders is already stored in that order — see
  * addContactSender), one per line so a growing list (10+ campaigns over
- * time) stays readable rather than running together on one line. */
+ * time) stays readable rather than running together on one line.
+ *
+ * Deliberately never phrases sentCount as "iš viso siųsta N kartų"
+ * ("sent N times in total") — a real, reported point of confusion:
+ * sentCount and repliedCount are two fully independent counters, each
+ * only ever bumped by its own bulk action (markContactSent via "Pridėti
+ * išsiųstus", incrementContactRepliedCount via "Perkelti į lentelę" —
+ * see their own doc comments in utils/contacts.ts). A contact can
+ * genuinely have repliedCount:1, sentCount:0 — they DID reply, the
+ * outreach just was never run through "Pridėti išsiųstus" for this
+ * specific person. Phrasing sentCount as a total send count read as "we
+ * never emailed this person," which isn't what sentCount:0 actually
+ * means (see markContactSent/incrementContactRepliedCount's own updated
+ * doc comments for the same point) — this wording names what
+ * sentCount:0 really is (unmarked bookkeeping), not a claim about
+ * reality. */
 function buildSentTooltip(c: ContactEntry): string {
   if (c.senders?.length) {
     return ['Siųsta iš:', ...c.senders.map((s) => (s.date ? `${s.email} (${s.date})` : s.email))].join('\n');
   }
-  return c.repliedCount
-    ? `Atsakė ${c.repliedCount} kart(ų) (iš viso siųsta ${c.sentCount ?? 0} kart(ų))`
-    : c.sentCount
-      ? `Išsiųsta ${c.sentCount} kart(ų), atsakymo dar nėra`
-      : 'Dar neišsiųsta';
+  const sentPart = c.sentCount ? `Pažymėta išsiųsta: ${c.sentCount} kart(ų)` : 'Išsiuntimas nepažymėtas (žr. „Pridėti išsiųstus“)';
+  return c.repliedCount ? `Atsakė ${c.repliedCount} kart(ų) · ${sentPart}` : sentPart;
 }
 
 /** Portaled hover tooltip for the sent/replied badge — a plain `title`
@@ -1655,21 +1667,20 @@ export function CellHoverEditor({
                                           ? 'cell-hover-contact-sent-replied'
                                           : 'cell-hover-contact-sent-active'
                                     }`}
-                                    // No hover tooltip for the plain "Pridėti išsiųstus"
-                                    // case (sentCount only, no reply, no sender) — on
-                                    // explicit request: the badge's own number already
-                                    // says everything there is to say ("sent N times"),
-                                    // so the effect has nothing to add there. Only shows
-                                    // when there's genuinely extra info (repliedCount's
-                                    // total-vs-replied breakdown, or a "Pridėti siuntėją"
-                                    // sender list) — see SentBadgeTooltip's own doc
-                                    // comment for why this is a portaled tooltip rather
+                                    // Shows on every badge state, including the plain
+                                    // "Pridėti išsiųstus" one — briefly removed on request,
+                                    // restored on a follow-up request once it became clear
+                                    // this is exactly the explanation a new user needs:
+                                    // sentCount/repliedCount are two independent counters
+                                    // (see buildSentTooltip's own doc comment), so "sent 0
+                                    // times" here means "never run through Pridėti
+                                    // išsiųstus", not "definitely never emailed" — worth
+                                    // surfacing every time, not just when repliedCount/
+                                    // senders are also present. See SentBadgeTooltip's own
+                                    // doc comment for why this is a portaled tooltip rather
                                     // than a `title` attribute or a plain CSS :hover child
                                     // (both tried, both rejected).
-                                    onMouseEnter={(e) => {
-                                      if (!c.repliedCount && !c.senders?.length) return;
-                                      setSentTooltip({ anchor: e.currentTarget, text: buildSentTooltip(c) });
-                                    }}
+                                    onMouseEnter={(e) => setSentTooltip({ anchor: e.currentTarget, text: buildSentTooltip(c) })}
                                     onMouseLeave={() => setSentTooltip(null)}
                                   >
                                     <Send className="icon" size={14} />
