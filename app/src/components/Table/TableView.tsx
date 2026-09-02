@@ -2513,7 +2513,6 @@ export function TableView({
           <PushReplyRowsModal
             rows={pushReplyRows}
             sourceColumns={columns}
-            tables={useWorkspaceStore.getState().tables}
             currentUserName={currentUserName}
             onClose={() => setPushReplyRows(null)}
             onDone={(message) => {

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
-import type { Row, TableMeta } from '../../types';
-import { getTable, loadRowsForTable, saveRows } from '../../db/db';
+import type { Row, TableMeta, TableFolder } from '../../types';
+import { getTable, loadTables, loadTableFolders, loadRowsForTable, saveRows } from '../../db/db';
 import { useTableStore, type CellColorUpdate } from '../../store/useTableStore';
 import { buildEmailIndex } from '../../utils/emailMatch';
 import { getColumnByType } from '../../utils/row';
@@ -14,7 +14,6 @@ import { VISI_ATSAKYMAI_TABLE_NAME } from '../../utils/instantlyReplySync';
 interface PushReplyRowsModalProps {
   rows: Row[];
   sourceColumns: TableMeta['columns'];
-  tables: TableMeta[];
   currentUserName?: string;
   onClose: () => void;
   onDone: (message: string) => void;
@@ -44,8 +43,45 @@ function resolveHistoryColumnId(table: TableMeta): string | null {
  * destination table's History column. Opened from TableView.tsx's new
  * toolbar button, only visible while the active table is literally "Visi
  * atsakymai" and something is selected. */
-export function PushReplyRowsModal({ rows, sourceColumns, tables, currentUserName, onClose, onDone }: PushReplyRowsModalProps) {
+export function PushReplyRowsModal({ rows, sourceColumns, currentUserName, onClose, onDone }: PushReplyRowsModalProps) {
+  // Fresh from the server on open, never a caller's
+  // useWorkspaceStore.getState().tables snapshot — a real, reported bug:
+  // that cached list can miss a table entirely (created, or moved into a
+  // folder, since the workspace list was last loaded this session), the
+  // exact same staleness MarkContactsSentModal/AddSenderModal's shared
+  // findContactCandidates util already guards against elsewhere in this
+  // app. Folders are fetched alongside for the optgroup grouping below.
+  const [tables, setTables] = useState<TableMeta[]>([]);
+  const [folders, setFolders] = useState<TableFolder[]>([]);
+  const [tablesLoading, setTablesLoading] = useState(true);
+  useEffect(() => {
+    let cancelled = false;
+    void Promise.all([loadTables(), loadTableFolders()]).then(([t, f]) => {
+      if (cancelled) return;
+      setTables(t);
+      setFolders(f);
+      setTablesLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const destinationOptions = useMemo(() => tables.filter((t) => t.name !== VISI_ATSAKYMAI_TABLE_NAME), [tables]);
+  // Grouped by folder for the <select> below (<optgroup> per folder,
+  // ungrouped tables listed plain first) — on explicit request, so
+  // finding one destination among many (18 today, more later) doesn't
+  // mean scanning one long flat list. Folder order matches SheetTabs'
+  // own sort (folder.order); tables within a group keep destinationOptions'
+  // own order (server-sorted, same as every other table list in this app).
+  const ungroupedDestinations = useMemo(() => destinationOptions.filter((t) => !t.folderId), [destinationOptions]);
+  const destinationFolderGroups = useMemo(() => {
+    const sortedFolders = [...folders].sort((a, b) => a.order - b.order);
+    return sortedFolders
+      .map((f) => ({ folder: f, tables: destinationOptions.filter((t) => t.folderId === f.id) }))
+      .filter((g) => g.tables.length > 0);
+  }, [destinationOptions, folders]);
+
   const [destTableId, setDestTableId] = useState('');
   const [rememberMapping, setRememberMapping] = useState(true);
   const [pushing, setPushing] = useState(false);
@@ -59,7 +95,10 @@ export function PushReplyRowsModal({ rows, sourceColumns, tables, currentUserNam
   }, [rows, sourceColumns]);
 
   useEffect(() => {
-    if (!singleCampaignName) return;
+    // Waits for the fresh table fetch above too — destinationOptions is
+    // empty until then, so looking up a remembered mapping any earlier
+    // would silently never find it even when one exists.
+    if (!singleCampaignName || tablesLoading) return;
     let cancelled = false;
     void fetchInstantlyTableMap().then(({ map }) => {
       if (cancelled) return;
@@ -72,7 +111,7 @@ export function PushReplyRowsModal({ rows, sourceColumns, tables, currentUserNam
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [singleCampaignName]);
+  }, [singleCampaignName, tablesLoading]);
 
   const handleConfirm = async () => {
     if (!destTableId) return;
@@ -203,12 +242,21 @@ export function PushReplyRowsModal({ rows, sourceColumns, tables, currentUserNam
           Pasirinktos eilutės ({rows.length}) bus ieškomos pagal el. paštą pasirinktoje lentelėje ir įrašytos į
           atitinkamos eilutės Istoriją.
         </p>
-        <select value={destTableId} onChange={(e) => setDestTableId(e.target.value)}>
-          <option value="">— Pasirinkite lentelę —</option>
-          {destinationOptions.map((t) => (
+        <select value={destTableId} onChange={(e) => setDestTableId(e.target.value)} disabled={tablesLoading}>
+          <option value="">{tablesLoading ? 'Kraunama…' : '— Pasirinkite lentelę —'}</option>
+          {ungroupedDestinations.map((t) => (
             <option key={t.id} value={t.id}>
               {t.name}
             </option>
+          ))}
+          {destinationFolderGroups.map(({ folder, tables: folderTables }) => (
+            <optgroup key={folder.id} label={folder.name}>
+              {folderTables.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                </option>
+              ))}
+            </optgroup>
           ))}
         </select>
         {singleCampaignName && (
