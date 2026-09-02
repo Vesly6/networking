@@ -1762,6 +1762,61 @@ tr.row-drop-end td {
   );
 }
 
+/* ColumnReplyStatusFilterPopover — a plain list rather than swatches
+   (unlike color filter, each option is a text label, not just a color),
+   one row per distinct lead_status actually present among this column's
+   reply-sourced entries, plus a fixed "Turi atsakymą" row at the top for
+   "any reply at all, regardless of status". */
+.column-reply-status-filter-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  margin-bottom: 0.5rem;
+  min-width: 220px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.column-reply-status-filter-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  text-align: left;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  padding: 0.4em 0.5em;
+  cursor: pointer;
+  font: inherit;
+  color: var(--text);
+}
+.column-reply-status-filter-item:hover {
+  background: var(--bg-hover);
+}
+.column-reply-status-filter-item.active {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+.column-reply-status-filter-dot {
+  flex-shrink: 0;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+.column-reply-status-filter-empty {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  padding: 0.4em 0.5em;
+}
+.column-reply-status-filter-sort-row {
+  display: flex;
+  gap: 0.4rem;
+  margin-bottom: 0.5rem;
+}
+.column-reply-status-filter-sort-row button {
+  flex: 1 1 0;
+  font-size: 0.8rem;
+}
+
 .popover-field input,
 .popover-field select {
   width: 100%;

@@ -33,11 +33,12 @@ import { HiddenColumnsPopover } from './HiddenColumnsPopover';
 import { HiddenRowsPopover } from './HiddenRowsPopover';
 import { NumericRangeFilterPopover } from './NumericRangeFilterPopover';
 import { ColumnColorFilterPopover, NO_COLOR_FILTER_VALUE } from './ColumnColorFilterPopover';
+import { ColumnReplyStatusFilterPopover, ANY_REPLY_FILTER_VALUE } from './ColumnReplyStatusFilterPopover';
 import { FormulaBar } from '../FormulaBar';
 import { Popover } from '../Popover';
 import { parseCsvFile, exportRowsToCsv, downloadCsv } from '../../utils/csv';
 import { parseTsv, buildTsv } from '../../utils/tsv';
-import { addNoteEntry, updateNoteEntry, removeNoteEntry } from '../../utils/noteHistory';
+import { addNoteEntry, updateNoteEntry, removeNoteEntry, parseNoteHistory } from '../../utils/noteHistory';
 import { addContact, updateContact, removeContact, markSocialLookupNotFound } from '../../utils/contacts';
 import { columnLetter, formatCellRef, parseRangeRef } from '../../utils/spreadsheet';
 import { getColumnByType } from '../../utils/row';
@@ -187,14 +188,24 @@ function indexAtOffset(ranges: { start: number; end: number }[], offset: number,
 // potentially against rows that no longer exist, is a fair bit more
 // machinery for less payoff than what's actually reported as "resetting
 // to some default."
-function loadPersistedViewState(
-  tableId: string | null,
-): { search: string; numericFilters: Record<string, NumericRangeFilter>; colorFilters: Record<string, string>; searchTags: string[] } {
-  if (!tableId) return { search: '', numericFilters: {}, colorFilters: {}, searchTags: [] };
+function loadPersistedViewState(tableId: string | null): {
+  search: string;
+  numericFilters: Record<string, NumericRangeFilter>;
+  colorFilters: Record<string, string>;
+  replyStatusFilters: Record<string, string>;
+  searchTags: string[];
+} {
+  if (!tableId) return { search: '', numericFilters: {}, colorFilters: {}, replyStatusFilters: {}, searchTags: [] };
   try {
     const raw = localStorage.getItem(`${TABLE_VIEW_STATE_KEY_PREFIX}${tableId}`);
-    if (!raw) return { search: '', numericFilters: {}, colorFilters: {}, searchTags: [] };
-    const parsed = JSON.parse(raw) as { search?: unknown; numericFilters?: unknown; colorFilters?: unknown; searchTags?: unknown };
+    if (!raw) return { search: '', numericFilters: {}, colorFilters: {}, replyStatusFilters: {}, searchTags: [] };
+    const parsed = JSON.parse(raw) as {
+      search?: unknown;
+      numericFilters?: unknown;
+      colorFilters?: unknown;
+      replyStatusFilters?: unknown;
+      searchTags?: unknown;
+    };
     const search = typeof parsed.search === 'string' ? parsed.search : '';
     // Added after numericFilters (the per-column range-filter popover)
     // shipped — a real, reported gap: the search box already survived a
@@ -215,15 +226,22 @@ function loadPersistedViewState(
       parsed.colorFilters && typeof parsed.colorFilters === 'object' && !Array.isArray(parsed.colorFilters)
         ? (parsed.colorFilters as Record<string, string>)
         : {};
+    // Same reasoning/shape as colorFilters, for the "Filtruoti pagal
+    // atsakymo statusą" column-menu item — columnId -> either a specific
+    // lead_status label or ANY_REPLY_FILTER_VALUE.
+    const replyStatusFilters =
+      parsed.replyStatusFilters && typeof parsed.replyStatusFilters === 'object' && !Array.isArray(parsed.replyStatusFilters)
+        ? (parsed.replyStatusFilters as Record<string, string>)
+        : {};
     // Committed search tags (the "type a word, press Enter, it sticks as
     // a chip" filtering — see the search-input onKeyDown below) — on
     // explicit request: working through one niche/segment over several
     // days needs the filter to genuinely survive a reload, the same way
     // numericFilters above already had to.
     const searchTags = Array.isArray(parsed.searchTags) ? parsed.searchTags.filter((t): t is string => typeof t === 'string') : [];
-    return { search, numericFilters, colorFilters, searchTags };
+    return { search, numericFilters, colorFilters, replyStatusFilters, searchTags };
   } catch {
-    return { search: '', numericFilters: {}, colorFilters: {}, searchTags: [] };
+    return { search: '', numericFilters: {}, colorFilters: {}, replyStatusFilters: {}, searchTags: [] };
   }
 }
 
@@ -232,13 +250,14 @@ function saveViewState(
   search: string,
   numericFilters: Record<string, NumericRangeFilter>,
   colorFilters: Record<string, string>,
+  replyStatusFilters: Record<string, string>,
   searchTags: string[],
 ) {
   if (!tableId) return;
   try {
     localStorage.setItem(
       `${TABLE_VIEW_STATE_KEY_PREFIX}${tableId}`,
-      JSON.stringify({ search, numericFilters, colorFilters, searchTags }),
+      JSON.stringify({ search, numericFilters, colorFilters, replyStatusFilters, searchTags }),
     );
   } catch {
     // localStorage can throw (quota exceeded, private-browsing
@@ -357,6 +376,15 @@ export function TableView({
   // Same shape/persistence as numericFilters above, for "Filtruoti pagal
   // spalvą" — columnId -> the one hex color currently filtered to.
   const [colorFilters, setColorFilters] = useState<Record<string, string>>(() => loadPersistedViewState(tableId).colorFilters);
+  // Same shape/persistence again, for "Filtruoti pagal atsakymo statusą" —
+  // columnId -> either one lead_status label or ANY_REPLY_FILTER_VALUE
+  // ("has a reply, any status"). See the filteredSortedRows memo below for
+  // the matching logic and ColumnReplyStatusFilterPopover's own doc
+  // comment for why this only ever matches NoteEntry.replyFields entries,
+  // never a hand-typed comment.
+  const [replyStatusFilters, setReplyStatusFilters] = useState<Record<string, string>>(
+    () => loadPersistedViewState(tableId).replyStatusFilters,
+  );
   // Committed search-box tags — on explicit request: typing a word and
   // pressing Enter "locks it in" as a chip (narrowing the visible rows
   // to those matching it), the box clears for the next word, and every
@@ -368,8 +396,8 @@ export function TableView({
   // onKeyDown below for where a tag actually gets added.
   const [searchTags, setSearchTags] = useState<string[]>(() => loadPersistedViewState(tableId).searchTags);
   useEffect(() => {
-    saveViewState(tableId, search, numericFilters, colorFilters, searchTags);
-  }, [tableId, search, numericFilters, colorFilters, searchTags]);
+    saveViewState(tableId, search, numericFilters, colorFilters, replyStatusFilters, searchTags);
+  }, [tableId, search, numericFilters, colorFilters, replyStatusFilters, searchTags]);
   // Memory for "which direction did the last click on this same column
   // use" — purely so a second click on the same header flips asc -> desc,
   // same as before. Deliberately a ref, not state: nothing should
@@ -446,6 +474,8 @@ export function TableView({
   // the identical unmounted-menu-button problem NumericRangeFilterPopover's
   // own doc comment describes).
   const [colorFilterColumnId, setColorFilterColumnId] = useState<string | null>(null);
+  // Same pattern again, for ColumnReplyStatusFilterPopover.
+  const [replyStatusFilterColumnId, setReplyStatusFilterColumnId] = useState<string | null>(null);
   // The popover's anchor can't be the ColumnHeaderMenu button that opened
   // it — that button unmounts in the same batch as the menu closing (see
   // ColumnHeaderMenu's own onFilterRange doc comment), and Popover
@@ -728,8 +758,23 @@ export function TableView({
         }),
       );
     }
+    // Same additive-not-replacement idea again, for "Filtruoti pagal
+    // atsakymo statusą" — see ColumnReplyStatusFilterPopover's own doc
+    // comment. Deliberately checks entry.replyFields (only ever set on an
+    // entry pushed in from an Instantly reply — see NoteEntry in
+    // noteHistory.ts) rather than the cell's raw text, so a hand-typed
+    // manual comment can never match here regardless of its content.
+    const activeReplyStatusFilterEntries = Object.entries(replyStatusFilters);
+    if (activeReplyStatusFilterEntries.length > 0) {
+      visible = visible.filter((row) =>
+        activeReplyStatusFilterEntries.every(([columnId, status]) => {
+          const entries = parseNoteHistory(row.cells[columnId] ?? '');
+          return entries.some((e) => e.replyFields && (status === ANY_REPLY_FILTER_VALUE || e.replyFields.lead_status === status));
+        }),
+      );
+    }
     return visible;
-  }, [rows, search, searchTags, numericFilters, colorFilters]);
+  }, [rows, search, searchTags, numericFilters, colorFilters, replyStatusFilters]);
 
   // Every currently-active text query (committed tags + whatever's still
   // being typed), for DataCell's highlightQuery — same list
@@ -1803,6 +1848,40 @@ export function TableView({
     commitSort(columnId, direction);
   };
 
+  // "Rikiuoti atsakymus pagal gavimo datą" (ColumnReplyStatusFilterPopover)
+  // — same one-time/permanent applySortOrder mechanism as commitSort
+  // above, but keyed by a reply entry's own received_at instead of the
+  // cell's raw text, and scoped to entries carrying replyFields only (a
+  // hand-typed comment has no received_at and can't influence this order
+  // at all — same "reply-only" boundary the filter itself uses). A row
+  // with several reply entries in this column sorts by its MOST RECENT
+  // one (most rows only ever have one; for the rare row with a follow-up
+  // reply too, "last heard from them" is the more useful single ordering
+  // key than the first). A row with no reply entry always sorts to the
+  // end regardless of direction — same blanks-last convention commitSort
+  // already uses for a numeric column's blank cells.
+  const commitReplyDateSort = (columnId: string, direction: SortDirection) => {
+    const latestReplyTime = (row: Row): number | null => {
+      const times = parseNoteHistory(row.cells[columnId] ?? '')
+        .filter((e) => e.replyFields)
+        .map((e) => Date.parse(e.replyFields!.received_at ?? ''))
+        .filter((t) => Number.isFinite(t));
+      return times.length > 0 ? Math.max(...times) : null;
+    };
+    const order = [...rows]
+      .sort((a, b) => {
+        const at = latestReplyTime(a);
+        const bt = latestReplyTime(b);
+        if (at === null && bt === null) return 0;
+        if (at === null) return 1;
+        if (bt === null) return -1;
+        const cmp = at - bt;
+        return direction === 'asc' ? cmp : -cmp;
+      })
+      .map((r) => r.id);
+    applySortOrder(order);
+  };
+
   // Right-clicking a column not already part of the current selection
   // collapses the selection to just that column first, matching Excel —
   // right-clicking *within* an existing multi-column selection keeps it, so
@@ -2566,6 +2645,7 @@ export function TableView({
             onSort={(direction) => commitSort(columnContextMenu.targetIds[0], direction)}
             onFilterRange={() => setNumericFilterColumnId(columnContextMenu.targetIds[0])}
             onFilterColor={() => setColorFilterColumnId(columnContextMenu.targetIds[0])}
+            onFilterReplyStatus={() => setReplyStatusFilterColumnId(columnContextMenu.targetIds[0])}
             onCopy={() => copyColumnsToClipboard(columnContextMenu.targetIds)}
             onPaste={() => pasteAtColumns(columnContextMenu.targetIds)}
             onClose={() => setColumnContextMenu(null)}
@@ -2614,6 +2694,42 @@ export function TableView({
                   })
                 }
                 onClose={() => setColorFilterColumnId(null)}
+              />
+            );
+          })()}
+        {replyStatusFilterColumnId &&
+          (() => {
+            const anchor = columnHeaderRefs.current.get(replyStatusFilterColumnId);
+            const column = columns.find((c) => c.id === replyStatusFilterColumnId);
+            if (!anchor || !column) return null;
+            // Every distinct lead_status actually present among this
+            // column's reply-sourced entries, across every row — same
+            // "only what's genuinely there" rule as availableColors above.
+            const availableStatuses = [
+              ...new Set(
+                rows.flatMap((r) =>
+                  parseNoteHistory(r.cells[replyStatusFilterColumnId] ?? '')
+                    .map((e) => e.replyFields?.lead_status)
+                    .filter((s): s is string => !!s),
+                ),
+              ),
+            ];
+            return (
+              <ColumnReplyStatusFilterPopover
+                anchor={anchor}
+                columnName={column.name}
+                availableStatuses={availableStatuses}
+                current={replyStatusFilters[replyStatusFilterColumnId]}
+                onApply={(value) => setReplyStatusFilters((prev) => ({ ...prev, [replyStatusFilterColumnId]: value }))}
+                onClear={() =>
+                  setReplyStatusFilters((prev) => {
+                    const next = { ...prev };
+                    delete next[replyStatusFilterColumnId];
+                    return next;
+                  })
+                }
+                onSortByReceivedDate={(direction) => commitReplyDateSort(replyStatusFilterColumnId, direction)}
+                onClose={() => setReplyStatusFilterColumnId(null)}
               />
             );
           })()}

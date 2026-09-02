@@ -3,7 +3,7 @@ import { useTableStore } from '../../store/useTableStore';
 import { useAuthStore } from '../../store/useAuthStore';
 import { confirmDialog } from '../../store/useConfirmStore';
 import { ContextMenu } from '../ContextMenu';
-import { Hash, Palette } from 'lucide-react';
+import { Hash, Palette, Reply } from 'lucide-react';
 
 interface ColumnHeaderMenuProps {
   x: number;
@@ -43,12 +43,30 @@ interface ColumnHeaderMenuProps {
    * colors" case gracefully — see ColumnColorFilterPopover, which always
    * offers the "Numatytoji" (no color) swatch regardless. */
   onFilterColor: () => void;
+  /** Opens ColumnReplyStatusFilterPopover — same anchor-resolution
+   * reasoning as onFilterRange/onFilterColor above. Only offered for a
+   * `note`-type column (see this menu's own render gate below): the
+   * filter matches entries carrying NoteEntry.replyFields, which only a
+   * note column's cells can ever hold. */
+  onFilterReplyStatus: () => void;
   onCopy: () => void;
   onPaste: () => void;
   onClose: () => void;
 }
 
-export function ColumnHeaderMenu({ x, y, columns, targetIds, onSort, onFilterRange, onFilterColor, onCopy, onPaste, onClose }: ColumnHeaderMenuProps) {
+export function ColumnHeaderMenu({
+  x,
+  y,
+  columns,
+  targetIds,
+  onSort,
+  onFilterRange,
+  onFilterColor,
+  onFilterReplyStatus,
+  onCopy,
+  onPaste,
+  onClose,
+}: ColumnHeaderMenuProps) {
   const insertColumns = useTableStore((s) => s.insertColumns);
   const removeColumns = useTableStore((s) => s.removeColumns);
   const setColumnsHidden = useTableStore((s) => s.setColumnsHidden);
@@ -62,6 +80,11 @@ export function ColumnHeaderMenu({ x, y, columns, targetIds, onSort, onFilterRan
   const firstIndex = Math.min(...indices);
   const lastIndex = Math.max(...indices);
   const count = targetIds.length;
+  // Only a `note` column's cells can ever hold a NoteEntry.replyFields
+  // entry (see ColumnReplyStatusFilterPopover's own doc comment) — gating
+  // here keeps the item from appearing on every other column type, where
+  // it could never match anything.
+  const isNoteColumn = count === 1 && columns[firstIndex]?.type === 'note';
   // Lithuanian nouns decline by number/case rather than take an English-
   // style "-s" suffix, so plural phrasing uses a parenthetical count
   // instead of trying to templatize declension.
@@ -133,6 +156,11 @@ export function ColumnHeaderMenu({ x, y, columns, targetIds, onSort, onFilterRan
           <button type="button" className="context-menu-item" onClick={() => run(onFilterColor)}>
             <Palette className="icon" size={16} /> Filtruoti pagal spalvą
           </button>
+          {isNoteColumn && (
+            <button type="button" className="context-menu-item" onClick={() => run(onFilterReplyStatus)}>
+              <Reply className="icon" size={16} /> Filtruoti pagal atsakymo statusą
+            </button>
+          )}
         </>
       )}
     </ContextMenu>
