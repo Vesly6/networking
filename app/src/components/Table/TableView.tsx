@@ -26,6 +26,7 @@ import { PushReplyRowsModal } from './PushReplyRowsModal';
 import { MarkContactsSentModal } from './MarkContactsSentModal';
 import { AddSenderModal } from './AddSenderModal';
 import { MergeContactsModal, type MergeStats } from './MergeContactsModal';
+import { createImportRecord, type ImportChangeEntry } from '../../utils/importHistory';
 import { ColumnHeaderMenu } from './ColumnHeaderMenu';
 import { RowHeaderMenu } from './RowHeaderMenu';
 import { CellContextMenu } from './CellContextMenu';
@@ -2469,9 +2470,24 @@ export function TableView({
     showToast(parts.join(' · '));
   };
 
-  const handleConfirmMerge = (updates: CellUpdate[], stats: MergeStats) => {
+  const handleConfirmMerge = (updates: CellUpdate[], stats: MergeStats, changes: ImportChangeEntry[]) => {
     setMergeContactsOpen(false);
     if (updates.length > 0) updateCells(updates);
+    if (changes.length > 0) {
+      // Best-effort, same reasoning as PushReplyRowsModal/
+      // MarkContactsSentModal's own — updateCells above already applied
+      // the real data change regardless of whether this logging call
+      // succeeds. The table name is read fresh from useWorkspaceStore
+      // purely for the log's own display label (cosmetic) — the actual
+      // revert changes above are addressed by tableId/rowId, not by name.
+      const mergedTableName = useWorkspaceStore.getState().tables.find((t) => t.id === tableId)?.name ?? 'lentelė';
+      void createImportRecord({
+        type: 'contacts_merge',
+        label: `Kontaktų sujungimas („${mergedTableName}“)`,
+        recordCount: stats.addedContacts,
+        changes,
+      }).catch(() => {});
+    }
     const parts = [`Pridėta kontaktų: ${stats.addedContacts}`, `atnaujinta eilučių: ${stats.updatedRows}`];
     if (stats.skippedDuplicates > 0) parts.push(`praleista dublikatų: ${stats.skippedDuplicates}`);
     if (stats.skippedGroups > 0) parts.push(`praleista grupių: ${stats.skippedGroups}`);
@@ -2749,8 +2765,9 @@ export function TableView({
             onCancel={onImportDone}
           />
         )}
-        {mergeContactsOpen && contactColumn && (
+        {mergeContactsOpen && contactColumn && tableId && (
           <MergeContactsModal
+            tableId={tableId}
             columns={columns}
             rows={rows}
             contactColumnId={contactColumn.id}

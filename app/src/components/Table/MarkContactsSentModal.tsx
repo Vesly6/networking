@@ -8,6 +8,7 @@ import { getPrimaryLabel } from '../../utils/row';
 import { EMAIL_SEARCH_PATTERN, findContactIdByEmail, markContactSent } from '../../utils/contacts';
 import { findContactCandidates } from '../../utils/contactBulkMatch';
 import { parseCsvFile, downloadCsv, sanitizeFilename } from '../../utils/csv';
+import { createImportRecord, type ImportChangeEntry } from '../../utils/importHistory';
 
 interface MarkContactsSentModalProps {
   onClose: () => void;
@@ -149,6 +150,11 @@ export function MarkContactsSentModal({ onClose, onDone }: MarkContactsSentModal
       const contactColIdByRowId = new Map<string, string>();
       const matched: MatchedEntry[] = [];
       const notFound: string[] = [];
+      // One entry per (row, contact) actually bumped — tableId is
+      // per-change, not shared across the whole import, since this modal
+      // can (and typically does) touch many different workspace tables in
+      // one run.
+      const changes: ImportChangeEntry[] = [];
 
       for (const email of pastedEmails) {
         const candidates = candidatesByEmail.get(email);
@@ -165,6 +171,15 @@ export function MarkContactsSentModal({ onClose, onDone }: MarkContactsSentModal
           rowById.set(row.id, row);
           contactColIdByRowId.set(row.id, contactColId);
           matched.push({ email, tableName: table.name, companyLabel: getPrimaryLabel(row, table.columns) });
+          changes.push({
+            tableId: table.id,
+            rowId: row.id,
+            kind: 'contact_counter_bumped',
+            columnId: contactColId,
+            contactId,
+            field: 'sentCount',
+            amount: 1,
+          });
           matchedAny = true;
         }
         if (!matchedAny) notFound.push(email);
@@ -179,6 +194,17 @@ export function MarkContactsSentModal({ onClose, onDone }: MarkContactsSentModal
       // server's PUT /api/rows already supports a mixed-table batch (each
       // Row carries its own tableId), no per-table splitting needed.
       if (toSave.length > 0) await saveRows(toSave);
+
+      if (changes.length > 0) {
+        // Best-effort, same reasoning as PushReplyRowsModal's own — the
+        // row writes above already succeeded regardless of this call.
+        void createImportRecord({
+          type: 'mark_sent',
+          label: `Pažymėta išsiųsta (${pastedEmails.length} adresų)`,
+          recordCount: matched.length,
+          changes,
+        }).catch(() => {});
+      }
 
       setResults({ matched, notFound, uniqueEmailCount: pastedEmails.length });
     } catch (err) {

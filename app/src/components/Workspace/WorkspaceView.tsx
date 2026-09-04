@@ -5,6 +5,7 @@ import { confirmDeleteTable } from '../../utils/confirmDeleteTable';
 import { countRowsForTable } from '../../db/db';
 import { BrandLogo } from '../BrandLogo';
 import { ThemeToggle } from '../ThemeToggle';
+import { ImportHistoryModal } from './ImportHistoryModal';
 import { Package } from 'lucide-react';
 
 interface WorkspaceViewProps {
@@ -76,6 +77,7 @@ export function WorkspaceView({
   const [rowCounts, setRowCounts] = useState<Record<string, number>>({});
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState('');
+  const [importHistoryOpen, setImportHistoryOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -123,6 +125,11 @@ export function WorkspaceView({
           {onOpenBackups && (
             <button type="button" onClick={onOpenBackups}>
               Duomenys
+            </button>
+          )}
+          {canManageTables && (
+            <button type="button" onClick={() => setImportHistoryOpen(true)}>
+              Importų istorija
             </button>
           )}
           {canManageTables && (
@@ -201,6 +208,7 @@ export function WorkspaceView({
           ))}
         </div>
       )}
+      {importHistoryOpen && <ImportHistoryModal onClose={() => setImportHistoryOpen(false)} />}
     </div>
   );
 }

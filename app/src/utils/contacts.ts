@@ -205,6 +205,25 @@ export function markContactSent(raw: string, id: string): string {
   return serializeContacts(parseContacts(raw).map((c) => (c.id === id ? { ...c, sentCount: (c.sentCount ?? 0) + 1 } : c)));
 }
 
+/** The revert side of markContactSent()/incrementContactRepliedCount() —
+ * only ever called from applyImportRollback.ts, undoing exactly the
+ * amount one specific import bumped a counter by (never a blind reset to
+ * 0), since the same contact can legitimately be bumped by more than one
+ * import over time and only one of them is being rolled back. Floors at 0
+ * and, matching parseContacts' own toPositiveCount() convention ("never
+ * 0, absent instead"), clears the field entirely rather than leaving a
+ * literal 0 behind. */
+export function decrementContactCounter(raw: string, id: string, field: 'sentCount' | 'repliedCount', amount: number): string {
+  return serializeContacts(
+    parseContacts(raw).map((c) => {
+      if (c.id !== id) return c;
+      const next = Math.max(0, (c[field] ?? 0) - amount);
+      const updated = { ...c, [field]: next || undefined };
+      return updated;
+    }),
+  );
+}
+
 /** "Pridėti siuntėją" bulk action (AddSenderModal.tsx's own equivalent of
  * MarkContactsSentModal) — records that `senderEmail` emailed this
  * contact on `date` (utils/date.ts's todaySenderDate()). Prepended, not

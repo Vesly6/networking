@@ -1982,6 +1982,21 @@ tr.row-drop-end td {
   padding: 2rem 1rem;
 }
 
+/* ConfirmDialog (App.tsx, mounted once near the root) is often opened
+   from *within* an already-open .modal (e.g. ImportHistoryModal's own
+   "Atšaukti" confirmation) — with every .modal-backdrop sharing the same
+   z-index, plain DOM order decided which one painted on top, and a
+   dynamically-opened modal's portal (appended to document.body later)
+   consistently ended up above ConfirmDialog's, making its own buttons
+   unclickable (a real, reproduced bug: Playwright couldn't click "Gerai"
+   at all — the modal underneath kept intercepting the click). A confirm
+   dialog is inherently "on top of whatever asked for it," so it needs a
+   strictly higher z-index than any other modal, not just equal + later
+   DOM order. */
+.confirm-dialog-backdrop {
+  z-index: 30;
+}
+
 .modal {
   background: var(--bg);
   border: 1px solid var(--border-strong);
@@ -6754,6 +6769,56 @@ tr.row-drop-end td {
   align-self: flex-start;
   font-size: 0.8rem;
   color: var(--text-muted);
+}
+.import-history-modal {
+  max-width: 640px;
+}
+.import-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  max-height: 420px;
+  overflow-y: auto;
+}
+.import-history-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.import-history-row-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 0.1rem;
+}
+.import-history-row-type {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+.import-history-row-label {
+  font-size: 0.88rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.import-history-row-meta {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+.import-history-row-status {
+  color: var(--text-muted);
+}
+.import-history-row-done {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  white-space: nowrap;
 }
 .linkedin-search-import-form {
   display: flex;

@@ -11,7 +11,7 @@ export function ConfirmDialog() {
   if (!request) return null;
 
   return (
-    <div className="modal-backdrop" onClick={() => resolveConfirm(false)}>
+    <div className="modal-backdrop confirm-dialog-backdrop" onClick={() => resolveConfirm(false)}>
       <div className="modal confirm-dialog" onClick={(e) => e.stopPropagation()}>
         {request.title && <h2>{request.title}</h2>}
         <p className="confirm-dialog-message">{request.message}</p>

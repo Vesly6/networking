@@ -151,6 +151,12 @@ import {
   recordError,
   listWebhookEvents,
 } from './instantlyWebhookLog/db.js';
+import {
+  insertImportOperation,
+  listImportOperations,
+  getImportOperation,
+  markImportOperationRolledBack,
+} from './importHistory/db.js';
 import { LinkedInBrowserError, humanDelay } from './linkedin/browser.js';
 import { LinkedInPageError, getLinkedInStatus, sendConnectionRequest, replyInThread, searchLeads } from './linkedin/page.js';
 import { logAction, getRecentActions } from './linkedin/db.js';
@@ -1860,6 +1866,80 @@ app.get(
     const parsedLimit = typeof limit === 'string' ? Number(limit) : NaN;
     const effectiveLimit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? Math.min(parsedLimit, 500) : 100;
     res.json({ events: listWebhookEvents(req.auth!.companyId, effectiveLimit) });
+  }),
+);
+
+// --- Import history / rollback (importHistory/db.ts) — a durable log of
+// the three bulk row-mutating operations that write into rows a user may
+// not currently be looking at (Contacts/decision-makers merge, the
+// Instantly reply push, and the "mark as sent" bulk counter bump), so any
+// one of them can be found and reverted later without touching data from
+// any other import or from ordinary manual edits made afterward. See
+// importHistory/db.ts's own doc comment for why the actual revert
+// computation lives client-side (app/src/utils/applyImportRollback.ts)
+// instead of being duplicated here — this file only stores and serves the
+// log itself, which is opaque JSON as far as the server is concerned.
+app.post(
+  '/api/import-history',
+  asyncHandler(async (req, res) => {
+    const { type, label, recordCount, changes } = (req.body ?? {}) as Record<string, unknown>;
+    const validTypes = ['contacts_merge', 'reply_push', 'mark_sent'];
+    if (
+      typeof type !== 'string' ||
+      !validTypes.includes(type) ||
+      typeof label !== 'string' ||
+      !label.trim() ||
+      typeof recordCount !== 'number' ||
+      !Array.isArray(changes)
+    ) {
+      res.status(400).json({ error: 'Invalid import-history payload' });
+      return;
+    }
+    const operation = insertImportOperation({
+      companyId: req.auth!.companyId,
+      type: type as 'contacts_merge' | 'reply_push' | 'mark_sent',
+      label: label.trim(),
+      recordCount,
+      changes,
+    });
+    res.json({ operation });
+  }),
+);
+
+app.get(
+  '/api/import-history',
+  asyncHandler(async (req, res) => {
+    res.json({ operations: listImportOperations(req.auth!.companyId) });
+  }),
+);
+
+// Only reverts the durable log's own status — the actual row writes that
+// undo the import are applied by the client first (against the ordinary,
+// already-authenticated PUT /api/rows path, same as the import itself
+// used), and this route is called only once every one of those writes has
+// already succeeded. requireNotWorker since this is a company-wide,
+// semi-destructive action (it can revert data across the whole
+// workspace), not a per-row edit — same tier as deleting a table.
+app.post(
+  '/api/import-history/:id/rollback',
+  requireNotWorker,
+  asyncHandler(async (req, res) => {
+    const companyId = req.auth!.companyId;
+    const operation = getImportOperation(req.params.id, companyId);
+    if (!operation) {
+      res.status(404).json({ error: 'Import record not found' });
+      return;
+    }
+    if (operation.status === 'rolled_back') {
+      res.status(409).json({ error: 'Šis importas jau atšauktas' });
+      return;
+    }
+    const ok = markImportOperationRolledBack(req.params.id, companyId);
+    if (!ok) {
+      res.status(409).json({ error: 'Šis importas jau atšauktas' });
+      return;
+    }
+    res.json({ ok: true });
   }),
 );
 

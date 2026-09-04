@@ -8,7 +8,8 @@ import { parseCsvFile, downloadCsv } from '../../utils/csv';
 import { normalizeDomain } from '../../utils/domainMatch';
 import { buildDomainIndex, type RowDomainMatch } from '../../utils/rowDomainIndex';
 import { getPrimaryLabel } from '../../utils/row';
-import { joinContactFields, addContactsDedupByEmail } from '../../utils/contacts';
+import { joinContactFields, addContactsDedupByEmail, parseContacts } from '../../utils/contacts';
+import type { ImportChangeEntry } from '../../utils/importHistory';
 
 const NONE = '__none__';
 const SKIP = '__skip__';
@@ -16,10 +17,11 @@ const SKIP = '__skip__';
 type MatchMode = 'website' | 'id';
 
 interface MergeContactsModalProps {
+  tableId: string;
   columns: Column[];
   rows: Row[];
   contactColumnId: string;
-  onConfirm: (updates: CellUpdate[], stats: MergeStats) => void;
+  onConfirm: (updates: CellUpdate[], stats: MergeStats, changes: ImportChangeEntry[]) => void;
   onCancel: () => void;
 }
 
@@ -161,7 +163,7 @@ function buildIdIndex(columns: Column[], rows: Row[], idColumnId: string): Map<s
  * by the caller. Nothing is written until the final "review" step is
  * confirmed — same explicit-review-before-write rule this app already
  * follows for the ordinary CSV import mapping. */
-export function MergeContactsModal({ columns, rows, contactColumnId, onConfirm, onCancel }: MergeContactsModalProps) {
+export function MergeContactsModal({ tableId, columns, rows, contactColumnId, onConfirm, onCancel }: MergeContactsModalProps) {
   const [step, setStep] = useState<Step>('pick-file');
   const [headers, setHeaders] = useState<string[]>([]);
   const [dataRows, setDataRows] = useState<string[][]>([]);
@@ -340,6 +342,7 @@ export function MergeContactsModal({ columns, rows, contactColumnId, onConfirm, 
     }
 
     const updates: CellUpdate[] = [];
+    const changes: ImportChangeEntry[] = [];
     let addedContacts = 0;
     let skippedDuplicates = 0;
     for (const [rowId, entryTexts] of byRow) {
@@ -349,14 +352,29 @@ export function MergeContactsModal({ columns, rows, contactColumnId, onConfirm, 
       addedContacts += result.added;
       skippedDuplicates += result.skipped;
       updates.push({ rowId, columnId: contactColumnId, value: result.raw });
+      if (result.added > 0) {
+        // addContactsDedupByEmail appends new entries after the existing
+        // ones, in order — the last result.added entries of the freshly
+        // parsed result are exactly the ones this call just added, with
+        // their real generated ids, letting a later rollback remove
+        // precisely these entries regardless of what else happens to the
+        // cell in between (see ImportChangeEntry's own doc comment).
+        const allEntries = parseContacts(result.raw);
+        const addedEntryIds = allEntries.slice(allEntries.length - result.added).map((entry) => entry.id);
+        changes.push({ tableId, rowId, kind: 'contact_entries_added', columnId: contactColumnId, entryIds: addedEntryIds });
+      }
     }
 
-    onConfirm(updates, {
-      updatedRows: byRow.size,
-      addedContacts,
-      skippedDuplicates,
-      skippedGroups,
-    });
+    onConfirm(
+      updates,
+      {
+        updatedRows: byRow.size,
+        addedContacts,
+        skippedDuplicates,
+        skippedGroups,
+      },
+      changes,
+    );
   };
 
   const renderGroupRow = (group: CsvGroup) => {

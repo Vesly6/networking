@@ -6,10 +6,11 @@ import { useTableStore, type CellColorUpdate } from '../../store/useTableStore';
 import { buildEmailIndex } from '../../utils/emailMatch';
 import { getColumnByType } from '../../utils/row';
 import { REPLY_STORED_FIELD_ORDER, resolveReplyFields, cleanReplyText, extractLatestEmailMessages } from '../../utils/replyHistoryFormat';
-import { addNoteEntry } from '../../utils/noteHistory';
+import { addNoteEntry, parseNoteHistory } from '../../utils/noteHistory';
 import { incrementContactRepliedCount, findContactIdByEmail } from '../../utils/contacts';
 import { fetchInstantlyTableMap, saveInstantlyTableMapping } from '../../utils/instantlyTableMap';
 import { VISI_ATSAKYMAI_TABLE_NAME } from '../../utils/instantlyReplySync';
+import { createImportRecord, type ImportChangeEntry } from '../../utils/importHistory';
 
 interface PushReplyRowsModalProps {
   rows: Row[];
@@ -158,6 +159,12 @@ export function PushReplyRowsModal({ rows, sourceColumns, currentUserName, onClo
       const historyByRowId = new Map<string, string>();
       const matchedRows = new Map<string, Row>();
       const pushedSourceRowIds: string[] = [];
+      // Per-row list, not a single id — one push can add more than one
+      // note entry to the same destination row (a multi-message reply
+      // thread from one lead), so a later rollback needs to remove every
+      // entry this import added there, not just the last.
+      const noteEntryIdsByRowId = new Map<string, string[]>();
+      const repliedCounterBumps: { rowId: string; contactId: string }[] = [];
       let pushed = 0;
       let skipped = 0;
 
@@ -186,6 +193,15 @@ export function PushReplyRowsModal({ rows, sourceColumns, currentUserName, onClo
         const bodyText = cleanReplyText(cleanedReplyTexts[i] ?? fields.reply_text) || '(nėra teksto)';
         const next = addNoteEntry(current, bodyText, currentUserName, replyFields);
         historyByRowId.set(match.id, next);
+        // addNoteEntry prepends, so the entry it just created is always
+        // parseNoteHistory(next)[0] — regardless of how many entries this
+        // same row already accumulated earlier in this same loop.
+        const newEntryId = parseNoteHistory(next)[0]?.id;
+        if (newEntryId) {
+          const list = noteEntryIdsByRowId.get(match.id) ?? [];
+          list.push(newEntryId);
+          noteEntryIdsByRowId.set(match.id, list);
+        }
         matchedRows.set(match.id, match);
         pushedSourceRowIds.push(replyRow.id);
         pushed++;
@@ -196,6 +212,7 @@ export function PushReplyRowsModal({ rows, sourceColumns, currentUserName, onClo
           if (contactId) {
             contactsByRowId.set(match.id, incrementContactRepliedCount(currentContacts, contactId));
             attributed++;
+            repliedCounterBumps.push({ rowId: match.id, contactId });
           }
         }
       }
@@ -208,17 +225,67 @@ export function PushReplyRowsModal({ rows, sourceColumns, currentUserName, onClo
       });
       if (toSave.length > 0) await saveRows(toSave);
 
+      // Import-history log (see importHistory.ts/applyImportRollback.ts)
+      // — built from exactly what was just written, so a later rollback
+      // can undo precisely this push regardless of what else touches
+      // these rows afterward. Destination-row changes first...
+      const changes: ImportChangeEntry[] = [];
+      for (const [rowId, entryIds] of noteEntryIdsByRowId) {
+        changes.push({ tableId: destTable.id, rowId, kind: 'note_entries_added', columnId: historyColId, entryIds });
+      }
+      for (const { rowId, contactId } of repliedCounterBumps) {
+        changes.push({
+          tableId: destTable.id,
+          rowId,
+          kind: 'contact_counter_bumped',
+          columnId: contactColId!,
+          contactId,
+          field: 'repliedCount',
+          amount: 1,
+        });
+      }
+
       // Color the pushed SOURCE rows (in "Visi atsakymai", the currently
       // active table) — on explicit request, a visible marker for which
       // replies have already been exported, across every column so the
       // whole row reads as colored at a glance, same mechanism the "🎨
       // Color" toolbar fill already uses.
       if (pushedSourceRowIds.length > 0) {
+        const sourceTableId = useTableStore.getState().tableId;
+        const sourceRowsById = new Map(useTableStore.getState().rows.map((r) => [r.id, r]));
         const colorUpdates: CellColorUpdate[] = [];
         for (const rowId of pushedSourceRowIds) {
-          for (const col of sourceColumns) colorUpdates.push({ rowId, columnId: col.id, color: PUSHED_ROW_COLOR });
+          const sourceRow = sourceRowsById.get(rowId);
+          for (const col of sourceColumns) {
+            colorUpdates.push({ rowId, columnId: col.id, color: PUSHED_ROW_COLOR });
+            // Captured before setCellColors overwrites it below, so
+            // rollback can restore whatever color (or none) the row had
+            // before this push, not just clear it unconditionally.
+            if (sourceTableId) {
+              changes.push({
+                tableId: sourceTableId,
+                rowId,
+                kind: 'cell_color_set',
+                columnId: col.id,
+                previousColor: sourceRow?.colors?.[col.id] ?? null,
+              });
+            }
+          }
         }
         useTableStore.getState().setCellColors(colorUpdates);
+      }
+
+      if (changes.length > 0) {
+        // Best-effort — the row writes above already succeeded regardless
+        // of whether this logging call does, so a failure here shouldn't
+        // surface as though the push itself failed. It only costs the
+        // ability to later roll back this one specific push.
+        void createImportRecord({
+          type: 'reply_push',
+          label: `Atsakymų perkėlimas į „${destTable.name}“`,
+          recordCount: pushed,
+          changes,
+        }).catch(() => {});
       }
 
       if (rememberMapping && singleCampaignName) await saveInstantlyTableMapping(singleCampaignName, destTable.name);

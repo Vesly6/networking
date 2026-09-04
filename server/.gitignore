@@ -12,4 +12,6 @@ accounts.sqlite
 accounts.sqlite-*
 instantly-webhook-log.sqlite
 instantly-webhook-log.sqlite-*
+import-history.sqlite
+import-history.sqlite-*
 *.tsbuildinfo
