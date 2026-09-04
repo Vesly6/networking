@@ -237,3 +237,43 @@ export function enrichPerson(
     body: JSON.stringify(params),
   });
 }
+
+export interface ApolloCreditBucket {
+  limit: number;
+  consumed: number;
+  left_over: number;
+}
+
+/** Every bucket Apollo's own usage-stats endpoint can return, confirmed
+ * live against a real account. direct_dial_credit is the one phone
+ * reveals draw from (both mobile and work-direct numbers — Apollo has no
+ * API parameter to restrict a reveal to mobile only, see
+ * pickBestPhoneNumber's own doc comment above for why that filter has to
+ * live client-side instead); lead_credit covers company search and
+ * person/company enrichment. All optional — a given plan may not expose
+ * every bucket. */
+export interface ApolloCreditUsageStats {
+  lead_credit?: ApolloCreditBucket;
+  direct_dial_credit?: ApolloCreditBucket;
+  export_credit?: ApolloCreditBucket;
+  conversation_credit?: ApolloCreditBucket;
+  ai_credit?: ApolloCreditBucket;
+  power_up_credit?: ApolloCreditBucket;
+  inbound_website_visitor_credit?: ApolloCreditBucket;
+  contact_website_visitor_credit?: ApolloCreditBucket;
+  web_search_record_credit?: ApolloCreditBucket;
+  broadcast_credit?: ApolloCreditBucket;
+  dialer?: ApolloCreditBucket;
+  [key: string]: ApolloCreditBucket | undefined;
+}
+
+/** Zero-cost — calling this never moves any of the numbers it reports
+ * (confirmed live). Added specifically to show "how many credits are
+ * left" in-app (Search tab, the "+ Pridėti kontaktą" popup), on explicit
+ * request after direct_dial_credit ran out mid-cycle with no warning. */
+export function fetchApolloCredits(): Promise<{
+  credit_usage_stats: ApolloCreditUsageStats;
+  current_credit_cycle?: { start_date: string; end_date: string };
+}> {
+  return localApiRequest('/api/apollo/credits');
+}

@@ -109,7 +109,7 @@ import {
   issueSuperAdminToken,
   requireSuperAdmin,
 } from './auth.js';
-import { ApolloApiError, searchPeople, searchCompanies, enrichPerson, pollWebhookResult } from './apollo.js';
+import { ApolloApiError, searchPeople, searchCompanies, enrichPerson, pollWebhookResult, getCreditUsageStats } from './apollo.js';
 import {
   InstantlyApiError,
   listCampaigns as listInstantlyCampaigns,
@@ -1847,6 +1847,19 @@ app.get(
   '/api/apollo/webhook/:requestId',
   asyncHandler(async (req, res) => {
     const result = await pollWebhookResult(req.params.requestId, requireApolloKey(req.auth!.companyId));
+    res.json(result);
+  }),
+);
+
+// Apollo's own zero-cost usage-stats endpoint (confirmed live) — surfaced
+// so the app can show remaining credits (Search tab, the "+ Pridėti
+// kontaktą" popup) without the account owner having to check Apollo's own
+// dashboard separately, on explicit request after a real, reported case
+// of direct_dial_credit running out mid-cycle with no in-app warning.
+app.get(
+  '/api/apollo/credits',
+  asyncHandler(async (req, res) => {
+    const result = await getCreditUsageStats(requireApolloKey(req.auth!.companyId));
     res.json(result);
   }),
 );

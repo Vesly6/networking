@@ -5,6 +5,7 @@ import { PeopleFilterForm } from './PeopleFilterForm';
 import { CompanyFilterForm } from './CompanyFilterForm';
 import { PeopleResultsTable } from './PeopleResultsTable';
 import { CompanyResultsTable } from './CompanyResultsTable';
+import { ApolloCreditsIndicator } from './ApolloCreditsIndicator';
 import { ChevronUp, ChevronDown, ArrowLeft, ArrowRight } from 'lucide-react';
 
 /** Apollo.io lookup — People Search (free) and Company Search (1 credit
@@ -88,6 +89,7 @@ export function SearchView() {
   return (
     <div className="search-view">
       <aside className={`search-sidebar ${filtersExpanded ? 'search-sidebar-expanded' : 'search-sidebar-collapsed'}`}>
+        <ApolloCreditsIndicator />
         <div className="search-mode-switch">
           <button type="button" className={mode === 'people' ? 'active' : ''} onClick={() => setMode('people')}>
             Žmonės

@@ -417,3 +417,45 @@ export async function pollWebhookResult(requestId: string, apiKey: string): Prom
   const phoneNumbers = json.webhook_result?.people?.[0]?.phone_numbers ?? [];
   return { status: 'ready', phoneNumbers };
 }
+
+export interface ApolloCreditBucket {
+  limit: number;
+  consumed: number;
+  left_over: number;
+}
+
+// Every bucket Apollo's own endpoint can return — confirmed live against
+// a real account rather than assumed from docs alone. direct_dial_credit
+// is the one phone reveals (mobile AND work-direct — see
+// pickBestPhoneNumber's own doc comment on the frontend for why "mobile
+// only" is a client-side filter, not something Apollo itself can be
+// asked to restrict to) draw from; lead_credit covers company search and
+// person/company enrichment. Optional since a given plan may not expose
+// every bucket (a "unified credit" plan folds several of these into
+// lead_credit alone, per Apollo's own documentation).
+export interface ApolloCreditUsageStats {
+  lead_credit?: ApolloCreditBucket;
+  direct_dial_credit?: ApolloCreditBucket;
+  export_credit?: ApolloCreditBucket;
+  conversation_credit?: ApolloCreditBucket;
+  ai_credit?: ApolloCreditBucket;
+  power_up_credit?: ApolloCreditBucket;
+  inbound_website_visitor_credit?: ApolloCreditBucket;
+  contact_website_visitor_credit?: ApolloCreditBucket;
+  web_search_record_credit?: ApolloCreditBucket;
+  broadcast_credit?: ApolloCreditBucket;
+  dialer?: ApolloCreditBucket;
+  [key: string]: ApolloCreditBucket | undefined;
+}
+
+/** POST /usage_stats/credit_usage_stats — Apollo's own documented,
+ * zero-cost way to check remaining credits (confirmed live: calling it
+ * doesn't move any of the numbers it reports). Added specifically so the
+ * app can show "how many credits are left," on explicit request, rather
+ * than the account owner having to check Apollo's own dashboard
+ * separately. */
+export async function getCreditUsageStats(
+  apiKey: string,
+): Promise<{ credit_usage_stats: ApolloCreditUsageStats; current_credit_cycle?: { start_date: string; end_date: string } }> {
+  return callApollo('/usage_stats/credit_usage_stats', {}, apiKey);
+}

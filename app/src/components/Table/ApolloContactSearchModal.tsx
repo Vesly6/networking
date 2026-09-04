@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { CompanyFilterForm } from '../Search/CompanyFilterForm';
 import { PeopleFilterForm } from '../Search/PeopleFilterForm';
+import { ApolloCreditsIndicator } from '../Search/ApolloCreditsIndicator';
 import {
   searchCompanies,
   searchPeople,
@@ -429,6 +430,7 @@ export function ApolloContactSearchModal({
       <div className="modal apollo-search-modal" onClick={(e) => e.stopPropagation()}>
         <div className="apollo-search-modal-header">
           <h2><Search className="icon" size={18} /> Ieškoti kontaktų</h2>
+          <ApolloCreditsIndicator />
           <button
             type="button"
             className="apollo-search-modal-filters-toggle"
