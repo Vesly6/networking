@@ -374,14 +374,20 @@ export function ApolloContactSearchModal({
       // async cost for no reason. Checked first, before touching
       // request_id/polling at all.
       //
-      // pickBestPhoneNumber, not [0] — a second real, reported bug:
-      // Apollo's phone_numbers array isn't ordered "most personal first,"
-      // and for a real contact tested live, a "work_hq" entry (the
-      // company's own switchboard) sat ahead of the person's actual
-      // "mobile" number. See apolloApi.ts's own doc comment.
-      const syncPhone = pickBestPhoneNumber(result.person?.contact?.phone_numbers)?.sanitized_number;
-      if (syncPhone) {
-        applyPhone(syncPhone);
+      // Branches on whether sync data EXISTS at all (contactPhones), not
+      // on whether it happened to contain a mobile number — those are
+      // different things. Apollo answering synchronously with only a
+      // work_hq/work_direct number is still a complete answer ("no
+      // mobile for this person"), not a reason to poll again for a
+      // second opinion; pickBestPhoneNumber only accepts mobile/cell
+      // entries (on explicit request — no work numbers, ever), so
+      // checking ITS result instead of the raw array would have
+      // incorrectly treated "answered, but not mobile" as "not answered
+      // yet" and kicked off a redundant async lookup.
+      const contactPhones = result.person?.contact?.phone_numbers;
+      if (contactPhones) {
+        const mobile = pickBestPhoneNumber(contactPhones)?.sanitized_number;
+        if (mobile) applyPhone(mobile);
       } else if (result.request_id) {
         // The TOP-LEVEL request_id is what polling needs — NOT
         // result.phone_enrichment.request_id, which looks right but is a

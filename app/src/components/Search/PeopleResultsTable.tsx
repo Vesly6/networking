@@ -49,7 +49,15 @@ function PersonRow({ person }: { person: ApolloSearchPerson }) {
         {!email && !enriching && (
           <span className="search-result-detail-muted">{person.has_email ? 'El. paštas žinomas' : 'El. pašto nėra'}</span>
         )}
-        {!phone && !phonePending && (
+        {!phone && !phonePending && phoneNumbers !== undefined && (
+          // revealPhone already ran and came back with data — just none of
+          // it was tagged mobile (on explicit request, only a mobile
+          // number ever counts as "found"; work/direct-dial/home numbers
+          // are not offered as a fallback). Distinct from the pre-search
+          // hint below so this doesn't read as "hasn't been searched yet."
+          <span className="search-result-detail-muted"> · Mobilaus numerio nerasta</span>
+        )}
+        {!phone && !phonePending && phoneNumbers === undefined && (
           <span className="search-result-detail-muted">
             {' '}
             · {person.has_direct_phone === 'Yes' ? 'Telefonas žinomas' : 'Telefonas mažai tikėtinas'}
@@ -66,7 +74,7 @@ function PersonRow({ person }: { person: ApolloSearchPerson }) {
               {enriching ? 'Ieškoma…' : 'Ieškoti el. pašto'}
             </button>
           )}
-          {!phone && (
+          {!phone && phoneNumbers === undefined && (
             <button type="button" onClick={() => void revealPhone(person)} disabled={!!phonePending}>
               {phonePending ? 'Ieškoma…' : 'Ieškoti telefono'}
             </button>

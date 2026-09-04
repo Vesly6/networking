@@ -157,45 +157,18 @@ export interface ApolloPhoneNumber {
   [key: string]: unknown;
 }
 
-// Lower tier = preferred. A personal mobile number is what "this
-// person's phone number" should mean; a company switchboard (work_hq) is
-// the least specific answer to that question, so it's ranked last rather
-// than excluded outright — still better than no number at all. Missing/
-// unrecognized type values sit in the middle: no better than a known
-// personal number, no worse than a known company one.
-const PHONE_TYPE_TIER: Record<string, number> = {
-  mobile: 0,
-  cell: 0,
-  work_direct: 1,
-  direct_dial: 1,
-  home: 2,
-  other: 2,
-  work_hq: 3,
-};
+const MOBILE_TYPE_VALUES = new Set(['mobile', 'cell']);
 
-function phoneTypeTier(entry: ApolloPhoneNumber): number {
-  const key = (entry.type ?? entry.type_cd ?? '').toLowerCase();
-  return PHONE_TYPE_TIER[key] ?? 2;
-}
-
-/** Picks the single best phone number out of an Apollo phone_numbers
- * array, ranked by type (see PHONE_TYPE_TIER above) rather than by
- * whatever position Apollo happened to return it in. Ties keep the
- * earlier entry, so array order still acts as a tiebreaker between two
- * numbers of the same tier — it's only trusted as the sole signal when
- * genuinely nothing else distinguishes them. */
+/** Picks the person's own mobile number ONLY, on explicit request ("мне
+ * не надо work телефонов вообще... если нету mobile тогда отменяем
+ * запрос") — never work_direct/work_hq/home/other, even as a fallback.
+ * Returns undefined whenever no entry is tagged mobile/cell, regardless
+ * of whether other (non-mobile) numbers exist for this person; callers
+ * must treat that the same as "no phone number found" rather than
+ * falling back to whatever else is in the array. */
 export function pickBestPhoneNumber<T extends ApolloPhoneNumber>(entries: T[] | undefined | null): T | undefined {
-  if (!entries || entries.length === 0) return undefined;
-  let best = entries[0];
-  let bestTier = phoneTypeTier(best);
-  for (let i = 1; i < entries.length; i++) {
-    const tier = phoneTypeTier(entries[i]);
-    if (tier < bestTier) {
-      best = entries[i];
-      bestTier = tier;
-    }
-  }
-  return best;
+  if (!entries) return undefined;
+  return entries.find((entry) => MOBILE_TYPE_VALUES.has((entry.type ?? entry.type_cd ?? '').toLowerCase()));
 }
 
 export interface PhoneEnrichmentInfo {
