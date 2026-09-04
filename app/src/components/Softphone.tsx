@@ -1,7 +1,6 @@
 import { useEffect } from 'react';
 import { Phone } from 'lucide-react';
 import { fetchWebrtcKey } from '../utils/webrtcApi';
-import { useToastStore } from '../store/useToastStore';
 import { useTableStore } from '../store/useTableStore';
 import { startIncomingCallWatcher } from '../utils/incomingCallBridge';
 import { useSoftphoneVisibilityStore } from '../store/useSoftphoneVisibilityStore';
@@ -60,7 +59,6 @@ const SOFTPHONE_ENABLED = true;
  * hide/show mechanism, a plain CSS toggle that never touches the widget's
  * own code or styling). Mount once, near the app root. */
 export function Softphone() {
-  const showToast = useToastStore((s) => s.show);
   const softphoneHidden = useSoftphoneVisibilityStore((s) => s.hidden);
   const toggleSoftphoneHidden = useSoftphoneVisibilityStore((s) => s.toggle);
 
@@ -104,7 +102,15 @@ export function Softphone() {
         // backend, not the skin parameter.
         window.zadarmaWidgetFn!(key, sip, 'rounded', 'en', true, { right: '10px', bottom: '5px' });
       } catch (err) {
-        showToast(err instanceof Error ? `Telefono programėlė nepasiekiama: ${err.message}` : 'Telefono programėlė nepasiekiama');
+        // No toast here on purpose — this effect runs once per app
+        // session on every mount (Softphone is always rendered, see
+        // App.tsx), so a network hiccup/ad-blocker/slow widget script
+        // used to show a "phone widget unreachable" toast to the user on
+        // essentially every page load. Kept as a console log only, same
+        // "detail stays server/console-side, no user-facing noise for a
+        // background init failure" reasoning as the API error-mapping
+        // middleware in server/src/index.ts.
+        console.error('Zadarma softphone widget failed to initialize:', err);
       }
     })();
 
@@ -114,7 +120,6 @@ export function Softphone() {
     // Intentionally once per app session — re-running this on every
     // re-render would re-init the widget (and re-fetch/burn a new key)
     // for no reason.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Watches for a live incoming call — a separate effect from the widget

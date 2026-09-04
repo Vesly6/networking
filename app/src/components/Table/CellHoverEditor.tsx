@@ -957,17 +957,17 @@ export function CellHoverEditor({
   // the Zadarma softphone's own input so the only thing left to do is
   // press its Call button. Falls back to copying instead, same as the
   // existing button, if the widget isn't on the page at all — no worse
-  // than before in that case, not a dead click.
+  // than before in that case, not a dead click. No toast either way, on
+  // explicit request — this fires on every phone-number click, and the
+  // instruction/error toasts around it were reported as noise rather
+  // than useful feedback.
   const callViaSoftphone = async (phone: string) => {
-    if (insertIntoSoftphone(phone)) {
-      showToast('Numeris nusiųstas į telefono programėlę — spauskite skambinti ten');
-      return;
-    }
+    if (insertIntoSoftphone(phone)) return;
     try {
       await navigator.clipboard.writeText(phone);
-      showToast('Telefono programėlė neatidaryta — vietoj to numeris nukopijuotas');
     } catch {
-      showToast('Telefono programėlė neatidaryta, ir numerio nukopijuoti taip pat nepavyko');
+      // Nothing left to fall back to — silently no-op, same reasoning
+      // as above.
     }
   };
 
