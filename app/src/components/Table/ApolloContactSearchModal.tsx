@@ -1,6 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { CompanyFilterForm } from '../Search/CompanyFilterForm';
 import { PeopleFilterForm } from '../Search/PeopleFilterForm';
 import { ApolloCreditsIndicator } from '../Search/ApolloCreditsIndicator';
 import {
@@ -14,7 +13,7 @@ import {
   type CompanySearchParams,
   type PeopleSearchParams,
 } from '../../utils/apolloApi';
-import { cleanCompanyNameForSearch } from '../../utils/companyName';
+import { cleanCompanyNameForSearch, guessCompanyDomain } from '../../utils/companyName';
 import { joinContactFields, parseContacts, contactTextToFields } from '../../utils/contacts';
 import { useToastStore } from '../../store/useToastStore';
 import { usePendingPhoneSearchStore } from '../../store/usePendingPhoneSearchStore';
@@ -78,14 +77,31 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 // clearly instead of polling forever if something is genuinely stuck.
 const PHONE_POLL_MAX_MS = 5 * 60 * 1000;
 
-/** The old version of this feature auto-picked companyRes.companies[0] and
- * went straight to a people search with no way to see — let alone
- * correct — which company Apollo actually matched, or to search with
- * different filters than a single auto-cleaned name string. This is a real
- * two-step search (reusing the same CompanyFilterForm/PeopleFilterForm the
- * "Paieška" tab already uses, on explicit request): confirm/replace the
- * company here first, then search people at the confirmed company with the
- * full filter set, not just a name. */
+// Session-scoped (this page load only — module-level, not component state,
+// so it survives this modal closing and reopening for a different row) —
+// on explicit request: checking the same domain/name twice in one session
+// shouldn't re-spend a company-search credit for an answer already known.
+// Keyed by exactly what was searched (domain takes priority — see
+// runCompanySearch below), case-insensitive.
+const companySearchCache = new Map<string, ApolloCompany[]>();
+
+/** A real two-step search: confirm/replace the company first (a compact
+ * name+domain form — see runCompanySearch below for why this is
+ * deliberately NOT the full CompanyFilterForm the "Paieška" tab uses;
+ * this step only ever needs a precise single-company check, not a broad
+ * multi-filter discovery search), then search people at the confirmed
+ * company with PeopleFilterForm's full filter set.
+ *
+ * Neither step auto-searches on its own — on explicit request, after a
+ * real reported problem: this modal used to run a paid company search
+ * (Apollo bills 1 credit/page) automatically the instant it opened, every
+ * single time, whether or not the user actually wanted to look anyone
+ * up. Both the name and domain fields are pre-filled from the row's own
+ * known data as a convenience, but nothing is sent to Apollo until the
+ * user explicitly clicks the search button (or presses Enter in either
+ * field). Company search itself is also session-cached (see
+ * companySearchCache above) so re-checking the same domain/name twice
+ * doesn't spend a second credit on an answer this page already has. */
 export function ApolloContactSearchModal({
   initialCompanyName,
   existingContactsRaw,
@@ -112,10 +128,16 @@ export function ApolloContactSearchModal({
   const onUpdateContactRef = useRef(onUpdateContact);
   onUpdateContactRef.current = onUpdateContact;
 
-  const [companyParams, setCompanyParams] = useState<CompanySearchParams>({
-    q_organization_name: cleanCompanyNameForSearch(initialCompanyName),
-    per_page: 10,
-  });
+  // Pre-filled from the row's own known data (cleaned name, best-effort
+  // guessed domain) but never auto-submitted — on explicit request, a
+  // real reported problem: this modal used to run a paid company search
+  // (Apollo bills 1 credit/page for /mixed_companies/search) the instant
+  // it opened, every time, whether or not the user actually wanted to
+  // look anyone up. Both fields stay fully editable; searching now only
+  // ever happens from the explicit button click in runCompanySearch
+  // below (also submittable via Enter, since both live inside a <form>).
+  const [companyNameQuery, setCompanyNameQuery] = useState(cleanCompanyNameForSearch(initialCompanyName));
+  const [companyDomainQuery, setCompanyDomainQuery] = useState(() => guessCompanyDomain(initialCompanyName));
   const [companyResults, setCompanyResults] = useState<ApolloCompany[]>([]);
   const [companyLoading, setCompanyLoading] = useState(false);
   const [companyError, setCompanyError] = useState('');
@@ -129,15 +151,19 @@ export function ApolloContactSearchModal({
   const [peopleError, setPeopleError] = useState('');
   const [peopleSearched, setPeopleSearched] = useState(false);
   const [addingPersonIds, setAddingPersonIds] = useState<Set<string>>(new Set());
-  // Mobile only (see .apollo-search-modal-filters' collapsed state in
-  // App.css) — stacking the filter form above results (instead of the
-  // fixed 320px side-by-side column that never fit a phone width) still
-  // left a real, reported problem of its own: PeopleFilterForm alone runs
-  // to eight-plus collapsible sections, tall enough on a phone to push
-  // every actual result off the bottom of the screen with no way to get
-  // back to a compact view short of scrolling all the way past it again.
-  // Starts expanded for the same reason SearchView's own toggle does —
-  // this is what a first-time visitor to either step needs to see first.
+  // Only gates the PEOPLE step's filters now (the company step's own
+  // compact name+domain form has nothing worth collapsing, and the header
+  // toggle button is hidden entirely until a company is picked — see the
+  // header JSX below). Mobile only (see .apollo-search-modal-filters'
+  // collapsed state in App.css) — stacking the filter form above results
+  // (instead of the fixed 320px side-by-side column that never fit a
+  // phone width) still left a real, reported problem of its own:
+  // PeopleFilterForm alone runs to eight-plus collapsible sections, tall
+  // enough on a phone to push every actual result off the bottom of the
+  // screen with no way to get back to a compact view short of scrolling
+  // all the way past it again. Starts expanded for the same reason
+  // SearchView's own toggle does — this is what a first-time visitor to
+  // this step needs to see first.
   const [filtersExpanded, setFiltersExpanded] = useState(true);
   // Same "auto-collapse once a search actually runs" behavior as
   // SearchView's own runSearchAndCollapse — on request, manually tapping
@@ -171,12 +197,38 @@ export function ApolloContactSearchModal({
   const finishPhoneSearch = usePendingPhoneSearchStore((s) => s.finish);
   const pendingPhoneCount = usePendingPhoneSearchStore((s) => s.count);
 
+  // Only ever called from an explicit click/Enter on the company-search
+  // form below — never automatically. Domain takes priority over name
+  // when both are present: a domain is a precise, single-company lookup,
+  // while a bare name is a broad keyword match that can return many
+  // candidates — on explicit request, "не делать широкий поиск... если
+  // для проверки конкретной компании уже есть точный домен." Checks the
+  // session cache first (companySearchCache above) so re-checking the
+  // same domain/name twice doesn't re-spend a credit on an answer this
+  // page already has.
   const runCompanySearch = async () => {
+    const domain = companyDomainQuery.trim();
+    const name = companyNameQuery.trim();
+    if (!domain && !name) return;
+    const cacheKey = domain ? `domain:${domain.toLowerCase()}` : `name:${name.toLowerCase()}`;
+
+    const cached = companySearchCache.get(cacheKey);
+    if (cached) {
+      setCompanyResults(cached);
+      setCompanySearched(true);
+      setCompanyError(cached.length === 0 ? 'Įmonių nerasta — pabandykite kitus raktažodžius' : '');
+      return;
+    }
+
     setCompanyLoading(true);
     setCompanyError('');
     try {
-      const res = await searchCompanies(companyParams);
+      const params: CompanySearchParams = domain
+        ? { q_organization_domains_list: [domain], per_page: 10 }
+        : { q_organization_name: name, per_page: 10 };
+      const res = await searchCompanies(params);
       setCompanyResults(res.companies);
+      companySearchCache.set(cacheKey, res.companies);
       setCompanySearched(true);
       if (res.companies.length === 0) setCompanyError('Įmonių nerasta — pabandykite kitus raktažodžius');
     } catch (err) {
@@ -185,19 +237,6 @@ export function ApolloContactSearchModal({
       setCompanyLoading(false);
     }
   };
-
-  // Auto-run once on open with the pre-filled (cleaned) name — keeps the
-  // "one click and see candidates" convenience the old version had, while
-  // everything after this point (confirming/replacing/filtering) is now
-  // fully in the user's hands rather than happening silently.
-  //
-  // Routed through runSearchAndCollapse too, not just the explicit
-  // filter-form resubmits — this auto-run *is* the primary flow most
-  // people actually go through (open the modal, see candidates,
-  // pick one), not an edge case, so it needed the exact same "the
-  // filters shouldn't still be covering the results you just got" fix.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { void runSearchAndCollapse(runCompanySearch); }, []);
 
   const pickCompany = async (company: ApolloCompany) => {
     setSelectedCompany(company);
@@ -431,13 +470,15 @@ export function ApolloContactSearchModal({
         <div className="apollo-search-modal-header">
           <h2><Search className="icon" size={18} /> Ieškoti kontaktų</h2>
           <ApolloCreditsIndicator />
-          <button
-            type="button"
-            className="apollo-search-modal-filters-toggle"
-            onClick={() => setFiltersExpanded((v) => !v)}
-          >
-            {filtersExpanded ? <>Slėpti filtrus <ChevronUp className="icon" size={14} /></> : <>Filtrai <ChevronDown className="icon" size={14} /></>}
-          </button>
+          {selectedCompany && (
+            <button
+              type="button"
+              className="apollo-search-modal-filters-toggle"
+              onClick={() => setFiltersExpanded((v) => !v)}
+            >
+              {filtersExpanded ? <>Slėpti filtrus <ChevronUp className="icon" size={14} /></> : <>Filtrai <ChevronDown className="icon" size={14} /></>}
+            </button>
+          )}
           <button type="button" className="apollo-search-modal-close" onClick={onClose}>
             <X className="icon" size={16} />
           </button>
@@ -445,24 +486,51 @@ export function ApolloContactSearchModal({
 
         {!selectedCompany ? (
           <div className="apollo-search-modal-body">
-            {filtersExpanded && (
             <div className="apollo-search-modal-filters">
               <p className="apollo-search-modal-hint">
-                Patikrinkite arba pakeiskite raktažodžius ir susiraskite tikslią įmonę — kol jos nepasirinksite,
-                žmonių paieška neprasidės.
+                Patikrinkite arba pakeiskite pavadinimą/domeną ir spauskite paieškos mygtuką — Apollo užklausa
+                vykdoma tik paspaudus jį, ne automatiškai atidarius šį langą.
               </p>
-              <CompanyFilterForm
-                params={companyParams}
-                onChange={setCompanyParams}
-                onSubmit={() => void runSearchAndCollapse(runCompanySearch)}
-                loading={companyLoading}
-              />
+              <form
+                className="apollo-company-quick-search"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void runCompanySearch();
+                }}
+              >
+                <label className="search-filter-field">
+                  <span>Įmonės pavadinimas</span>
+                  <div className="apollo-company-quick-search-row">
+                    <input
+                      value={companyNameQuery}
+                      onChange={(e) => setCompanyNameQuery(e.target.value)}
+                      placeholder="Įmonės pavadinimas"
+                    />
+                    <button
+                      type="submit"
+                      className="apollo-company-quick-search-btn"
+                      disabled={companyLoading || (!companyNameQuery.trim() && !companyDomainQuery.trim())}
+                      title="Ieškoti Apollo"
+                    >
+                      <Search className="icon" size={16} />
+                    </button>
+                  </div>
+                </label>
+                <label className="search-filter-field">
+                  <span>Įmonės domenas</span>
+                  <input
+                    value={companyDomainQuery}
+                    onChange={(e) => setCompanyDomainQuery(e.target.value)}
+                    placeholder="imone.lt"
+                  />
+                </label>
+              </form>
             </div>
-            )}
             <div className="apollo-search-modal-results">
               {companyError && <div className="search-result-detail-error">{companyError}</div>}
+              {companyLoading && <div className="empty-state">Ieškoma…</div>}
               {!companySearched && !companyLoading && (
-                <div className="empty-state">Ieškoma…</div>
+                <div className="empty-state">Įveskite pavadinimą arba domeną ir spauskite paieškos mygtuką.</div>
               )}
               {companyResults.map((c) => (
                 <div key={c.id} className="apollo-search-modal-company-row">

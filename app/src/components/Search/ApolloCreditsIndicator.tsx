@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { RefreshCw, Search } from 'lucide-react';
 import { fetchApolloCredits, type ApolloCreditUsageStats } from '../../utils/apolloApi';
 
@@ -33,7 +33,19 @@ export function ApolloCreditsIndicator() {
       .finally(() => setLoading(false));
   }, []);
 
+  // hasLoadedRef, not a bare useEffect(() => refresh(), []) — a real,
+  // confirmed bug found while auditing Apollo request counts: React
+  // StrictMode's dev-only mount->cleanup->mount double-invoke was firing
+  // this free-but-real usage-stats call twice on every single mount. A
+  // ref survives that simulated unmount (same fiber, only effects are
+  // re-run) but correctly resets on a genuine remount later (this
+  // component unmounts for real when its parent modal closes) — same
+  // pattern CallsView.tsx's own hasAutoLoadedRef already uses for the
+  // identical class of bug.
+  const hasLoadedRef = useRef(false);
   useEffect(() => {
+    if (hasLoadedRef.current) return;
+    hasLoadedRef.current = true;
     refresh();
   }, [refresh]);
 

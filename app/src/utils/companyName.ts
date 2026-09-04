@@ -37,3 +37,20 @@ export function cleanCompanyNameForSearch(raw: string): string {
   const cleaned = tokens.join(' ').trim();
   return cleaned || raw.trim();
 }
+
+/** Best-effort ".com" domain guess from a company name (e.g. "Microsoft"
+ * -> "microsoft.com") — a rough starting point for the "Įmonės domenas"
+ * field in ApolloContactSearchModal.tsx, never an authoritative lookup
+ * (there's no way to actually know a company's real domain from its name
+ * alone; a real domain for a Lithuanian entity in particular often looks
+ * nothing like a literal transliteration of its legal name — the exact
+ * reason cleanCompanyNameForSearch's own doc comment above exists).
+ * Always left fully editable; returns '' when nothing usable remains
+ * after stripping legal-entity noise, rather than guessing at empty
+ * input. */
+export function guessCompanyDomain(raw: string): string {
+  const cleaned = cleanCompanyNameForSearch(raw)
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+  return cleaned ? `${cleaned}.com` : '';
+}

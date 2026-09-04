@@ -3276,6 +3276,33 @@ tr.row-drop-end td {
   color: var(--text-muted);
 }
 
+.apollo-company-quick-search {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.apollo-company-quick-search-row {
+  display: flex;
+  gap: 0.4rem;
+}
+.apollo-company-quick-search-row input {
+  flex: 1;
+  min-width: 0;
+}
+.apollo-company-quick-search-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 0.6rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+.apollo-company-quick-search-btn:disabled {
+  opacity: 0.5;
+}
+
 .apollo-search-modal-back {
   align-self: flex-start;
   border: 1px solid var(--border);
