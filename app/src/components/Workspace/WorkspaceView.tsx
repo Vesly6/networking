@@ -4,6 +4,7 @@ import { useAuthStore } from '../../store/useAuthStore';
 import { confirmDeleteTable } from '../../utils/confirmDeleteTable';
 import { countRowsForTable } from '../../db/db';
 import { BrandLogo } from '../BrandLogo';
+import { IrmsLogo } from '../IrmsLogo';
 import { ThemeToggle } from '../ThemeToggle';
 import { ImportHistoryModal } from './ImportHistoryModal';
 import { Package } from 'lucide-react';
@@ -103,7 +104,7 @@ export function WorkspaceView({
       <div className="workspace-header">
         <div className="brand">
           <BrandLogo />
-          <h2>Darbo sritis</h2>
+          <IrmsLogo />
         </div>
         <div className="workspace-header-actions">
           <ThemeToggle />

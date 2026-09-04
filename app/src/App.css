@@ -208,6 +208,11 @@ svg.icon {
   object-fit: contain;
 }
 
+.irms-logo {
+  height: 40px;
+  width: auto;
+}
+
 .back-to-workspace {
   border: none;
   background: transparent;
