@@ -15,6 +15,18 @@ interface PeopleFilterFormProps {
   onChange: (params: PeopleSearchParams) => void;
   onSubmit: () => void;
   loading: boolean;
+  /** Hides the whole "Įmonė" section (CompanyLookupInput + the plain
+   * domain field) below — on explicit request, for ApolloContactSearchModal.tsx's
+   * people-search step specifically: that flow already made the user
+   * explicitly pick one exact company in its own first step (shown in
+   * the "Pasirinkta įmonė: ..." hint just above this form), so offering
+   * a second, separate company lookup here — its own paid Apollo call —
+   * was pure redundancy: a real, reported case of a user paying for a
+   * second company-search credit to re-find a company the app already
+   * had locked in. SearchView.tsx's own "Žmonės" mode omits this prop
+   * (defaults to false) since there this section is the *only* way to
+   * filter people by employer at all, not a redundant second path. */
+  hideCompanySection?: boolean;
 }
 
 const splitList = (v: string): string[] | undefined => {
@@ -41,7 +53,7 @@ const count = (...vals: Array<unknown>) => vals.filter((v) => v !== undefined &&
  * Company Search endpoint first — the same two-step Apollo's own product
  * does internally, just not hidden behind an undocumented endpoint this
  * app doesn't have access to. */
-export function PeopleFilterForm({ params, onChange, onSubmit, loading }: PeopleFilterFormProps) {
+export function PeopleFilterForm({ params, onChange, onSubmit, loading, hideCompanySection }: PeopleFilterFormProps) {
   const [seniorities, setSeniorities] = useState<string[]>(params.person_seniorities ?? []);
   const [emailStatuses, setEmailStatuses] = useState<string[]>(params.contact_email_status ?? []);
   const [employeeRanges, setEmployeeRanges] = useState<string[]>(params.organization_num_employees_ranges ?? []);
@@ -198,6 +210,7 @@ export function PeopleFilterForm({ params, onChange, onSubmit, loading }: People
         </div>
       </FilterAccordionSection>
 
+      {!hideCompanySection && (
       <FilterAccordionSection title="Įmonė" activeCount={companyLookupIds.length + (params.q_organization_domains_list?.length ?? 0)} defaultOpen>
         <div className="search-filter-field">
           <span>Įmonės pavadinimas</span>
@@ -256,6 +269,7 @@ export function PeopleFilterForm({ params, onChange, onSubmit, loading }: People
           />
         </label>
       </FilterAccordionSection>
+      )}
 
       <FilterAccordionSection title="Lokacija" activeCount={params.person_locations?.length ?? 0} defaultOpen>
         <div className="search-filter-field">

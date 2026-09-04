@@ -571,6 +571,14 @@ export function ApolloContactSearchModal({
                 onChange={setPeopleParams}
                 onSubmit={() => void runSearchAndCollapse(runPeopleSearch)}
                 loading={peopleLoading}
+                // The company step above already made the user explicitly
+                // pick one exact company (shown in the "Pasirinkta įmonė"
+                // hint right above this form) — offering PeopleFilterForm's
+                // own separate "Įmonė" company-lookup section here too was
+                // a real, reported redundancy: a second, paid Apollo
+                // company-search credit to re-find a company the app
+                // already had locked in.
+                hideCompanySection
               />
             </div>
             )}
