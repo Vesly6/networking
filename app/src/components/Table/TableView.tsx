@@ -964,6 +964,19 @@ export function TableView({
   const lastDragClientRef = useRef<{ x: number; y: number } | null>(null);
   const dragScrollFrameRef = useRef<number | null>(null);
 
+  // A plain click on a row-number/col-letter naturally jitters the cursor
+  // by a pixel or two between mousedown and mouseup — with row heights as
+  // small as ~34px, that was enough to occasionally cross into the next
+  // row's mouseenter zone (or nudge applyDragSelection()'s Y-based index
+  // math past the boundary), silently turning a single click into a
+  // 2-row selection. dragStartClientRef/hasDraggedPastThresholdRef gate
+  // BOTH extension mechanisms (mouseenter below, and the mousemove-driven
+  // applyDragSelection() here) behind one shared "has this actually moved
+  // far enough to count as a real drag" check, so neither can move the
+  // selection focus off the clicked row until real drag movement happens.
+  const dragStartClientRef = useRef<{ x: number; y: number } | null>(null);
+  const hasDraggedPastThresholdRef = useRef(false);
+
   useEffect(() => {
     const AUTO_SCROLL_MARGIN = 40;
     const AUTO_SCROLL_MAX_SPEED = 18;
@@ -1022,6 +1035,13 @@ export function TableView({
     const handleMouseMove = (e: MouseEvent) => {
       if (!isRowRangeDraggingRef.current && !isColRangeDraggingRef.current) return;
       lastDragClientRef.current = { x: e.clientX, y: e.clientY };
+      if (!hasDraggedPastThresholdRef.current) {
+        const start = dragStartClientRef.current;
+        const dx = start ? e.clientX - start.x : 0;
+        const dy = start ? e.clientY - start.y : 0;
+        if (Math.hypot(dx, dy) < DRAG_SELECT_THRESHOLD_PX) return;
+        hasDraggedPastThresholdRef.current = true;
+      }
       applyDragSelection();
       if (dragScrollFrameRef.current === null) dragScrollFrameRef.current = requestAnimationFrame(tick);
     };
@@ -1175,7 +1195,7 @@ export function TableView({
   // bar (all of which only ever read the cell range) had no idea a row
   // selection had been made, so e.g. "Color" would silently repaint just
   // whatever single cell was last clicked instead of the selected rows.
-  const handleRowNumberMouseDown = (index: number, extend: boolean) => {
+  const handleRowNumberMouseDown = (index: number, extend: boolean, clientX: number, clientY: number) => {
     const anchorIndex = extend && rowRangeAnchor !== null ? rowRangeAnchor : index;
     if (extend && rowRangeAnchor !== null) setRowRangeFocus(index);
     else {
@@ -1184,11 +1204,13 @@ export function TableView({
     }
     setIsRowRangeDragging(true);
     isRowRangeDraggingRef.current = true;
+    dragStartClientRef.current = { x: clientX, y: clientY };
+    hasDraggedPastThresholdRef.current = false;
     setRangeAnchor({ r: anchorIndex, c: 0 });
     setRangeFocus({ r: index, c: Math.max(0, columns.length - 1) });
   };
   const handleRowNumberMouseEnter = (index: number) => {
-    if (!isRowRangeDragging || rowRangeAnchor === null) return;
+    if (!isRowRangeDragging || rowRangeAnchor === null || !hasDraggedPastThresholdRef.current) return;
     setRowRangeFocus(index);
     setRangeFocus({ r: index, c: Math.max(0, columns.length - 1) });
   };
@@ -1205,7 +1227,7 @@ export function TableView({
   }, [colRangeAnchor, colRangeFocus, columns]);
 
   // Same reasoning as handleRowNumberMouseDown above, mirrored for columns.
-  const handleColLetterMouseDown = (index: number, extend: boolean) => {
+  const handleColLetterMouseDown = (index: number, extend: boolean, clientX: number, clientY: number) => {
     const anchorIndex = extend && colRangeAnchor !== null ? colRangeAnchor : index;
     if (extend && colRangeAnchor !== null) setColRangeFocus(index);
     else {
@@ -1214,11 +1236,13 @@ export function TableView({
     }
     setIsColRangeDragging(true);
     isColRangeDraggingRef.current = true;
+    dragStartClientRef.current = { x: clientX, y: clientY };
+    hasDraggedPastThresholdRef.current = false;
     setRangeAnchor({ r: 0, c: anchorIndex });
     setRangeFocus({ r: Math.max(0, filteredSortedRows.length - 1), c: index });
   };
   const handleColLetterMouseEnter = (index: number) => {
-    if (!isColRangeDragging || colRangeAnchor === null) return;
+    if (!isColRangeDragging || colRangeAnchor === null || !hasDraggedPastThresholdRef.current) return;
     setColRangeFocus(index);
     setRangeFocus({ r: Math.max(0, filteredSortedRows.length - 1), c: index });
   };
@@ -1264,6 +1288,8 @@ export function TableView({
       }
       isRowRangeDraggingRef.current = false;
       isColRangeDraggingRef.current = false;
+      dragStartClientRef.current = null;
+      hasDraggedPastThresholdRef.current = false;
       setIsRangeDragging(false);
       setIsRowRangeDragging(false);
       setIsColRangeDragging(false);
@@ -3017,7 +3043,7 @@ export function TableView({
                         onMouseDown={(e) => {
                           if (e.button !== 0) return;
                           e.stopPropagation();
-                          handleColLetterMouseDown(index, e.shiftKey);
+                          handleColLetterMouseDown(index, e.shiftKey, e.clientX, e.clientY);
                         }}
                         onMouseEnter={() => handleColLetterMouseEnter(index)}
                         onClick={(e) => e.stopPropagation()}
@@ -3176,7 +3202,7 @@ export function TableView({
                           onMouseDown={(e) => {
                             if (e.button !== 0) return;
                             e.stopPropagation();
-                            handleRowNumberMouseDown(index, e.shiftKey);
+                            handleRowNumberMouseDown(index, e.shiftKey, e.clientX, e.clientY);
                           }}
                           onMouseEnter={() => handleRowNumberMouseEnter(index)}
                           onClick={(e) => e.stopPropagation()}
