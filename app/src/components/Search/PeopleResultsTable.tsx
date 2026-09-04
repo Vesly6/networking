@@ -1,6 +1,6 @@
 import { useSearchStore } from '../../store/useSearchStore';
 import { useAddApolloResultToTable } from '../../utils/addApolloToTable';
-import type { ApolloSearchPerson } from '../../utils/apolloApi';
+import { pickBestPhoneNumber, type ApolloSearchPerson } from '../../utils/apolloApi';
 import { Link, Mail, Phone } from 'lucide-react';
 
 function PersonRow({ person }: { person: ApolloSearchPerson }) {
@@ -25,7 +25,11 @@ function PersonRow({ person }: { person: ApolloSearchPerson }) {
   const lastName = enriched?.last_name || person.last_name_obfuscated;
   const displayName = [firstName, lastName].filter(Boolean).join(' ');
   const email = enriched?.email ?? enriched?.contact?.email;
-  const phone = phoneNumbers?.[0]?.sanitized_number;
+  // pickBestPhoneNumber, not [0] — Apollo's phone_numbers array isn't
+  // ordered "most personal first" (see apolloApi.ts's own doc comment on
+  // a real, reported case where a company switchboard number outranked
+  // the person's actual mobile).
+  const phone = pickBestPhoneNumber(phoneNumbers)?.sanitized_number;
 
   return (
     <tr>

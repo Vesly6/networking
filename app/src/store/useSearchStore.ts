@@ -10,6 +10,7 @@ import {
   type ApolloSearchPerson,
   type ApolloCompany,
   type ApolloEnrichedPerson,
+  type ApolloPhoneNumber,
 } from '../utils/apolloApi';
 import { usePendingPhoneSearchStore } from './usePendingPhoneSearchStore';
 
@@ -58,7 +59,7 @@ interface SearchState {
   // with its own pending/error states, deliberately never triggered by
   // revealEmail so clicking "Find email" never silently also spends the
   // larger phone credit cost.
-  phoneNumbersById: Record<string, Array<{ sanitized_number: string; status_cd?: string; confidence_cd?: string | null }>>;
+  phoneNumbersById: Record<string, Array<ApolloPhoneNumber & { status_cd?: string; confidence_cd?: string | null }>>;
   phonePendingIds: Record<string, boolean>;
   phoneErrors: Record<string, string>;
   /** "Find phone" — starts Apollo's async phone lookup, then polls for the

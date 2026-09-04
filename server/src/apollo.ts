@@ -280,7 +280,12 @@ export interface ApolloEnrichedPerson {
   contact?: {
     id: string;
     email: string | null;
-    phone_numbers?: Array<{ raw_number: string; sanitized_number: string; status: string }>;
+    // `type` (e.g. "mobile", "work_hq" — the company's own switchboard,
+    // not anything specific to this person) is real, present data Apollo
+    // sends here, not sorted "most personal first" — see apolloApi.ts's
+    // pickBestPhoneNumber on the frontend for why every phone-selecting
+    // call site ranks by this field instead of trusting array position.
+    phone_numbers?: Array<{ raw_number: string; sanitized_number: string; status: string; type?: string | null }>;
     [key: string]: unknown;
   };
   organization?: {
@@ -354,7 +359,12 @@ export async function enrichPerson(params: PeopleEnrichParams, apiKey: string): 
  * confirmed working end-to-end against a live account. */
 export type WebhookPollResult =
   | { status: 'processing'; retryAfterSeconds: number }
-  | { status: 'ready'; phoneNumbers: Array<{ sanitized_number: string; status_cd?: string; confidence_cd?: string | null }> }
+  // type_cd is this shape's equivalent of the sync contact.phone_numbers'
+  // `type` field above — same "not personal-first ordered" caveat.
+  | {
+      status: 'ready';
+      phoneNumbers: Array<{ sanitized_number: string; status_cd?: string; confidence_cd?: string | null; type_cd?: string | null }>;
+    }
   | { status: 'error'; message: string };
 
 export async function pollWebhookResult(requestId: string, apiKey: string): Promise<WebhookPollResult> {

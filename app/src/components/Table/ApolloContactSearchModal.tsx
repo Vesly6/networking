@@ -7,6 +7,7 @@ import {
   searchPeople,
   enrichPerson,
   pollPhoneReveal,
+  pickBestPhoneNumber,
   type ApolloCompany,
   type ApolloSearchPerson,
   type CompanySearchParams,
@@ -372,7 +373,13 @@ export function ApolloContactSearchModal({
       // already arrived and paying the full "can take several minutes"
       // async cost for no reason. Checked first, before touching
       // request_id/polling at all.
-      const syncPhone = result.person?.contact?.phone_numbers?.[0]?.sanitized_number;
+      //
+      // pickBestPhoneNumber, not [0] — a second real, reported bug:
+      // Apollo's phone_numbers array isn't ordered "most personal first,"
+      // and for a real contact tested live, a "work_hq" entry (the
+      // company's own switchboard) sat ahead of the person's actual
+      // "mobile" number. See apolloApi.ts's own doc comment.
+      const syncPhone = pickBestPhoneNumber(result.person?.contact?.phone_numbers)?.sanitized_number;
       if (syncPhone) {
         applyPhone(syncPhone);
       } else if (result.request_id) {
@@ -388,7 +395,7 @@ export function ApolloContactSearchModal({
             for (;;) {
               const poll = await pollPhoneReveal(requestId);
               if (poll.status === 'ready') {
-                const phone = poll.phoneNumbers[0]?.sanitized_number ?? '';
+                const phone = pickBestPhoneNumber(poll.phoneNumbers)?.sanitized_number ?? '';
                 if (phone) applyPhone(phone);
                 return;
               }

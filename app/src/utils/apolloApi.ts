@@ -130,11 +130,72 @@ export interface ApolloEnrichedPerson {
   headline: string | null;
   contact?: {
     email: string | null;
-    phone_numbers?: Array<{ raw_number: string; sanitized_number: string; status: string }>;
+    phone_numbers?: ApolloPhoneNumber[];
     [key: string]: unknown;
   };
   organization?: { name: string | null; domain: string | null; [key: string]: unknown };
   [key: string]: unknown;
+}
+
+/** Apollo tags every phone number it returns with a `type` (the
+ * synchronous person.contact.phone_numbers shape) or `type_cd` (the async
+ * webhook_result shape) field — real observed values include "mobile" and
+ * "work_hq" (the company's own switchboard, not anything specific to this
+ * person), confirmed live against Apollo's actual API for a real contact.
+ * Neither shape's array order is a documented "most personal first"
+ * contract, and for that same real contact "work_hq" sat ahead of
+ * "mobile" — this is what caused a real, reported bug (a saved contact's
+ * phone ending up as the company's front-desk number instead of their own
+ * mobile) when the code simply took phoneNumbers[0]. See
+ * pickBestPhoneNumber below, which every phone-selecting call site should
+ * go through instead of indexing the array directly. */
+export interface ApolloPhoneNumber {
+  sanitized_number: string;
+  raw_number?: string;
+  type?: string | null;
+  type_cd?: string | null;
+  [key: string]: unknown;
+}
+
+// Lower tier = preferred. A personal mobile number is what "this
+// person's phone number" should mean; a company switchboard (work_hq) is
+// the least specific answer to that question, so it's ranked last rather
+// than excluded outright — still better than no number at all. Missing/
+// unrecognized type values sit in the middle: no better than a known
+// personal number, no worse than a known company one.
+const PHONE_TYPE_TIER: Record<string, number> = {
+  mobile: 0,
+  cell: 0,
+  work_direct: 1,
+  direct_dial: 1,
+  home: 2,
+  other: 2,
+  work_hq: 3,
+};
+
+function phoneTypeTier(entry: ApolloPhoneNumber): number {
+  const key = (entry.type ?? entry.type_cd ?? '').toLowerCase();
+  return PHONE_TYPE_TIER[key] ?? 2;
+}
+
+/** Picks the single best phone number out of an Apollo phone_numbers
+ * array, ranked by type (see PHONE_TYPE_TIER above) rather than by
+ * whatever position Apollo happened to return it in. Ties keep the
+ * earlier entry, so array order still acts as a tiebreaker between two
+ * numbers of the same tier — it's only trusted as the sole signal when
+ * genuinely nothing else distinguishes them. */
+export function pickBestPhoneNumber<T extends ApolloPhoneNumber>(entries: T[] | undefined | null): T | undefined {
+  if (!entries || entries.length === 0) return undefined;
+  let best = entries[0];
+  let bestTier = phoneTypeTier(best);
+  for (let i = 1; i < entries.length; i++) {
+    const tier = phoneTypeTier(entries[i]);
+    if (tier < bestTier) {
+      best = entries[i];
+      bestTier = tier;
+    }
+  }
+  return best;
 }
 
 export interface PhoneEnrichmentInfo {
@@ -153,7 +214,7 @@ export interface PhoneEnrichmentInfo {
  * why the top-level id is the correct one to use. */
 export type PhonePollResult =
   | { status: 'processing'; retryAfterSeconds: number }
-  | { status: 'ready'; phoneNumbers: Array<{ sanitized_number: string; status_cd?: string; confidence_cd?: string | null }> }
+  | { status: 'ready'; phoneNumbers: Array<ApolloPhoneNumber & { status_cd?: string; confidence_cd?: string | null }> }
   | { status: 'error'; message: string };
 
 export function pollPhoneReveal(requestId: string): Promise<PhonePollResult> {
