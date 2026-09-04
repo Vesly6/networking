@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useState } from 'react';
-import { RefreshCw, Phone, Search } from 'lucide-react';
+import { RefreshCw, Search } from 'lucide-react';
 import { fetchApolloCredits, type ApolloCreditUsageStats } from '../../utils/apolloApi';
 
 /** Small credits-remaining readout for the Apollo integration, on
  * explicit request after direct_dial_credit (the pool phone reveals draw
  * from — see apolloApi.ts's own doc comment) ran out mid-cycle with no
  * in-app warning at all; previously the only way to see this was
- * Apollo's own separate dashboard. Shows direct_dial_credit (phone
- * reveals) and lead_credit (search/enrichment) — the two buckets this
- * app's own Apollo features actually spend from.
+ * Apollo's own separate dashboard. Shows lead_credit (search/enrichment)
+ * only — direct_dial_credit was deliberately dropped from this display
+ * on explicit request, since phone reveals are now mobile-only
+ * (pickBestPhoneNumber) and no longer something to watch here.
  *
  * Mounted independently in both places credits get spent here:
  * SearchView.tsx (Paieška tab) and ApolloContactSearchModal.tsx (the "+
@@ -47,7 +48,6 @@ export function ApolloCreditsIndicator() {
     );
   }
 
-  const phone = stats?.direct_dial_credit;
   const lead = stats?.lead_credit;
 
   return (
@@ -56,15 +56,6 @@ export function ApolloCreditsIndicator() {
         <span className="apollo-credits-loading">Kraunami kreditai…</span>
       ) : (
         <>
-          {phone && (
-            <span
-              className={`apollo-credits-item ${phone.left_over === 0 ? 'apollo-credits-empty' : ''}`}
-              title="Telefono (mobile/direct dial) kreditai"
-            >
-              <Phone className="icon" size={13} />
-              {phone.left_over.toLocaleString('lt-LT')} / {phone.limit.toLocaleString('lt-LT')}
-            </span>
-          )}
           {lead && (
             <span className="apollo-credits-item" title="Paieškos / praturtinimo kreditai">
               <Search className="icon" size={13} />

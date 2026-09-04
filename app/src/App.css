@@ -4558,10 +4558,6 @@ tr.row-drop-end td {
   gap: 0.25rem;
   white-space: nowrap;
 }
-.apollo-credits-item.apollo-credits-empty {
-  color: var(--danger);
-  font-weight: 600;
-}
 .apollo-credits-loading {
   color: var(--text-muted);
 }
