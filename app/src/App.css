@@ -3317,30 +3317,6 @@ tr.row-drop-end td {
   background: var(--bg-hover);
 }
 
-.apollo-search-modal-company-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.6rem;
-  padding: 0.55rem 0.7rem;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-}
-.apollo-search-modal-company-row:hover {
-  border-color: var(--border-strong);
-  background: var(--bg-alt);
-}
-
-.apollo-search-modal-company-info {
-  min-width: 0;
-}
-
-.apollo-search-modal-company-name {
-  font-weight: 600;
-  font-size: 0.88rem;
-  color: var(--text);
-}
-
 .apollo-search-modal-bulk-row {
   display: flex;
   align-items: center;

@@ -3,14 +3,11 @@ import { createPortal } from 'react-dom';
 import { PeopleFilterForm } from '../Search/PeopleFilterForm';
 import { ApolloCreditsIndicator } from '../Search/ApolloCreditsIndicator';
 import {
-  searchCompanies,
   searchPeople,
   enrichPerson,
   pollPhoneReveal,
   pickBestPhoneNumber,
-  type ApolloCompany,
   type ApolloSearchPerson,
-  type CompanySearchParams,
   type PeopleSearchParams,
 } from '../../utils/apolloApi';
 import { cleanCompanyNameForSearch, guessCompanyDomain } from '../../utils/companyName';
@@ -54,17 +51,6 @@ function lastInitialOf(v: string | null | undefined): string {
   return s ? s.replace(/\./g, '').charAt(0).toLowerCase() : '';
 }
 
-// Fallback for the rare Apollo company record with a website_url but no
-// primary_domain — most already have primary_domain set directly.
-function extractHostname(url: string | null | undefined): string | null {
-  if (!url) return null;
-  try {
-    return new URL(/^https?:\/\//i.test(url) ? url : `https://${url}`).hostname.replace(/^www\./, '');
-  } catch {
-    return null;
-  }
-}
-
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 // Apollo's own docs just say "can take several minutes" with no hard
 // number — this used to be 3 minutes (matching useSearchStore.ts's poll),
@@ -77,31 +63,24 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 // clearly instead of polling forever if something is genuinely stuck.
 const PHONE_POLL_MAX_MS = 5 * 60 * 1000;
 
-// Session-scoped (this page load only — module-level, not component state,
-// so it survives this modal closing and reopening for a different row) —
-// on explicit request: checking the same domain/name twice in one session
-// shouldn't re-spend a company-search credit for an answer already known.
-// Keyed by exactly what was searched (domain takes priority — see
-// runCompanySearch below), case-insensitive.
-const companySearchCache = new Map<string, ApolloCompany[]>();
-
-/** A real two-step search: confirm/replace the company first (a compact
- * name+domain form — see runCompanySearch below for why this is
- * deliberately NOT the full CompanyFilterForm the "Paieška" tab uses;
- * this step only ever needs a precise single-company check, not a broad
- * multi-filter discovery search), then search people at the confirmed
- * company with PeopleFilterForm's full filter set.
+/** Searches people directly by domain — no company-search step at all, on
+ * explicit request after it became clear that Apollo bills company search
+ * (/mixed_companies/search) 1 credit/page regardless of whether it's
+ * triggered automatically or by an explicit click, while people search
+ * (/mixed_people/api_search, what this modal actually needs) is free and
+ * already accepts q_organization_domains_list directly — there was never
+ * a real need to pay for a company lookup just to resolve a domain this
+ * modal usually already has a good guess for.
  *
- * Neither step auto-searches on its own — on explicit request, after a
- * real reported problem: this modal used to run a paid company search
- * (Apollo bills 1 credit/page) automatically the instant it opened, every
- * single time, whether or not the user actually wanted to look anyone
- * up. Both the name and domain fields are pre-filled from the row's own
- * known data as a convenience, but nothing is sent to Apollo until the
- * user explicitly clicks the search button (or presses Enter in either
- * field). Company search itself is also session-cached (see
- * companySearchCache above) so re-checking the same domain/name twice
- * doesn't spend a second credit on an answer this page already has. */
+ * Both the name and domain fields are pre-filled from the row's own known
+ * data (cleaned name, best-effort guessed domain — see
+ * guessCompanyDomain in companyName.ts) but nothing is sent to Apollo
+ * until the user explicitly submits (Enter in either field, or the
+ * search button). Domain is what's actually searched on; if the field is
+ * empty but a name is present, a domain is guessed from the name at
+ * submit time. If a domain search comes up empty, the fix is editing
+ * either field and searching again — there's no separate "browse
+ * companies and pick one" step to fall back to anymore. */
 export function ApolloContactSearchModal({
   initialCompanyName,
   existingContactsRaw,
@@ -128,22 +107,9 @@ export function ApolloContactSearchModal({
   const onUpdateContactRef = useRef(onUpdateContact);
   onUpdateContactRef.current = onUpdateContact;
 
-  // Pre-filled from the row's own known data (cleaned name, best-effort
-  // guessed domain) but never auto-submitted — on explicit request, a
-  // real reported problem: this modal used to run a paid company search
-  // (Apollo bills 1 credit/page for /mixed_companies/search) the instant
-  // it opened, every time, whether or not the user actually wanted to
-  // look anyone up. Both fields stay fully editable; searching now only
-  // ever happens from the explicit button click in runCompanySearch
-  // below (also submittable via Enter, since both live inside a <form>).
   const [companyNameQuery, setCompanyNameQuery] = useState(cleanCompanyNameForSearch(initialCompanyName));
   const [companyDomainQuery, setCompanyDomainQuery] = useState(() => guessCompanyDomain(initialCompanyName));
-  const [companyResults, setCompanyResults] = useState<ApolloCompany[]>([]);
-  const [companyLoading, setCompanyLoading] = useState(false);
-  const [companyError, setCompanyError] = useState('');
-  const [companySearched, setCompanySearched] = useState(false);
 
-  const [selectedCompany, setSelectedCompany] = useState<ApolloCompany | null>(null);
   const [peopleParams, setPeopleParams] = useState<PeopleSearchParams>({ per_page: 100 });
   const [peopleResults, setPeopleResults] = useState<ApolloSearchPerson[]>([]);
   const [peopleTotalEntries, setPeopleTotalEntries] = useState(0);
@@ -151,19 +117,15 @@ export function ApolloContactSearchModal({
   const [peopleError, setPeopleError] = useState('');
   const [peopleSearched, setPeopleSearched] = useState(false);
   const [addingPersonIds, setAddingPersonIds] = useState<Set<string>>(new Set());
-  // Only gates the PEOPLE step's filters now (the company step's own
-  // compact name+domain form has nothing worth collapsing, and the header
-  // toggle button is hidden entirely until a company is picked — see the
-  // header JSX below). Mobile only (see .apollo-search-modal-filters'
-  // collapsed state in App.css) — stacking the filter form above results
-  // (instead of the fixed 320px side-by-side column that never fit a
-  // phone width) still left a real, reported problem of its own:
-  // PeopleFilterForm alone runs to eight-plus collapsible sections, tall
-  // enough on a phone to push every actual result off the bottom of the
-  // screen with no way to get back to a compact view short of scrolling
-  // all the way past it again. Starts expanded for the same reason
-  // SearchView's own toggle does — this is what a first-time visitor to
-  // this step needs to see first.
+  // Mobile only (see .apollo-search-modal-filters' collapsed state in
+  // App.css) — stacking the filter form above results (instead of the
+  // fixed 320px side-by-side column that never fit a phone width) still
+  // left a real, reported problem of its own: PeopleFilterForm alone runs
+  // to eight-plus collapsible sections, tall enough on a phone to push
+  // every actual result off the bottom of the screen with no way to get
+  // back to a compact view short of scrolling all the way past it again.
+  // Starts expanded for the same reason SearchView's own toggle does —
+  // this is what a first-time visitor needs to see first.
   const [filtersExpanded, setFiltersExpanded] = useState(true);
   // Same "auto-collapse once a search actually runs" behavior as
   // SearchView's own runSearchAndCollapse — on request, manually tapping
@@ -197,78 +159,6 @@ export function ApolloContactSearchModal({
   const finishPhoneSearch = usePendingPhoneSearchStore((s) => s.finish);
   const pendingPhoneCount = usePendingPhoneSearchStore((s) => s.count);
 
-  // Only ever called from an explicit click/Enter on the company-search
-  // form below — never automatically. Domain takes priority over name
-  // when both are present: a domain is a precise, single-company lookup,
-  // while a bare name is a broad keyword match that can return many
-  // candidates — on explicit request, "не делать широкий поиск... если
-  // для проверки конкретной компании уже есть точный домен." Checks the
-  // session cache first (companySearchCache above) so re-checking the
-  // same domain/name twice doesn't re-spend a credit on an answer this
-  // page already has.
-  const runCompanySearch = async () => {
-    const domain = companyDomainQuery.trim();
-    const name = companyNameQuery.trim();
-    if (!domain && !name) return;
-    const cacheKey = domain ? `domain:${domain.toLowerCase()}` : `name:${name.toLowerCase()}`;
-
-    const cached = companySearchCache.get(cacheKey);
-    if (cached) {
-      setCompanyResults(cached);
-      setCompanySearched(true);
-      setCompanyError(cached.length === 0 ? 'Įmonių nerasta — pabandykite kitus raktažodžius' : '');
-      return;
-    }
-
-    setCompanyLoading(true);
-    setCompanyError('');
-    try {
-      const params: CompanySearchParams = domain
-        ? { q_organization_domains_list: [domain], per_page: 10 }
-        : { q_organization_name: name, per_page: 10 };
-      const res = await searchCompanies(params);
-      setCompanyResults(res.companies);
-      companySearchCache.set(cacheKey, res.companies);
-      setCompanySearched(true);
-      if (res.companies.length === 0) setCompanyError('Įmonių nerasta — pabandykite kitus raktažodžius');
-    } catch (err) {
-      setCompanyError(err instanceof Error ? err.message : 'Nepavyko atlikti paieškos');
-    } finally {
-      setCompanyLoading(false);
-    }
-  };
-
-  const pickCompany = async (company: ApolloCompany) => {
-    setSelectedCompany(company);
-    setPeopleResults([]);
-    setPeopleError('');
-    setPeopleSearched(false);
-    // The domain is what actually works — confirmed live against the real
-    // API: organization_ids from a freshly-resolved company often comes
-    // back from People Search with zero results even for companies with
-    // thousands of people indexed (a real, confirmed bug: Vinted 0 vs 2140
-    // via domain, Maxima LT 0 vs 478, SEB 0 vs 13097, Swedbank 0 vs
-    // 10528) — Apollo's organization_id linkage is unreliable for a lot of
-    // real companies, but the domain hits a far more complete index.
-    // organization_ids is used only as a fallback when there's no domain
-    // at all — sending *both* together was tried and is a second, separate
-    // confirmed bug: Apollo intersects multiple organization filters
-    // instead of treating them as alternatives, so pairing a working
-    // domain with the same broken organization_id silently zeroes the
-    // combined result back down to 0 (verified directly: domain alone 478,
-    // organization_ids alone 0, both together also 0).
-    const domain = company.primary_domain || extractHostname(company.website_url);
-    const params: PeopleSearchParams = domain
-      ? { per_page: 100, q_organization_domains_list: [domain] }
-      : { per_page: 100, organization_ids: [company.id] };
-    setPeopleParams(params);
-    // Same reasoning as the company step's own auto-run above — picking a
-    // company and landing on its people results is the primary flow here,
-    // not the manual "resubmit the people filter form" path, so it needs
-    // the same auto-collapse.
-    await runSearchAndCollapse(() => runPeopleSearchWith(params));
-  };
-
   const runPeopleSearchWith = async (params: PeopleSearchParams) => {
     setPeopleLoading(true);
     setPeopleError('');
@@ -277,16 +167,38 @@ export function ApolloContactSearchModal({
       setPeopleResults(res.people);
       setPeopleTotalEntries(res.total_entries);
       setPeopleSearched(true);
-      if (res.people.length === 0) setPeopleError('Šioje įmonėje žmonių nerasta');
+      if (res.people.length === 0) setPeopleError('Žmonių nerasta pagal šį domeną — pabandykite kitą domeną arba pavadinimą');
     } catch (err) {
       setPeopleError(err instanceof Error ? err.message : 'Nepavyko atlikti paieškos');
     } finally {
       setPeopleLoading(false);
     }
   };
-  // A filter-form resubmit is a *new* search, not "keep paging" — always
-  // starts back at page 1, even if the previous search had paged further
-  // in. goToPage (below) is the only thing that ever advances past page 1.
+
+  // The only Apollo call this modal's own quick-search form ever makes —
+  // straight to people search, never company search. Domain takes
+  // priority when present (a precise, single-company filter); if the
+  // domain field is empty but a name is, a domain is guessed from the
+  // name right here rather than stored, so editing the name alone and
+  // resubmitting always re-derives fresh rather than reusing a stale
+  // guess. q_organization_domains_list, not organization_ids — confirmed
+  // live against the real API: organization_ids from a freshly-resolved
+  // company often returns zero people even for companies with thousands
+  // indexed (Vinted 0 vs 2140, Maxima LT 0 vs 478, SEB 0 vs 13097 — the
+  // same finding that originally motivated preferring domain over id in
+  // the old company-search flow this replaces).
+  const runQuickPeopleSearch = async () => {
+    const domain = companyDomainQuery.trim() || guessCompanyDomain(companyNameQuery.trim());
+    if (!domain) return;
+    const params: PeopleSearchParams = { per_page: 100, q_organization_domains_list: [domain] };
+    setPeopleParams(params);
+    await runSearchAndCollapse(() => runPeopleSearchWith(params));
+  };
+
+  // A filter-form resubmit (PeopleFilterForm's own "Ieškoti" button) is a
+  // *new* search, not "keep paging" — always starts back at page 1, even
+  // if the previous search had paged further in. goToPage (below) is the
+  // only thing that ever advances past page 1.
   const runPeopleSearch = () => {
     const next = { ...peopleParams, page: 1 };
     setPeopleParams(next);
@@ -300,6 +212,12 @@ export function ApolloContactSearchModal({
     setPeopleParams(next);
     void runPeopleSearchWith(next);
   };
+
+  // What's actually being searched on right now, for display only — the
+  // quick-search fields above can drift from this once the user starts
+  // editing them again after a search already ran; this always reflects
+  // the domain the *current* peopleResults actually came from.
+  const activeDomain = peopleParams.q_organization_domains_list?.[0];
 
   // Best-effort "already added to this row" lookup — see the doc comment on
   // existingContactsRaw above. pairKeys covers the common case (an existing
@@ -354,19 +272,17 @@ export function ApolloContactSearchModal({
       const result = await enrichPerson({
         id: person.id,
         name: [person.first_name, person.last_name_obfuscated].filter(Boolean).join(' ') || undefined,
-        organization_name: selectedCompany?.name ?? undefined,
-        domain: selectedCompany?.primary_domain ?? undefined,
+        organization_name: companyNameQuery.trim() || undefined,
+        domain: activeDomain || companyDomainQuery.trim() || undefined,
         reveal_phone_number: true,
       });
       const firstName = result.person?.first_name || person.first_name || '';
       const lastName = result.person?.last_name || person.last_name_obfuscated || '';
       const email = result.person?.email || result.person?.contact?.email || '';
-      // The selected company's own name (from Company Search, already
-      // confirmed by the user in step 1) — not person.organization?.name,
-      // which isn't guaranteed present on every People Search result and
-      // would otherwise make "Company" silently blank for some people even
-      // though the company is already known for certain at this point.
-      const company = selectedCompany?.name ?? '';
+      // person.organization?.name isn't guaranteed present on every People
+      // Search result — fall back to the row's own known company name
+      // (the quick-search field above) rather than leaving it blank.
+      const company = person.organization?.name || companyNameQuery.trim();
       const linkedinUrl = result.person?.linkedin_url || '';
 
       const id = randomUUID();
@@ -470,182 +386,142 @@ export function ApolloContactSearchModal({
         <div className="apollo-search-modal-header">
           <h2><Search className="icon" size={18} /> Ieškoti kontaktų</h2>
           <ApolloCreditsIndicator />
-          {selectedCompany && (
-            <button
-              type="button"
-              className="apollo-search-modal-filters-toggle"
-              onClick={() => setFiltersExpanded((v) => !v)}
-            >
-              {filtersExpanded ? <>Slėpti filtrus <ChevronUp className="icon" size={14} /></> : <>Filtrai <ChevronDown className="icon" size={14} /></>}
-            </button>
-          )}
+          <button
+            type="button"
+            className="apollo-search-modal-filters-toggle"
+            onClick={() => setFiltersExpanded((v) => !v)}
+          >
+            {filtersExpanded ? <>Slėpti filtrus <ChevronUp className="icon" size={14} /></> : <>Filtrai <ChevronDown className="icon" size={14} /></>}
+          </button>
           <button type="button" className="apollo-search-modal-close" onClick={onClose}>
             <X className="icon" size={16} />
           </button>
         </div>
 
-        {!selectedCompany ? (
-          <div className="apollo-search-modal-body">
-            <div className="apollo-search-modal-filters">
-              <p className="apollo-search-modal-hint">
-                Patikrinkite arba pakeiskite pavadinimą/domeną ir spauskite paieškos mygtuką — Apollo užklausa
-                vykdoma tik paspaudus jį, ne automatiškai atidarius šį langą.
-              </p>
-              <form
-                className="apollo-company-quick-search"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  void runCompanySearch();
-                }}
-              >
-                <label className="search-filter-field">
-                  <span>Įmonės pavadinimas</span>
-                  <div className="apollo-company-quick-search-row">
-                    <input
-                      value={companyNameQuery}
-                      onChange={(e) => setCompanyNameQuery(e.target.value)}
-                      placeholder="Įmonės pavadinimas"
-                    />
-                    <button
-                      type="submit"
-                      className="apollo-company-quick-search-btn"
-                      disabled={companyLoading || (!companyNameQuery.trim() && !companyDomainQuery.trim())}
-                      title="Ieškoti Apollo"
-                    >
-                      <Search className="icon" size={16} />
-                    </button>
-                  </div>
-                </label>
-                <label className="search-filter-field">
-                  <span>Įmonės domenas</span>
+        <div className="apollo-search-modal-body">
+          {filtersExpanded && (
+          <div className="apollo-search-modal-filters">
+            <p className="apollo-search-modal-hint">
+              Domenas ieškomas pirmiausia — jei jo nėra, spėjamas iš pavadinimo. Apollo užklausa vykdoma tik
+              paspaudus paieškos mygtuką arba Enter, ne automatiškai atidarius šį langą, ir žmonių paieška yra
+              nemokama.
+            </p>
+            <form
+              className="apollo-company-quick-search"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void runQuickPeopleSearch();
+              }}
+            >
+              <label className="search-filter-field">
+                <span>Įmonės domenas</span>
+                <div className="apollo-company-quick-search-row">
                   <input
                     value={companyDomainQuery}
                     onChange={(e) => setCompanyDomainQuery(e.target.value)}
                     placeholder="imone.lt"
                   />
-                </label>
-              </form>
-            </div>
-            <div className="apollo-search-modal-results">
-              {companyError && <div className="search-result-detail-error">{companyError}</div>}
-              {companyLoading && <div className="empty-state">Ieškoma…</div>}
-              {!companySearched && !companyLoading && (
-                <div className="empty-state">Įveskite pavadinimą arba domeną ir spauskite paieškos mygtuką.</div>
-              )}
-              {companyResults.map((c) => (
-                <div key={c.id} className="apollo-search-modal-company-row">
-                  <div className="apollo-search-modal-company-info">
-                    <div className="apollo-search-modal-company-name">{c.name}</div>
-                    <div className="search-result-detail-muted">
-                      {[c.primary_domain, c.organization_city, c.organization_country].filter(Boolean).join(' · ') || '—'}
-                    </div>
-                  </div>
-                  <button type="button" className="cell-hover-apollo-result-add" onClick={() => void pickCompany(c)}>
-                    Pasirinkti <ArrowRight className="icon" size={14} />
+                  <button
+                    type="submit"
+                    className="apollo-company-quick-search-btn"
+                    disabled={peopleLoading || (!companyDomainQuery.trim() && !companyNameQuery.trim())}
+                    title="Ieškoti žmonių pagal domeną"
+                  >
+                    <Search className="icon" size={16} />
                   </button>
                 </div>
-              ))}
-            </div>
+              </label>
+              <label className="search-filter-field">
+                <span>Įmonės pavadinimas</span>
+                <input
+                  value={companyNameQuery}
+                  onChange={(e) => setCompanyNameQuery(e.target.value)}
+                  placeholder="Jei domeno nėra arba jis neteisingas"
+                />
+              </label>
+            </form>
+            <PeopleFilterForm
+              params={peopleParams}
+              onChange={setPeopleParams}
+              onSubmit={() => void runSearchAndCollapse(runPeopleSearch)}
+              loading={peopleLoading}
+              // The quick-search form above is the only company-selection
+              // mechanism now — PeopleFilterForm's own separate "Įmonė"
+              // company-lookup section would just be a second, paid,
+              // redundant way to do the same thing.
+              hideCompanySection
+            />
           </div>
-        ) : (
-          <div className="apollo-search-modal-body">
-            {filtersExpanded && (
-            <div className="apollo-search-modal-filters">
-              <button
-                type="button"
-                className="apollo-search-modal-back"
-                onClick={() => {
-                  setSelectedCompany(null);
-                  setPeopleResults([]);
-                  setPeopleError('');
-                }}
-              >
-                <ArrowLeft className="icon" size={14} /> Keisti įmonę
-              </button>
+          )}
+          <div className="apollo-search-modal-results">
+            {activeDomain && (
               <p className="apollo-search-modal-hint">
-                Pasirinkta įmonė: <strong>{selectedCompany.name}</strong>
-                {selectedCompany.primary_domain && <> · {selectedCompany.primary_domain}</>}
+                Ieškoma pagal domeną: <strong>{activeDomain}</strong>
               </p>
-              <PeopleFilterForm
-                params={peopleParams}
-                onChange={setPeopleParams}
-                onSubmit={() => void runSearchAndCollapse(runPeopleSearch)}
-                loading={peopleLoading}
-                // The company step above already made the user explicitly
-                // pick one exact company (shown in the "Pasirinkta įmonė"
-                // hint right above this form) — offering PeopleFilterForm's
-                // own separate "Įmonė" company-lookup section here too was
-                // a real, reported redundancy: a second, paid Apollo
-                // company-search credit to re-find a company the app
-                // already had locked in.
-                hideCompanySection
-              />
-            </div>
             )}
-            <div className="apollo-search-modal-results">
-              {peopleError && <div className="search-result-detail-error">{peopleError}</div>}
-              {!peopleSearched && !peopleLoading && (
-                <div className="empty-state">Ieškoma…</div>
-              )}
-              {pendingPhoneCount > 0 && (
-                <div className="apollo-search-modal-bulk-row">
-                  <span className="search-result-detail-muted">
-                    <Clock className="icon" size={14} /> Ieškoma {pendingPhoneCount} telefono {pendingPhoneCount === 1 ? 'numerio' : 'numerių'} fone — galite tuo
-                    metu ieškoti ir spausti "+ Pridėti" toliau, kiekvienas ieškomas atskirai ir vienu metu
-                  </span>
-                </div>
-              )}
-              {peopleResults.map((p) => {
-                const added = isAlreadyAdded(p);
-                return (
-                  <div key={p.id} className={`cell-hover-apollo-result${added ? ' cell-hover-apollo-result-existing' : ''}`}>
-                    <span className="cell-hover-apollo-result-name">
-                      {[p.first_name, p.last_name_obfuscated].filter(Boolean).join(' ') || 'Nežinoma'}
-                      {p.title && <span className="search-result-detail-muted"> — {p.title}</span>}
-                      {added && <span className="cell-hover-apollo-result-added-badge"><Check className="icon" size={12} /> Jau pridėta</span>}
-                    </span>
-                    <button
-                      type="button"
-                      className="cell-hover-apollo-result-add"
-                      disabled={addingPersonIds.has(p.id)}
-                      title={
-                        added
-                          ? 'Panašus kontaktas jau yra šioje eilutėje — vis tiek galima pridėti dar kartą'
-                          : 'Prideda kontaktą iškart; telefono numerį (jei jį pavyksta rasti) įrašo pačiam po kelių minučių'
-                      }
-                      onClick={() => void handleAddPerson(p)}
-                    >
-                      {addingPersonIds.has(p.id) ? '…' : added ? '+ Pridėti vėl' : '+ Pridėti'}
-                    </button>
-                  </div>
-                );
-              })}
-              {peopleSearched && peopleTotalEntries > 0 && (
-                <div className="apollo-search-modal-pagination">
-                  <button
-                    type="button"
-                    className="apollo-search-modal-back"
-                    disabled={peopleLoading || peopleCurrentPage <= 1}
-                    onClick={() => goToPeoplePage(peopleCurrentPage - 1)}
-                  >
-                    <ArrowLeft className="icon" size={14} /> Ankstesnis
-                  </button>
-                  <span className="search-result-detail-muted">
-                    {peopleCurrentPage} / {peopleTotalPages} psl. ({peopleTotalEntries} viso)
+            {peopleError && <div className="search-result-detail-error">{peopleError}</div>}
+            {!peopleSearched && !peopleLoading && (
+              <div className="empty-state">Įveskite domeną (arba pavadinimą) ir spauskite paieškos mygtuką.</div>
+            )}
+            {peopleLoading && <div className="empty-state">Ieškoma…</div>}
+            {pendingPhoneCount > 0 && (
+              <div className="apollo-search-modal-bulk-row">
+                <span className="search-result-detail-muted">
+                  <Clock className="icon" size={14} /> Ieškoma {pendingPhoneCount} telefono {pendingPhoneCount === 1 ? 'numerio' : 'numerių'} fone — galite tuo
+                  metu ieškoti ir spausti "+ Pridėti" toliau, kiekvienas ieškomas atskirai ir vienu metu
+                </span>
+              </div>
+            )}
+            {peopleResults.map((p) => {
+              const added = isAlreadyAdded(p);
+              return (
+                <div key={p.id} className={`cell-hover-apollo-result${added ? ' cell-hover-apollo-result-existing' : ''}`}>
+                  <span className="cell-hover-apollo-result-name">
+                    {[p.first_name, p.last_name_obfuscated].filter(Boolean).join(' ') || 'Nežinoma'}
+                    {p.title && <span className="search-result-detail-muted"> — {p.title}</span>}
+                    {added && <span className="cell-hover-apollo-result-added-badge"><Check className="icon" size={12} /> Jau pridėta</span>}
                   </span>
                   <button
                     type="button"
-                    className="apollo-search-modal-back"
-                    disabled={peopleLoading || peopleCurrentPage >= peopleTotalPages}
-                    onClick={() => goToPeoplePage(peopleCurrentPage + 1)}
+                    className="cell-hover-apollo-result-add"
+                    disabled={addingPersonIds.has(p.id)}
+                    title={
+                      added
+                        ? 'Panašus kontaktas jau yra šioje eilutėje — vis tiek galima pridėti dar kartą'
+                        : 'Prideda kontaktą iškart; telefono numerį (jei jį pavyksta rasti) įrašo pačiam po kelių minučių'
+                    }
+                    onClick={() => void handleAddPerson(p)}
                   >
-                    Kitas <ArrowRight className="icon" size={14} />
+                    {addingPersonIds.has(p.id) ? '…' : added ? '+ Pridėti vėl' : '+ Pridėti'}
                   </button>
                 </div>
-              )}
-            </div>
+              );
+            })}
+            {peopleSearched && peopleTotalEntries > 0 && (
+              <div className="apollo-search-modal-pagination">
+                <button
+                  type="button"
+                  className="apollo-search-modal-back"
+                  disabled={peopleLoading || peopleCurrentPage <= 1}
+                  onClick={() => goToPeoplePage(peopleCurrentPage - 1)}
+                >
+                  <ArrowLeft className="icon" size={14} /> Ankstesnis
+                </button>
+                <span className="search-result-detail-muted">
+                  {peopleCurrentPage} / {peopleTotalPages} psl. ({peopleTotalEntries} viso)
+                </span>
+                <button
+                  type="button"
+                  className="apollo-search-modal-back"
+                  disabled={peopleLoading || peopleCurrentPage >= peopleTotalPages}
+                  onClick={() => goToPeoplePage(peopleCurrentPage + 1)}
+                >
+                  Kitas <ArrowRight className="icon" size={14} />
+                </button>
+              </div>
+            )}
           </div>
-        )}
+        </div>
       </div>
     </div>,
     document.body,
