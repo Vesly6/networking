@@ -1102,6 +1102,13 @@ export function TableView({
   // never unmounts between switches; a fresh mount naturally starts at
   // null anyway.
   const restoredScrollForTableIdRef = useRef<string | null>(null);
+  // Updated synchronously on *every* scroll event (a cheap ref write, no
+  // debounce) — the source of truth the flush-on-switch effect below
+  // reads from, kept deliberately separate from the debounced localStorage
+  // WRITE in the scroll listener itself. See that effect's own comment for
+  // why: a debounce alone isn't enough to survive a real, common user
+  // action (scroll, then immediately switch tables) reliably.
+  const lastSeenScrollRowIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     const scrollEl = tableScrollRef.current;
@@ -1109,20 +1116,30 @@ export function TableView({
     // Debounced rather than saving on every scroll event — this can fire
     // dozens of times a second during a drag-scroll/momentum scroll, and
     // only the value once scrolling actually settles matters for "where
-    // was I when I left".
+    // was I when I left". This debounced write is a convenience for
+    // staying on the same table a while (periodically checkpointing to
+    // localStorage) — it is NOT what the table-switch flush below relies
+    // on, since a switch that happens inside this 250ms window would
+    // otherwise silently lose the position: the timer fires 250ms *after*
+    // the scroll, by which point tableIdRef.current may already point at
+    // whatever table the user switched TO, misattributing (or simply
+    // dropping) the position the user actually scrolled to on the table
+    // they left. A real, reproduced bug — confirmed live: scrolling then
+    // immediately switching tables (the ordinary, common way anyone
+    // actually uses tab-switching) reverted the left table back to row 1
+    // on the next visit, even though the scroll itself worked fine.
     let timeout: ReturnType<typeof setTimeout> | null = null;
     const handleScroll = () => {
+      // range (not getVirtualItems()) is the actually-visible span
+      // without overscan padding — getVirtualItems() would report a row
+      // several positions above the real top of the viewport as "first",
+      // since overscan renders extra rows above/below for smooth
+      // scrolling.
+      const startIndex = rowVirtualizer.range?.startIndex;
+      const row = startIndex === undefined ? undefined : filteredSortedRowsRef.current[startIndex];
+      lastSeenScrollRowIdRef.current = row?.id ?? null;
       if (timeout) clearTimeout(timeout);
-      timeout = setTimeout(() => {
-        // range (not getVirtualItems()) is the actually-visible span
-        // without overscan padding — getVirtualItems() would report a row
-        // several positions above the real top of the viewport as "first",
-        // since overscan renders extra rows above/below for smooth
-        // scrolling.
-        const startIndex = rowVirtualizer.range?.startIndex;
-        const row = startIndex === undefined ? undefined : filteredSortedRowsRef.current[startIndex];
-        saveScrollRowId(tableIdRef.current, row?.id ?? null);
-      }, 250);
+      timeout = setTimeout(() => saveScrollRowId(tableIdRef.current, lastSeenScrollRowIdRef.current), 250);
     };
     scrollEl.addEventListener('scroll', handleScroll, { passive: true });
     return () => {
@@ -1131,6 +1148,26 @@ export function TableView({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Flushes lastSeenScrollRowIdRef for whichever table is being navigated
+  // AWAY from, synchronously, the instant tableId actually changes — this
+  // is what makes the save reliable regardless of the debounce above. The
+  // cleanup closes over `activeTableId` (this render's own `tableId`, via
+  // ordinary JS closure semantics — not the always-current tableIdRef),
+  // so it correctly targets the table being LEFT, not whatever tableId
+  // has already become by the time the cleanup actually runs. Reset to
+  // null at the start of each table's own turn so a table left without
+  // ever being scrolled doesn't inherit whatever the *previous* table's
+  // last position happened to be.
+  useEffect(() => {
+    const activeTableId = tableId;
+    lastSeenScrollRowIdRef.current = null;
+    return () => {
+      if (activeTableId && lastSeenScrollRowIdRef.current) {
+        saveScrollRowId(activeTableId, lastSeenScrollRowIdRef.current);
+      }
+    };
+  }, [tableId]);
 
   useEffect(() => {
     // Already restored for this exact table (or there's no table/no rows
