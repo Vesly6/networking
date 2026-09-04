@@ -2,12 +2,14 @@ import { create } from 'zustand';
 import {
   fetchInstantlyCampaigns,
   fetchInstantlyCampaign,
+  updateInstantlyCampaign,
   activateInstantlyCampaign,
   pauseInstantlyCampaign,
   fetchInstantlyCampaignAnalytics,
   fetchInstantlyCampaignAnalyticsDaily,
   fetchInstantlyCampaignsAnalyticsList,
   type InstantlyCampaign,
+  type InstantlySequence,
   type InstantlyCampaignAnalyticsOverview,
   type InstantlyCampaignDailyAnalytics,
   type InstantlyCampaignAnalyticsRow,
@@ -95,6 +97,27 @@ interface InstantlyCampaignsState {
   dashboardReady: boolean;
   dashboardError: string | null;
   refreshDashboard: () => Promise<void>;
+
+  // Full single-campaign detail (including sequences — the plain `campaigns`
+  // list above comes from the lighter list endpoint and isn't relied on to
+  // carry the full sequence content) for the Campaigns detail/edit view.
+  // Not keyed by id like togglingIds/analyticsLoadingIds above — only one
+  // campaign's detail is ever open in the UI at a time, unlike those
+  // per-row concurrent actions.
+  campaignDetail: InstantlyCampaign | null;
+  campaignDetailLoading: boolean;
+  campaignDetailError: string | null;
+  fetchCampaignDetail: (id: string) => Promise<void>;
+  clearCampaignDetail: () => void;
+
+  savingSequence: boolean;
+  saveCampaignError: string | null;
+  /** PATCHes sequences for the currently-loaded campaignDetail — returns
+   * true on success so the caller (the edit UI) knows whether to close/
+   * toast. Updates campaignDetail in place from the real response rather
+   * than trusting the locally-edited draft, so the UI reflects exactly
+   * what Instantly actually saved. */
+  saveCampaignSequence: (id: string, sequences: InstantlySequence[]) => Promise<boolean>;
 }
 
 export const useInstantlyCampaignsStore = create<InstantlyCampaignsState>((set, get) => ({
@@ -202,6 +225,38 @@ export const useInstantlyCampaignsStore = create<InstantlyCampaignsState>((set, 
       set({ dashboardOverview: overview, dashboardDaily: daily, dashboardRows: rows, dashboardReady: true });
     } catch (err) {
       set({ dashboardError: err instanceof Error ? err.message : 'Nepavyko įkelti analitikos', dashboardReady: true });
+    }
+  },
+
+  campaignDetail: null,
+  campaignDetailLoading: false,
+  campaignDetailError: null,
+  fetchCampaignDetail: async (id) => {
+    set({ campaignDetailLoading: true, campaignDetailError: null });
+    try {
+      const campaign = await fetchInstantlyCampaign(id);
+      set({ campaignDetail: campaign });
+    } catch (err) {
+      set({ campaignDetailError: err instanceof Error ? err.message : 'Nepavyko įkelti kampanijos' });
+    } finally {
+      set({ campaignDetailLoading: false });
+    }
+  },
+  clearCampaignDetail: () => set({ campaignDetail: null, campaignDetailError: null }),
+
+  savingSequence: false,
+  saveCampaignError: null,
+  saveCampaignSequence: async (id, sequences) => {
+    set({ savingSequence: true, saveCampaignError: null });
+    try {
+      const updated = await updateInstantlyCampaign(id, { sequences });
+      set({ campaignDetail: updated });
+      return true;
+    } catch (err) {
+      set({ saveCampaignError: err instanceof Error ? err.message : 'Nepavyko išsaugoti teksto' });
+      return false;
+    } finally {
+      set({ savingSequence: false });
     }
   },
 }));

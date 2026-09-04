@@ -114,6 +114,7 @@ import {
   InstantlyApiError,
   listCampaigns as listInstantlyCampaigns,
   getCampaign as getInstantlyCampaign,
+  updateCampaign as updateInstantlyCampaign,
   activateCampaign as activateInstantlyCampaign,
   pauseCampaign as pauseInstantlyCampaign,
   getCampaignAnalyticsOverview,
@@ -2032,6 +2033,21 @@ app.get(
   '/api/instantly/campaigns/:id',
   asyncHandler(async (req, res) => {
     const result = await getInstantlyCampaign(req.params.id, requireInstantlyKey(req.auth!.companyId));
+    res.json(result);
+  }),
+);
+
+// Real, live effect on a real campaign's actual email content — validation
+// stays minimal (the frontend builds a well-formed partial patch, same
+// "single-operator tool" reasoning as every other route in this block),
+// but the frontend does gate this behind an explicit confirm step before
+// calling it, unlike activate/pause below — editing what a lead actually
+// receives is a materially bigger consequence than toggling a campaign's
+// running state.
+app.patch(
+  '/api/instantly/campaigns/:id',
+  asyncHandler(async (req, res) => {
+    const result = await updateInstantlyCampaign(req.params.id, req.body ?? {}, requireInstantlyKey(req.auth!.companyId));
     res.json(result);
   }),
 );

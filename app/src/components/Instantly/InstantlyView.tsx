@@ -4,8 +4,9 @@ import { AccountsPanel } from './AccountsPanel';
 import { UniboxPanel } from './UniboxPanel';
 import { AnalyticsPanel } from './AnalyticsPanel';
 import { WebhookLogPanel } from './WebhookLogPanel';
+import { CampaignsPanel } from './CampaignsPanel';
 
-type SubTab = 'inbox' | 'accounts' | 'analytics' | 'webhookLog';
+type SubTab = 'inbox' | 'accounts' | 'analytics' | 'webhookLog' | 'campaigns';
 
 interface InstantlyViewProps {
   /** Whether App.tsx's own top-level nav currently has this tab active —
@@ -20,15 +21,17 @@ interface InstantlyViewProps {
   active: boolean;
 }
 
-/** The Instantly tab's shell — cold-email mailboxes/Unibox/analytics,
- * proxied server-side through server/src/instantly.ts (the API key never
- * reaches the browser, same convention as every other external
- * integration in this app). Campaigns/Leads sub-tabs were removed on
- * request (Unibox already surfaces a campaign filter + editable lead
- * status inline, so a separate browse-everything view wasn't needed day
- * to day) — server/src/instantly.ts's own campaign wrappers stay in
- * place since Unibox's campaign filter and the interest-status pill
- * still call through them. */
+/** The Instantly tab's shell — cold-email mailboxes/Unibox/analytics/
+ * campaigns, proxied server-side through server/src/instantly.ts (the API
+ * key never reaches the browser, same convention as every other external
+ * integration in this app). A Campaigns/Leads browser sub-tab was removed
+ * on request early on (Unibox already surfaced a campaign filter +
+ * editable lead status inline, so a separate browse-everything view
+ * wasn't needed day to day) — Campaigns was later re-added, on separate
+ * explicit request, specifically to view and edit a campaign's actual
+ * email sequence text (CampaignsPanel.tsx/CampaignSequenceModal.tsx);
+ * Leads management stays out of scope, this still isn't that old
+ * browse-everything view. */
 export function InstantlyView({ active }: InstantlyViewProps) {
   const [subTab, setSubTab] = useState<SubTab>('inbox');
   const unreadCount = useInstantlyInboxStore((s) => s.unreadCount);
@@ -53,6 +56,9 @@ export function InstantlyView({ active }: InstantlyViewProps) {
           Unibox
           {unreadCount > 0 && <span className="instantly-subnav-badge">{unreadCount}</span>}
         </button>
+        <button type="button" className={subTab === 'campaigns' ? 'active' : ''} onClick={() => setSubTab('campaigns')}>
+          Kampanijos
+        </button>
         <button type="button" className={subTab === 'analytics' ? 'active' : ''} onClick={() => setSubTab('analytics')}>
           Analitika
         </button>
@@ -65,6 +71,7 @@ export function InstantlyView({ active }: InstantlyViewProps) {
       </nav>
 
       {subTab === 'inbox' && <UniboxPanel />}
+      {subTab === 'campaigns' && <CampaignsPanel />}
       {subTab === 'analytics' && <AnalyticsPanel />}
       {subTab === 'accounts' && <AccountsPanel />}
       {subTab === 'webhookLog' && <WebhookLogPanel />}

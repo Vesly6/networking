@@ -5675,6 +5675,50 @@ tr.row-drop-end td {
   margin-top: 0.4rem;
 }
 
+.campaign-sequence-modal {
+  max-width: 640px;
+}
+.campaign-sequence-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  overflow-y: auto;
+}
+.campaign-sequence-step {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.campaign-sequence-step-header {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.campaign-sequence-variant {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.campaign-sequence-variant + .campaign-sequence-variant {
+  border-top: 1px dashed var(--border);
+  padding-top: 0.6rem;
+}
+.campaign-sequence-variant-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.campaign-sequence-body {
+  width: 100%;
+  font-size: 0.85rem;
+  font-family: inherit;
+  padding: 0.5em 0.6em;
+  resize: vertical;
+}
+
 .instantly-table-wrap {
   overflow-x: auto;
 }

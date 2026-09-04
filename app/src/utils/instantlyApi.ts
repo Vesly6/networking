@@ -21,6 +21,32 @@ export const CAMPAIGN_STATUS_LABELS: Record<number, string> = {
   '-2': 'Bounce Protect',
 };
 
+// The actual email copy a campaign sends — confirmed directly against
+// Instantly's real OpenAPI spec (developer.instantly.ai/api-reference/
+// openapi.json, schema def-1), not assumed. Nested three levels deep:
+// sequences -> steps -> variants (A/B copies of the same step). Per that
+// same spec's own field description: "Even though [sequences] is an
+// array, only the first element is used, so please provide only one
+// array item, and add the steps to that array" — every caller in this
+// app should only ever read/write sequences[0].steps, never a second
+// entry. Same shape as server/src/instantly.ts's own mirror of this type.
+export interface InstantlySequenceVariant {
+  subject: string;
+  body: string;
+  v_disabled?: boolean;
+}
+export interface InstantlySequenceStep {
+  type: 'email';
+  delay?: number;
+  delay_unit?: 'minutes' | 'hours' | 'days';
+  variants: InstantlySequenceVariant[];
+  [key: string]: unknown;
+}
+export interface InstantlySequence {
+  steps: InstantlySequenceStep[];
+  [key: string]: unknown;
+}
+
 export interface InstantlyCampaign {
   id: string;
   name: string;
@@ -29,6 +55,7 @@ export interface InstantlyCampaign {
   timestamp_updated: string;
   daily_limit?: number;
   pl_value?: number;
+  sequences?: InstantlySequence[];
   [key: string]: unknown;
 }
 
@@ -43,6 +70,19 @@ export function fetchInstantlyCampaigns(params: { limit?: number; starting_after
 
 export function fetchInstantlyCampaign(id: string) {
   return localApiRequest<InstantlyCampaign>(`/api/instantly/campaigns/${encodeURIComponent(id)}`);
+}
+
+/** Real, live effect on a real campaign's actual email content — the
+ * frontend gates this behind an explicit confirm step (unlike activate/
+ * pause below), since editing what a lead actually receives is a
+ * materially bigger consequence than toggling a campaign's running
+ * state. */
+export function updateInstantlyCampaign(id: string, patch: Partial<InstantlyCampaign>) {
+  return localApiRequest<InstantlyCampaign>(`/api/instantly/campaigns/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
 }
 
 /** Real, live effect on the account's actual sending. */

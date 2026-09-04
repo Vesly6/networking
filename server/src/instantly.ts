@@ -88,6 +88,32 @@ export interface InstantlyPage<T> {
 
 // --- Campaigns ---
 
+// The actual email copy a campaign sends — confirmed directly against
+// Instantly's real OpenAPI spec (developer.instantly.ai/api-reference/
+// openapi.json, schema def-1), not assumed. Nested three levels deep:
+// sequences -> steps -> variants (A/B copies of the same step). Per that
+// same spec's own field description: "Even though [sequences] is an
+// array, only the first element is used, so please provide only one
+// array item, and add the steps to that array" — every caller in this
+// app should only ever read/write sequences[0].steps, never a second
+// entry.
+export interface InstantlySequenceVariant {
+  subject: string;
+  body: string;
+  v_disabled?: boolean;
+}
+export interface InstantlySequenceStep {
+  type: 'email';
+  delay?: number;
+  delay_unit?: 'minutes' | 'hours' | 'days';
+  variants: InstantlySequenceVariant[];
+  [key: string]: unknown;
+}
+export interface InstantlySequence {
+  steps: InstantlySequenceStep[];
+  [key: string]: unknown;
+}
+
 export interface InstantlyCampaign {
   id: string;
   name: string;
@@ -95,6 +121,7 @@ export interface InstantlyCampaign {
   timestamp_created: string;
   timestamp_updated: string;
   daily_limit?: number;
+  sequences?: InstantlySequence[];
   [key: string]: unknown;
 }
 
@@ -107,6 +134,17 @@ export function listCampaigns(
 
 export function getCampaign(id: string, apiKey: string) {
   return callInstantly<InstantlyCampaign>(`/campaigns/${encodeURIComponent(id)}`, {}, apiKey);
+}
+
+// PATCH /campaigns/{id} — confirmed directly against the real spec that
+// `sequences` (the actual email copy) is a real, accepted field on this
+// same route Instantly's own dashboard edits everything else through, not
+// a separate endpoint. A real, live-effect write on a real campaign's
+// content — the frontend gates this behind an explicit save action with
+// its own confirmation, same tier of caution as replyToEmail/
+// forwardEmail below.
+export function updateCampaign(id: string, patch: Partial<InstantlyCampaign>, apiKey: string) {
+  return callInstantly<InstantlyCampaign>(`/campaigns/${encodeURIComponent(id)}`, { method: 'PATCH', body: patch }, apiKey);
 }
 
 // Real, live side effects on the account's actual sending — confirmed
