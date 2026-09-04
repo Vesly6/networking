@@ -1,9 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { X, Mail, Save } from 'lucide-react';
+import { X, Mail } from 'lucide-react';
 import { useInstantlyCampaignsStore } from '../../store/useInstantlyCampaignsStore';
 import { useToastStore } from '../../store/useToastStore';
-import { confirmDialog } from '../../store/useConfirmStore';
 import type { InstantlySequenceStep } from '../../utils/instantlyApi';
 
 interface CampaignSequenceModalProps {
@@ -17,39 +16,28 @@ function delayLabel(step: InstantlySequenceStep, index: number): string {
   return `Po ${step.delay ?? 0} ${unit} nuo ankstesnio laiško`;
 }
 
-/** Shows (and lets you edit) the actual email copy a campaign sends — on
- * explicit request ("хочу видеть какой текст мы отправляем... и что-то
- * изменить в этом тексте"). Confirmed directly against Instantly's real
- * OpenAPI spec that this is exactly what GET/PATCH /campaigns/{id}'s own
- * `sequences` field is (steps -> variants -> subject/body) — see
- * server/src/instantly.ts's own doc comment on InstantlySequence for the
- * full citation.
+/** Shows the actual email copy a campaign sends — on explicit request
+ * ("хочу видеть какой текст мы отправляем"). Read-only, on explicit
+ * follow-up request ("удали кнопку Išsaugoti... они видят только текст"
+ * — no edit/save capability at all, viewing only). Confirmed directly
+ * against Instantly's real OpenAPI spec that this is exactly what GET
+ * /campaigns/{id}'s own `sequences` field is (steps -> variants ->
+ * subject/body) — see server/src/instantly.ts's own doc comment on
+ * InstantlySequence for the full citation.
  *
- * Local draft state (`steps`) is deliberately separate from the store's
- * own `campaignDetail` — editing a subject/body field updates the draft
- * only; nothing is sent to Instantly until "Išsaugoti" is explicitly
- * clicked and confirmed. The draft re-seeds from campaignDetail whenever
- * it changes (initial load, and again after a successful save, so the
- * form reflects exactly what Instantly actually has on file — not what
- * was locally typed if the save response differs in any way).
- *
- * Only subject/body per step/variant are editable here — delay timing,
- * step count, and variant count are shown read-only. Adding/removing
- * steps or variants, or touching send-timing, was out of scope for what
- * was actually asked for (view + edit the text), and Instantly's own
- * dashboard is still the place for structural sequence changes. */
+ * server/src/instantly.ts's updateCampaign() and the store's own
+ * saveCampaignSequence action are left in place (harmless, unused) —
+ * same "flag/remove the UI, keep the capability underneath" pattern
+ * this app already uses elsewhere (e.g. AccountsPanel.tsx's own removed
+ * mailbox-management actions) — rather than torn out, in case editing
+ * needs to come back later. */
 export function CampaignSequenceModal({ campaignId, onClose }: CampaignSequenceModalProps) {
   const campaignDetail = useInstantlyCampaignsStore((s) => s.campaignDetail);
   const campaignDetailLoading = useInstantlyCampaignsStore((s) => s.campaignDetailLoading);
   const campaignDetailError = useInstantlyCampaignsStore((s) => s.campaignDetailError);
   const fetchCampaignDetail = useInstantlyCampaignsStore((s) => s.fetchCampaignDetail);
   const clearCampaignDetail = useInstantlyCampaignsStore((s) => s.clearCampaignDetail);
-  const savingSequence = useInstantlyCampaignsStore((s) => s.savingSequence);
-  const saveCampaignError = useInstantlyCampaignsStore((s) => s.saveCampaignError);
-  const saveCampaignSequence = useInstantlyCampaignsStore((s) => s.saveCampaignSequence);
   const showToast = useToastStore((s) => s.show);
-
-  const [steps, setSteps] = useState<InstantlySequenceStep[]>([]);
 
   useEffect(() => {
     void fetchCampaignDetail(campaignId);
@@ -58,43 +46,10 @@ export function CampaignSequenceModal({ campaignId, onClose }: CampaignSequenceM
   }, [campaignId]);
 
   useEffect(() => {
-    if (campaignDetail?.id === campaignId) {
-      setSteps(campaignDetail.sequences?.[0]?.steps ?? []);
-    }
-  }, [campaignDetail, campaignId]);
-
-  useEffect(() => {
     if (campaignDetailError) showToast(campaignDetailError);
   }, [campaignDetailError, showToast]);
-  useEffect(() => {
-    if (saveCampaignError) showToast(saveCampaignError);
-  }, [saveCampaignError, showToast]);
 
-  const updateVariant = (stepIndex: number, variantIndex: number, field: 'subject' | 'body', value: string) => {
-    setSteps((prev) =>
-      prev.map((step, si) =>
-        si !== stepIndex
-          ? step
-          : {
-              ...step,
-              variants: step.variants.map((v, vi) => (vi !== variantIndex ? v : { ...v, [field]: value })),
-            },
-      ),
-    );
-  };
-
-  const handleSave = async () => {
-    const ok = await confirmDialog({
-      message: 'Išsaugoti pakeitimus? Šis tekstas bus siunčiamas realiems žmonėms per šią kampaniją.',
-      danger: true,
-    });
-    if (!ok) return;
-    const success = await saveCampaignSequence(campaignId, [{ steps }]);
-    if (success) {
-      showToast('Kampanijos tekstas išsaugotas');
-      onClose();
-    }
-  };
+  const steps = campaignDetail?.id === campaignId ? (campaignDetail.sequences?.[0]?.steps ?? []) : [];
 
   return createPortal(
     <div className="modal-backdrop" onClick={onClose}>
@@ -127,19 +82,11 @@ export function CampaignSequenceModal({ campaignId, onClose }: CampaignSequenceM
                     )}
                     <label className="search-filter-field">
                       <span>Tema</span>
-                      <input
-                        value={variant.subject}
-                        onChange={(e) => updateVariant(stepIndex, variantIndex, 'subject', e.target.value)}
-                      />
+                      <input value={variant.subject} readOnly />
                     </label>
                     <label className="search-filter-field">
                       <span>Tekstas</span>
-                      <textarea
-                        className="campaign-sequence-body"
-                        rows={6}
-                        value={variant.body}
-                        onChange={(e) => updateVariant(stepIndex, variantIndex, 'body', e.target.value)}
-                      />
+                      <textarea className="campaign-sequence-body" rows={6} value={variant.body} readOnly />
                     </label>
                   </div>
                 ))}
@@ -152,11 +99,6 @@ export function CampaignSequenceModal({ campaignId, onClose }: CampaignSequenceM
           <button type="button" onClick={onClose}>
             Uždaryti
           </button>
-          {steps.length > 0 && (
-            <button type="button" className="primary" disabled={savingSequence} onClick={() => void handleSave()}>
-              <Save className="icon" size={14} /> {savingSequence ? 'Saugoma…' : 'Išsaugoti'}
-            </button>
-          )}
         </div>
       </div>
     </div>,
