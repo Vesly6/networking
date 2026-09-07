@@ -1292,6 +1292,34 @@ tr.row-flash td.cell-row-bg {
   color: var(--accent);
 }
 
+/* Same shape/reasoning as .cell-link-inner above, just for the company
+   cell's own 🔍-search-on-Google icon — named cell-company-inner (not
+   cell-company) for the identical reason: cell-${column.type} for a
+   company column is already "cell-company" on the <td> itself. */
+.cell-company-inner {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  overflow: hidden;
+}
+
+.cell-company-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.cell-company-search {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  padding: 0 0.5em;
+  text-decoration: none;
+  color: var(--text-muted);
+}
+.cell-company-search:hover {
+  color: var(--accent);
+}
+
 .cell-preview {
   display: block;
   width: 100%;

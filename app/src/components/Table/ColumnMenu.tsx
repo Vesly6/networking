@@ -203,7 +203,7 @@ export function ColumnMenu({ column, columns, anchor, onClose }: ColumnMenuProps
             checked={!!column.isWebsiteColumn}
             onChange={(e) => (e.target.checked ? setWebsiteColumn(column.id) : clearWebsiteColumn())}
           />
-          <span>Naudoti kaip svetainę (Apollo paieškai)</span>
+          <span>Naudoti kaip svetainę (kontaktų paieškai)</span>
         </label>
       )}
 

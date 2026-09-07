@@ -157,18 +157,33 @@ export interface ApolloPhoneNumber {
   [key: string]: unknown;
 }
 
-const MOBILE_TYPE_VALUES = new Set(['mobile', 'cell']);
+/** Used to gate on Apollo's own `type`/`type_cd` tag (mobile/cell only) —
+ * dropped after a real, confirmed case where that tag was simply wrong:
+ * Apollo returned a genuine, dialable +370 67... number for a company's
+ * CEO but tagged it "work_direct" instead of "mobile", so the old check
+ * silently discarded a real number as if none existed at all. Lithuania's
+ * own numbering plan is more reliable ground truth than Apollo's tag: every
+ * mobile operator's block sits under +370 6xx, while +370 5xx is the
+ * Vilnius landline area code (and the account owner has never once seen
+ * Apollo surface a landline through this feature anyway) — so this now
+ * checks the number's own digits instead of trusting what Apollo labeled
+ * it. On explicit request: accept only numbers starting "3706", reject
+ * everything else (3705 landlines, other area/country codes) outright,
+ * regardless of type/type_cd. */
+function isAcceptablePhoneNumber(sanitizedNumber: string | undefined | null): boolean {
+  const digits = (sanitizedNumber ?? '').replace(/\D/g, '');
+  return digits.startsWith('3706');
+}
 
-/** Picks the person's own mobile number ONLY, on explicit request ("мне
- * не надо work телефонов вообще... если нету mobile тогда отменяем
- * запрос") — never work_direct/work_hq/home/other, even as a fallback.
- * Returns undefined whenever no entry is tagged mobile/cell, regardless
- * of whether other (non-mobile) numbers exist for this person; callers
- * must treat that the same as "no phone number found" rather than
- * falling back to whatever else is in the array. */
+/** Picks the person's own mobile number ONLY — see isAcceptablePhoneNumber
+ * above for what "mobile" means here and why it's checked this way.
+ * Returns undefined whenever no entry's own number starts with 3706,
+ * regardless of whether other (non-mobile-shaped) numbers exist for this
+ * person; callers must treat that the same as "no phone number found"
+ * rather than falling back to whatever else is in the array. */
 export function pickBestPhoneNumber<T extends ApolloPhoneNumber>(entries: T[] | undefined | null): T | undefined {
   if (!entries) return undefined;
-  return entries.find((entry) => MOBILE_TYPE_VALUES.has((entry.type ?? entry.type_cd ?? '').toLowerCase()));
+  return entries.find((entry) => isAcceptablePhoneNumber(entry.sanitized_number));
 }
 
 export interface PhoneEnrichmentInfo {

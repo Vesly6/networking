@@ -434,11 +434,6 @@ export function ApolloContactSearchModal({
         <div className="apollo-search-modal-body">
           {filtersExpanded && (
           <div className="apollo-search-modal-filters">
-            <p className="apollo-search-modal-hint">
-              Domenas ieškomas pirmiausia — jei eilutėje yra pažymėta svetainės nuoroda, domenas paimamas iš jos;
-              jei ne, jis spėjamas iš pavadinimo. Apollo užklausa vykdoma tik paspaudus paieškos mygtuką arba
-              Enter, ne automatiškai atidarius šį langą, ir žmonių paieška yra nemokama.
-            </p>
             <form
               className="apollo-company-quick-search"
               onSubmit={(e) => {

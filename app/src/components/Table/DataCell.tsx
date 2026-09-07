@@ -20,7 +20,7 @@ import { ensureProtocol } from '../../utils/link';
 import { highlightMatches } from '../../utils/highlight';
 import { isCellLockedForWorker } from '../../utils/workerCellLock';
 import { EXCEL_CELL_LIMIT } from '../../constants';
-import { Clock, FileText, User, ExternalLink, X } from 'lucide-react';
+import { Clock, FileText, User, ExternalLink, Search, X } from 'lucide-react';
 
 interface DataCellProps {
   row: Row;
@@ -557,6 +557,47 @@ function DataCellImpl({
               onClick={(e) => e.stopPropagation()}
             >
               <ExternalLink className="icon" size={13} />
+            </a>
+          )}
+        </div>
+      </td>
+    );
+  }
+
+  // company's non-editable preview gets the same second-click-target
+  // treatment as link's own 🔗 (see above) — a 🔍 that searches the exact
+  // stored company name on Google in a new tab, no clipboard/modal/API
+  // call involved, just a plain URL. Reuses that same .cell-link-inner-
+  // style wrapper/stopPropagation pattern rather than inventing a new one,
+  // just under company-specific class names — naming the wrapper
+  // `cell-company` (matching `cell-${column.type}`) would collide with the
+  // <td>'s own class the same way an earlier version of the link cell
+  // already got bitten by once (see the .cell-link-inner comment below).
+  if (column.type === 'company') {
+    const query = storedValue.trim();
+    const searchHref = query ? `https://www.google.com/search?q=${encodeURIComponent(query)}` : null;
+    return (
+      <td className={cellClassName} style={cellStyle} onMouseDown={onSelect} onMouseEnter={onExtend} onContextMenu={onContextMenu}>
+        <div className="cell-company-inner">
+          <button
+            type="button"
+            className={`cell-preview cell-company-text ${color ? '' : 'cell-preview-hoverable'}`}
+            tabIndex={-1}
+            title={isAppendOnlyLocked ? 'Jau turi reikšmę — darbuotojas negali jos perrašyti' : undefined}
+          >
+            {highlightQuery ? highlightMatches(storedValue, highlightQuery) : storedValue}
+          </button>
+          {searchHref && (
+            <a
+              href={searchHref}
+              target="_blank"
+              rel="noreferrer"
+              className="cell-company-search"
+              title={`Ieškoti „${query}“ Google`}
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <Search className="icon" size={13} />
             </a>
           )}
         </div>

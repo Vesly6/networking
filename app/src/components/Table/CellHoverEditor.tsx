@@ -1854,7 +1854,7 @@ export function CellHoverEditor({
                                     <button
                                       type="button"
                                       className="cell-hover-contact-find-email"
-                                      title={findingEmailIds.has(c.id) ? 'Ieškoma…' : 'Ieškoti el. pašto (Apollo)'}
+                                      title={findingEmailIds.has(c.id) ? 'Ieškoma…' : 'Ieškoti el. pašto'}
                                       disabled={findingEmailIds.has(c.id)}
                                       onClick={() => void handleFindEmail(c)}
                                     >
@@ -1865,7 +1865,7 @@ export function CellHoverEditor({
                                     <button
                                       type="button"
                                       className="cell-hover-contact-find-phone"
-                                      title={pendingPhoneContactIds.has(c.id) ? 'Ieškoma…' : 'Ieškoti telefono numerio (Apollo)'}
+                                      title={pendingPhoneContactIds.has(c.id) ? 'Ieškoma…' : 'Ieškoti telefono numerio'}
                                       disabled={pendingPhoneContactIds.has(c.id)}
                                       onClick={() => void handleFindPhone(c)}
                                     >

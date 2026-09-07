@@ -596,7 +596,23 @@ export function TableView({
   // also un-focuses the clicked cell's <input>, silently dropping out of
   // edit mode) even though the user never intended to drag at all.
   const dragStartPosRef = useRef<{ x: number; y: number } | null>(null);
-  const DRAG_SELECT_THRESHOLD_PX = 4;
+  // 4px was too tight for real mouse/trackpad precision: an ordinary click
+  // routinely drifts a couple of pixels between mousedown and mouseup, and
+  // rows are only ~34px tall, so a click landing near a row's top/bottom
+  // edge could have its own tiny drift carry the cursor past that edge —
+  // which fires onMouseEnter for the neighboring row's cell, and since the
+  // total mousedown-to-mouseenter distance was already past the old 4px
+  // threshold, immediately moved the selection there (wrong cell
+  // highlighted) and, since a 2-cell range is no longer
+  // isSingleCellSelection, blocked `editable` from ever becoming true
+  // (click silently "does nothing"). Reproduced directly with a synthetic
+  // click that starts a few px from a row boundary: at the old 4px
+  // threshold, a further drift of as little as 4-5px toward that boundary
+  // was enough to trip both symptoms; at 8px it takes a distinctly bigger,
+  // more deliberate move to trip — while staying well under a row's
+  // half-height (~17px), the actual physical distance a genuine 1-row
+  // drag-select has to cover, so real drag-select is unaffected.
+  const DRAG_SELECT_THRESHOLD_PX = 8;
 
   // Fill handle (the little square at the active cell's bottom-right
   // corner — Excel calls this the "fill handle") — a fourth, independent

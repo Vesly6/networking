@@ -292,7 +292,7 @@ export function AddSenderModal({ onClose, onDone }: AddSenderModalProps) {
       <div className="modal push-reply-rows-modal" onClick={(e) => e.stopPropagation()}>
         <h2>Pridėti siuntėją</h2>
         <p className="csv-import-mapping-hint">
-          Įkelkite išsiuntimo eksporto CSV failą (pvz. Instantly „Email“ / „Last contacted from“) — bus ieškoma atitikmenų
+          Įkelkite išsiuntimo eksporto CSV failą (pvz. su stulpeliais „Email“ / „Last contacted from“) — bus ieškoma atitikmenų
           tarp visų darbo srities lentelių Contacts stulpelio, ir kiekvienam rastam kontaktui pridėtas siuntėjo pašto
           dėžutės adresas prie jo sąrašo.
         </p>
