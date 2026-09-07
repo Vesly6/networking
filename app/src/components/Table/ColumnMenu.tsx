@@ -33,6 +33,8 @@ export function ColumnMenu({ column, columns, anchor, onClose }: ColumnMenuProps
   const clearNextActionDateColumn = useTableStore((s) => s.clearNextActionDateColumn);
   const setStatusColumn = useTableStore((s) => s.setStatusColumn);
   const clearStatusColumn = useTableStore((s) => s.clearStatusColumn);
+  const setWebsiteColumn = useTableStore((s) => s.setWebsiteColumn);
+  const clearWebsiteColumn = useTableStore((s) => s.clearWebsiteColumn);
   const currentUser = useAuthStore((s) => s.user);
   // Changing a column's type is blocked for every worker unconditionally —
   // not a togglable permission like the others in this file. Retyping an
@@ -191,6 +193,17 @@ export function ColumnMenu({ column, columns, anchor, onClose }: ColumnMenuProps
             }
           />
           <span>Naudoti kalendoriuje / užduočių sąraše</span>
+        </label>
+      )}
+
+      {column.type === 'link' && (
+        <label className="popover-field popover-checkbox">
+          <input
+            type="checkbox"
+            checked={!!column.isWebsiteColumn}
+            onChange={(e) => (e.target.checked ? setWebsiteColumn(column.id) : clearWebsiteColumn())}
+          />
+          <span>Naudoti kaip svetainę (Apollo paieškai)</span>
         </label>
       )}
 

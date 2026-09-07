@@ -111,6 +111,28 @@ const DEFAULTS = {
   // happening exactly as before — this setting only controls whether an
   // *additional* AI rewrite happens on top of that baseline.
   auto_personalize_enabled: 'false',
+  // Opt-in, OFF by default — despite being the explicitly requested
+  // behavior, matching this codebase's own precedent for a new capability
+  // where the automation gains something it structurally couldn't do
+  // before (ai_schedule_enabled/auto_personalize_enabled just above both
+  // ship the same way): the account owner reviews and turns it on rather
+  // than it silently changing tab behavior on the next deploy. When on,
+  // the LinkedIn Chrome tab only opens during randomized "visit windows"
+  // (visitSchedule.ts) instead of staying open indefinitely once opened —
+  // a real person doesn't leave LinkedIn open in a browser tab 24/7, and
+  // today's automatic scheduler/inbox-sync ticks have no mechanism at all
+  // to ever close a tab, only to avoid reopening one a human closed.
+  visit_windows_enabled: 'false',
+  // Average real-world gap between visits, in hours — "every 2-3 hours,"
+  // per the account owner's own framing. Each actual gap jitters around
+  // this (visitSchedule.ts's triangularJitter), so consecutive visits
+  // aren't evenly spaced.
+  visit_gap_hours: '2.5',
+  // Average length of one visit, in minutes — real duration jitters
+  // roughly 0.5x-1.5x of this per visit, same reasoning as every other
+  // jittered duration in this feature (a perfectly constant length is
+  // itself a detectable pattern).
+  visit_duration_minutes: '30',
 };
 
 export type SafetySettingKey = keyof typeof DEFAULTS;
@@ -142,6 +164,9 @@ export interface SafetySettings {
   likesMinGapMinutes: number;
   aiScheduleEnabled: boolean;
   autoPersonalizeEnabled: boolean;
+  visitWindowsEnabled: boolean;
+  visitGapHours: number;
+  visitDurationMinutes: number;
 }
 
 export function getSafetySettings(): SafetySettings {
@@ -168,6 +193,9 @@ export function getSafetySettings(): SafetySettings {
     likesMinGapMinutes: Number(get('likes_min_gap_minutes')),
     aiScheduleEnabled: get('ai_schedule_enabled') === 'true',
     autoPersonalizeEnabled: get('auto_personalize_enabled') === 'true',
+    visitWindowsEnabled: get('visit_windows_enabled') === 'true',
+    visitGapHours: Number(get('visit_gap_hours')),
+    visitDurationMinutes: Number(get('visit_duration_minutes')),
   };
 }
 

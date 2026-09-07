@@ -21,9 +21,33 @@ export interface WorkerActionLogEntry {
   contactId?: string;
   detail: string;
   createdAt: number;
+  /** Set only when a company super_admin performed this action while
+   * impersonating the worker named above (userId/userName) — see
+   * useAuthStore.ts's impersonateWorker and server/src/auth.ts's
+   * AuthContext.actingAs. */
+  realUserId?: string;
+  realUserName?: string;
 }
 
-interface CreateWorkerInput {
+/** One optional field per per-worker integration override — Zadarma's own
+ * three, plus one plain API key per remaining integration (see
+ * server/src/accounts/db.ts's per-worker migrations). Shared by both
+ * Create/UpdateWorkerInput below rather than repeating the same nine
+ * fields twice. LinkedIn's CDP URL has no per-worker equivalent — see that
+ * migration's own doc comment for why. */
+interface WorkerIntegrationOverrides {
+  zadarmaSip?: string;
+  zadarmaWidgetSip?: string;
+  zadarmaCallerNumber?: string;
+  instantlyApiKey?: string;
+  apolloApiKey?: string;
+  serperApiKey?: string;
+  openaiApiKey?: string;
+  anthropicApiKey?: string;
+  elevenlabsApiKey?: string;
+}
+
+interface CreateWorkerInput extends WorkerIntegrationOverrides {
   username: string;
   password: string;
   firstName: string;
@@ -32,13 +56,27 @@ interface CreateWorkerInput {
   permissions: Partial<UserPermissions>;
 }
 
-interface UpdateWorkerInput {
+interface UpdateWorkerInput extends WorkerIntegrationOverrides {
+  /** Renaming a worker in place (e.g. a departing "Ivan" replaced by a new
+   * hire "Sergey" reusing the same login, so the integration overrides
+   * above don't need to be reconfigured on every turnover) is safe: `id`
+   * never changes, and every past note/comment already stores its
+   * author's name as a permanent snapshot at write time (see
+   * utils/noteHistory.ts's NoteEntry.authorName) rather than re-resolving
+   * it live — so old comments correctly keep showing "Ivan" after this,
+   * and only a new comment written after the rename picks up "Sergey". */
+  firstName?: string;
+  lastName?: string;
   visibleTabs?: string[];
   permissions?: Partial<UserPermissions>;
   /** Omitted (not empty string) leaves the worker's existing password
    * unchanged — same convention the server's updateWorker() itself uses,
    * see that function's own doc comment. */
   password?: string;
+  // Every WorkerIntegrationOverrides field follows the same "omitted
+  // leaves unchanged, explicit '' clears back to the company-wide
+  // fallback" convention — see server/src/accounts/db.ts's updateWorker()
+  // for the exact server-side handling.
 }
 
 interface WorkersState {

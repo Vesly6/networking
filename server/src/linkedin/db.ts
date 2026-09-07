@@ -124,6 +124,18 @@ function migrate(database: Database.Database): void {
       generated_at INTEGER NOT NULL
     );
 
+    -- One row per local calendar day (same shape/idempotency as
+    -- daily_schedule above) — start/end epoch-ms pairs for when the
+    -- LinkedIn tab is allowed to be open at all (visitSchedule.ts),
+    -- independent of daily_schedule's own per-action send pacing within
+    -- whatever window is currently open. Generated once per day, never
+    -- regenerated.
+    CREATE TABLE IF NOT EXISTS visit_schedule (
+      date TEXT PRIMARY KEY,
+      windows_json TEXT NOT NULL,
+      generated_at INTEGER NOT NULL
+    );
+
     -- The visual campaign-builder graph (replaces the flat sequence_steps
     -- list — see the migration below for how existing linear campaigns
     -- carry over). Action nodes have at most one outgoing edge
@@ -518,6 +530,46 @@ export function saveDailySchedule(schedule: DailyScheduleRow): void {
       schedule.isWeekend ? 1 : 0,
       schedule.generatedAt,
     );
+}
+
+// --- Visit schedule (visitSchedule.ts's "when is the tab allowed to be
+// open at all" plan — see visit_schedule's own table comment above) ---
+
+export interface VisitScheduleRow {
+  date: string;
+  windows: Array<{ start: number; end: number }>;
+  generatedAt: number;
+}
+
+interface RawVisitScheduleRow {
+  date: string;
+  windows_json: string;
+  generated_at: number;
+}
+
+function visitScheduleFromRow(r: RawVisitScheduleRow): VisitScheduleRow {
+  return {
+    date: r.date,
+    windows: JSON.parse(r.windows_json) as Array<{ start: number; end: number }>,
+    generatedAt: r.generated_at,
+  };
+}
+
+/** Same "local calendar date in the account's own workHoursTimezone" rule
+ * as getDailySchedule above. */
+export function getVisitSchedule(date: string): VisitScheduleRow | null {
+  const row = getDb().prepare(`SELECT * FROM visit_schedule WHERE date = ?`).get(date) as RawVisitScheduleRow | undefined;
+  return row ? visitScheduleFromRow(row) : null;
+}
+
+export function saveVisitSchedule(schedule: VisitScheduleRow): void {
+  getDb()
+    .prepare(
+      `INSERT INTO visit_schedule (date, windows_json, generated_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT(date) DO NOTHING`,
+    )
+    .run(schedule.date, JSON.stringify(schedule.windows), schedule.generatedAt);
 }
 
 // --- Campaigns ---

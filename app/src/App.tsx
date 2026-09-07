@@ -18,6 +18,7 @@ import { InstantlyView } from './components/Instantly/InstantlyView';
 import { EmailGeneratorView } from './components/Email/EmailGeneratorView';
 import { LessonsView } from './components/Lessons/LessonsView';
 import { IncomingCallBanner } from './components/IncomingCallBanner';
+import { ImpersonationBanner } from './components/ImpersonationBanner';
 import { Toast } from './components/Toast';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { TypeToConfirmDialog } from './components/TypeToConfirmDialog';
@@ -208,7 +209,13 @@ function App() {
   // never rendered from, since that gate already bailed out first.
   const allowedTabs = useMemo(() => {
     const companyTabs = new Set(user?.company?.enabledFeatures ?? []);
-    if (user?.role === 'worker' && user.visibleTabs) {
+    // A super_admin impersonating a worker (user.impersonating set — see
+    // useAuthStore.ts) keeps role === 'super_admin' throughout (full admin
+    // rights while impersonating, by design), so this condition has to
+    // check impersonating too, not just role — otherwise the worker's own
+    // visibleTabs restriction would never actually apply while
+    // impersonating them.
+    if ((user?.role === 'worker' || user?.impersonating) && user.visibleTabs) {
       return new Set(user.visibleTabs.filter((t) => companyTabs.has(t)));
     }
     return companyTabs;
@@ -481,6 +488,14 @@ function App() {
       <button type="button" onClick={() => activeTableId && void loadTable(activeTableId)}>
         Bandyti dar kartą
       </button>
+      {/* Covers the "this table was reassigned away while I already had it
+          open" case (per-table ownership — see server/src/tableData/db.ts's
+          migration doc comment) — a retry above would just 404 again since
+          the table genuinely isn't accessible anymore, so this is the real
+          way out rather than a dead-end retry loop. */}
+      <button type="button" onClick={() => setActiveTable(null)}>
+        Grįžti į darbo sritį
+      </button>
     </div>
   ) : (
     <div className="app-loading">
@@ -498,6 +513,12 @@ function App() {
           time you go back to the workspace list and open a table again. */}
       <Softphone />
       <IncomingCallBanner onJumpToRow={handleJumpToRow} onJumpToContact={handleJumpToContact} />
+      <ImpersonationBanner
+        onReturned={() => {
+          setActiveTable(null);
+          setWorkspaceScreen('tables');
+        }}
+      />
       <ConfirmDialog />
       <TypeToConfirmDialog />
       {!activeTable ? (
@@ -528,6 +549,10 @@ function App() {
                   onJumpToRow={jumpToTableRow}
                   onJumpToContact={jumpToTableContact}
                   companyTabs={workerGrantableTabs(user.company?.enabledFeatures ?? [])}
+                  onImpersonated={() => {
+                    setActiveTable(null);
+                    setWorkspaceScreen('tables');
+                  }}
                 />
               ) : workspaceScreen === 'news' ? (
                 <NewsView />

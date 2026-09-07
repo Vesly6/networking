@@ -1,6 +1,6 @@
 import { useTableStore } from '../store/useTableStore';
 import { useToastStore } from '../store/useToastStore';
-import { getColumnByType } from './row';
+import { getColumnByType, getWebsiteColumn } from './row';
 import { addContact, joinContactFields } from './contacts';
 import type { ApolloSearchPerson, ApolloCompany, ApolloEnrichedPerson } from './apolloApi';
 
@@ -81,7 +81,12 @@ export function useAddApolloResultToTable() {
     }
     const companyColumn = getColumnByType(columns, 'company');
     const phoneColumn = getColumnByType(columns, 'phone');
-    const linkColumn = getColumnByType(columns, 'link');
+    // Prefer the column explicitly marked as the website (see
+    // Column.isWebsiteColumn's own doc comment) so a discovered domain
+    // lands in the same place the "🔍 Paieška" search itself reads from —
+    // falling back to the first plain link column when no column has been
+    // flagged yet, same as before this existed.
+    const linkColumn = getWebsiteColumn(columns) ?? getColumnByType(columns, 'link');
     const skipped: string[] = [];
 
     const rowId = addRow();

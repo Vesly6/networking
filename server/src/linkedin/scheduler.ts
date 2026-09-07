@@ -25,7 +25,8 @@ import {
   type SafetySettings,
 } from './safety.js';
 import { getOrCreateTodaysPlan, nextDueSlot } from './dailyPlan.js';
-import { getLinkedInPage } from './browser.js';
+import { getOrCreateTodaysVisitPlan, isWithinVisitWindow } from './visitSchedule.js';
+import { getLinkedInPage, closeLinkedInPageIfOpen, withLinkedInBusyGuard } from './browser.js';
 import {
   sendConnectionRequest,
   sendMessage,
@@ -47,7 +48,7 @@ import { personalizeLinkedInMessage } from '../openai.js';
 // fixed constant is the correct, honest value rather than threading a
 // real company id through a feature that doesn't have per-company state
 // anywhere else yet.
-const SINGLE_TENANT_PLAN_ID = 'default';
+export const SINGLE_TENANT_PLAN_ID = 'default';
 
 const DAY_MS = 86_400_000;
 
@@ -531,6 +532,14 @@ export interface SchedulerTickResult {
    * the account owner deliberately closed). Never set on a manual tick,
    * which still opens a tab on demand as before. */
   noTabOpen?: boolean;
+  /** True when this tick did nothing because visit-windows (see
+   * visitSchedule.ts) are enabled and right now falls outside every one of
+   * today's randomized visit windows — the whole point of that feature is
+   * that the LinkedIn tab isn't open (and nothing in this feature runs) for
+   * most of the day, not just when there happens to be no due action. Never
+   * set on a manual tick, which bypasses visit-windows entirely — see
+   * runSchedulerTick's own doc comment. */
+  outsideVisitWindow?: boolean;
 }
 
 // Real, live-reproduced race found this session: the background interval
@@ -612,6 +621,43 @@ export async function runSchedulerTick(isAutomatic = false, openaiApiKey?: strin
   }
   tickInProgress = true;
   try {
+    // Hoisted to the top (was previously read further down, after the
+    // humanize/due-action checks) — the visit-window gate right below needs
+    // it before anything else in this tick runs.
+    const settings = getSafetySettings();
+
+    // Visit windows (visitSchedule.ts): opt-in re-creation of "a person who
+    // checks LinkedIn every couple of hours, not someone who leaves it open
+    // 24/7." Automatic ticks only — a manual "▶ Vykdyti dabar" click is
+    // already a supervised, deliberate action, same reasoning as every
+    // other isAutomatic-only gate in this function. Paused is checked
+    // first and skips this block entirely: while paused, the tab's
+    // open/closed state should stay exactly as a human left it, not get
+    // opened or closed by this feature — the same real gap this codebase
+    // already found and fixed once for syncInbox() (see inbox.ts's own
+    // doc comment on the old "window keeps turning itself back on even
+    // while paused" bug).
+    if (isAutomatic && settings.visitWindowsEnabled && !settings.paused) {
+      const visitPlan = await getOrCreateTodaysVisitPlan(settings, SINGLE_TENANT_PLAN_ID);
+      if (!isWithinVisitWindow(visitPlan)) {
+        // "Leaving" — closes the tab if the previous tick's visit window
+        // has since ended. Bounded by this function's own 5-minute
+        // interval, same accepted lag as everywhere else timing-sensitive
+        // in this feature. closeLinkedInPageIfOpen() itself checks the
+        // busy guard and never throws, so this is always safe to call
+        // unconditionally here.
+        await closeLinkedInPageIfOpen();
+        return { due: 0, autoExecuted: 0, errors: 0, circuitBreakerTripped: false, outsideVisitWindow: true };
+      }
+      // "Arriving" — opens a tab (default, tab-creating mode) purely
+      // because we're inside a visit window, regardless of whether
+      // anything is actually due this tick. Without this, a visit with
+      // nothing due would never open a tab at all, and syncInbox() (which
+      // only ever reuses an existing tab, never opens one itself) would
+      // have nothing to work with on its own next tick.
+      await getLinkedInPage();
+    }
+
     // Feed-activity "texture" (humanize.ts) is independent of whether any
     // connect is due — a real person checks their own feed regardless of
     // whether they happen to have someone to connect with today.
@@ -633,7 +679,6 @@ export async function runSchedulerTick(isAutomatic = false, openaiApiKey?: strin
     if (due.length === 0) {
       return { due: 0, autoExecuted: 0, errors: 0, circuitBreakerTripped: false };
     }
-    const settings = getSafetySettings();
 
     let actionable = due;
     if (isAutomatic) {
@@ -660,7 +705,7 @@ export async function runSchedulerTick(isAutomatic = false, openaiApiKey?: strin
     let autoExecuted = 0;
     let errors = 0;
     for (const action of actionable) {
-      const result = await executeAction(action, openaiApiKey);
+      const result = await withLinkedInBusyGuard(() => executeAction(action, openaiApiKey));
       if (result.ok) {
         autoExecuted++;
       } else {
@@ -744,7 +789,7 @@ export async function withdrawInvite(leadId: string): Promise<ExecuteResult> {
   if (!match) return { ok: false, error: 'This lead is no longer a pending invite (already accepted, replied, or withdrawn).' };
   const startedAt = Date.now();
   try {
-    await withdrawConnectionRequest(match.leadUrl);
+    await withLinkedInBusyGuard(() => withdrawConnectionRequest(match.leadUrl));
     logAction({
       leadId,
       stepId: null,

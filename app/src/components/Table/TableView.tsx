@@ -42,7 +42,7 @@ import { parseTsv, buildTsv } from '../../utils/tsv';
 import { addNoteEntry, updateNoteEntry, removeNoteEntry, parseNoteHistory } from '../../utils/noteHistory';
 import { addContact, updateContact, removeContact, markSocialLookupNotFound } from '../../utils/contacts';
 import { columnLetter, formatCellRef, parseRangeRef } from '../../utils/spreadsheet';
-import { getColumnByType } from '../../utils/row';
+import { getColumnByType, getWebsiteUrl } from '../../utils/row';
 import { normalizePhoneDigits } from '../../utils/phoneMatch';
 import { VISI_ATSAKYMAI_TABLE_NAME } from '../../utils/instantlyReplySync';
 import { matchesNumericRange, parseNumericCellValue, type NumericRangeFilter } from '../../utils/numericFilter';
@@ -3375,6 +3375,7 @@ export function TableView({
           const rowCompanyName = rowCompanyColumn ? row.cells[rowCompanyColumn.id] : undefined;
           const rowContactColumn = getColumnByType(columns, 'contact');
           const rowContactsRaw = rowContactColumn ? row.cells[rowContactColumn.id] : undefined;
+          const rowWebsiteUrl = getWebsiteUrl(row, columns);
           const statusColumn = columns.find((c) => c.isStatusColumn);
           // Every mutation below reads the cell's value FRESH from the
           // store at call time rather than closing over the `rawValue`
@@ -3408,6 +3409,7 @@ export function TableView({
               mode={column.type}
               value={rawValue}
               companyName={rowCompanyName}
+              websiteUrl={rowWebsiteUrl}
               contactsRaw={rowContactsRaw}
               statusOptionColors={statusColumn?.optionColors}
               highlightEntryId={highlightContactId}

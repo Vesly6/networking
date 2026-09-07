@@ -10,6 +10,7 @@ import { buildDomainIndex, type RowDomainMatch } from '../../utils/rowDomainInde
 import { getPrimaryLabel } from '../../utils/row';
 import { joinContactFields, addContactsDedupByEmail, parseContacts } from '../../utils/contacts';
 import type { ImportChangeEntry } from '../../utils/importHistory';
+import { RowPickerField, type RowPickerOption } from './RowPickerField';
 
 const NONE = '__none__';
 const SKIP = '__skip__';
@@ -172,15 +173,18 @@ export function MergeContactsModal({ tableId, columns, rows, contactColumnId, on
 
   const [matchMode, setMatchMode] = useState<MatchMode>('website');
   const linkColumns = useMemo(() => columns.filter((c) => c.type === 'link'), [columns]);
-  // Auto-selected only in website mode when there's exactly one candidate
-  // column — an id/number can live in any column type, so there's nothing
-  // safe to guess there; the user picks explicitly.
-  const [matchColumnId, setMatchColumnId] = useState(() => (linkColumns.length === 1 ? linkColumns[0].id : ''));
+  // Prefer the column explicitly marked as the website (Column.isWebsiteColumn
+  // — see its own doc comment) when one exists, even among several link
+  // columns; otherwise auto-select only when there's exactly one candidate
+  // column at all. An id/number can live in any column type, so there's
+  // nothing safe to guess there; the user picks explicitly in that mode.
+  const defaultWebsiteColumnId = () => linkColumns.find((c) => c.isWebsiteColumn)?.id ?? (linkColumns.length === 1 ? linkColumns[0].id : '');
+  const [matchColumnId, setMatchColumnId] = useState(defaultWebsiteColumnId);
   const matchColumnOptions = matchMode === 'website' ? linkColumns : columns;
 
   const handleModeChange = (mode: MatchMode) => {
     setMatchMode(mode);
-    setMatchColumnId(mode === 'website' && linkColumns.length === 1 ? linkColumns[0].id : '');
+    setMatchColumnId(mode === 'website' ? defaultWebsiteColumnId() : '');
     setMapping((prev) => (prev ? { ...prev, matchCol: guessMatchCol(headers, mode) } : prev));
   };
 
@@ -214,6 +218,19 @@ export function MergeContactsModal({ tableId, columns, rows, contactColumnId, on
   const idIndex = useMemo(
     () => (matchMode === 'id' && matchColumnId ? buildIdIndex(columns, rows, matchColumnId) : new Map<string, RowDomainMatch[]>()),
     [matchMode, matchColumnId, columns, rows],
+  );
+
+  // Built once here instead of inside renderGroupRow (as the old code did),
+  // where it was recomputed from scratch — a second, full rows.map() — for
+  // every rendered group. Against a large table with thousands of groups
+  // that was a real O(groups × rows) CPU cost on its own, separate from the
+  // DOM-node-explosion RowPickerField below actually fixes. Sorted
+  // alphabetically so the picker's unfiltered "first 50" (shown the
+  // instant it opens, before the user types anything) is a meaningful,
+  // browsable slice rather than arbitrary row-insertion order.
+  const allRowOptions = useMemo<RowPickerOption[]>(
+    () => rows.map((r) => ({ rowId: r.id, label: getPrimaryLabel(r, columns) })).sort((a, b) => a.label.localeCompare(b.label)),
+    [rows, columns],
   );
 
   const groups = useMemo<CsvGroup[]>(() => {
@@ -304,15 +321,16 @@ export function MergeContactsModal({ tableId, columns, rows, contactColumnId, on
   const pendingCount = [...collisionGroups, ...unmatchedGroups].filter((g) => resolutionFor(g) === undefined).length;
   const totalPeople = groups.reduce((sum, g) => sum + g.entryTexts.length, 0);
 
-  // Every group that WON'T be merged if the user confirms right now — not
-  // decided yet, or explicitly skipped. Recomputed live as resolutions
-  // change, so the download button's own count (and the file it produces)
-  // always matches what "Pridėti kontaktus" would actually leave out.
-  const unresolvedGroups = groups.filter((g) => {
-    const r = resolutionFor(g);
-    return !r || r === SKIP;
-  });
-  const unresolvedContactCount = unresolvedGroups.reduce((sum, g) => sum + g.rawRows.length, 0);
+  // Groups within one bucket that WON'T be merged if the user confirms
+  // right now — not decided yet, or explicitly skipped. Recomputed live as
+  // resolutions change, so each download button's own count (and the file
+  // it produces) always matches what "Pridėti kontaktus" would actually
+  // leave out of THAT bucket specifically.
+  const unresolvedOf = (bucketGroups: CsvGroup[]) => bucketGroups.filter((g) => { const r = resolutionFor(g); return !r || r === SKIP; });
+  const unresolvedCollisionGroups = unresolvedOf(collisionGroups);
+  const unresolvedUnmatchedGroups = unresolvedOf(unmatchedGroups);
+  const unresolvedCollisionCount = unresolvedCollisionGroups.reduce((sum, g) => sum + g.rawRows.length, 0);
+  const unresolvedUnmatchedCount = unresolvedUnmatchedGroups.reduce((sum, g) => sum + g.rawRows.length, 0);
 
   // On explicit request — until now, a skipped/unresolved contact just
   // vanished the moment you clicked "Pridėti kontaktus", with no way to
@@ -320,11 +338,17 @@ export function MergeContactsModal({ tableId, columns, rows, contactColumnId, on
   // fixing the source data, etc.). Exports the CSV's own original columns
   // (not the already-joined contact text) so the download is a normal,
   // re-usable CSV — including the same "Mapping contacts"-style column, if
-  // the file had one, for a future numbered re-match.
-  const handleDownloadUnresolved = () => {
-    const data = unresolvedGroups.flatMap((g) => g.rawRows);
+  // the file had one, for a future numbered re-match. Split into two
+  // separate downloads — one per bucket — also on explicit request: a
+  // "keli galimi atitikmenys" collision (the source data matched more than
+  // one existing row) needs a different follow-up than a plain "nerasta
+  // atitikmens" miss (the source data didn't match anything at all), so a
+  // single combined file mixing both was less useful for actually acting
+  // on the results afterward.
+  const downloadGroupsCsv = (groupsToExport: CsvGroup[], filename: string) => {
+    const data = groupsToExport.flatMap((g) => g.rawRows);
     const csv = Papa.unparse({ fields: headers, data });
-    downloadCsv('nesusieti_kontaktai.csv', csv);
+    downloadCsv(filename, csv);
   };
 
   const handleConfirm = () => {
@@ -380,7 +404,7 @@ export function MergeContactsModal({ tableId, columns, rows, contactColumnId, on
   const renderGroupRow = (group: CsvGroup) => {
     const bucket = bucketOf(group);
     const resolution = resolutionFor(group);
-    const options = bucket === 'collision' ? group.candidates : rows.map((r) => ({ rowId: r.id, label: getPrimaryLabel(r, columns) }));
+    const options = bucket === 'collision' ? group.candidates : allRowOptions;
     return (
       <div className="merge-contacts-group" key={group.key}>
         <div className="merge-contacts-group-info">
@@ -390,17 +414,13 @@ export function MergeContactsModal({ tableId, columns, rows, contactColumnId, on
             {group.matchValue && ` · ${group.matchValue}`}
           </span>
         </div>
-        <select value={resolution ?? ''} onChange={(e) => setResolution(group.key, e.target.value)}>
-          <option value="" disabled>
-            — pasirinkite eilutę —
-          </option>
-          <option value={SKIP}>Praleisti</option>
-          {options.map((o) => (
-            <option key={o.rowId} value={o.rowId}>
-              {o.label}
-            </option>
-          ))}
-        </select>
+        <RowPickerField
+          value={resolution}
+          options={options}
+          pinnedOption={{ rowId: SKIP, label: 'Praleisti' }}
+          placeholder="— pasirinkite eilutę —"
+          onChange={(v) => setResolution(group.key, v)}
+        />
       </div>
     );
   };
@@ -590,18 +610,23 @@ export function MergeContactsModal({ tableId, columns, rows, contactColumnId, on
               Iš viso {totalPeople} kontaktų, {groups.length} įmonių grupių. Automatiškai rasta: {matchedGroups.length} · Keli
               galimi atitikmenys: {collisionGroups.length} · Nerasta atitikmens: {unmatchedGroups.length}.
             </p>
-            {unresolvedContactCount > 0 && (
-              <button type="button" onClick={handleDownloadUnresolved}>
-                <Download className="icon" size={14} /> Atsiųsti {unresolvedContactCount} nesusietų kontaktų
-              </button>
-            )}
             {collisionGroups.length > 0 && (
               <>
                 <div className="merge-contacts-section-header">
                   <h3 className="merge-contacts-section-title">Keli galimi atitikmenys — pasirinkite vieną</h3>
-                  <button type="button" onClick={() => skipAll(collisionGroups)}>
-                    Praleisti visus ({collisionGroups.length})
-                  </button>
+                  <div className="merge-contacts-section-actions">
+                    {unresolvedCollisionCount > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => downloadGroupsCsv(unresolvedCollisionGroups, 'keli_galimi_atitikmenys.csv')}
+                      >
+                        <Download className="icon" size={14} /> Atsiųsti {unresolvedCollisionCount}
+                      </button>
+                    )}
+                    <button type="button" onClick={() => skipAll(collisionGroups)}>
+                      Praleisti visus ({collisionGroups.length})
+                    </button>
+                  </div>
                 </div>
                 <div className="merge-contacts-list">{collisionGroups.map(renderGroupRow)}</div>
               </>
@@ -610,9 +635,19 @@ export function MergeContactsModal({ tableId, columns, rows, contactColumnId, on
               <>
                 <div className="merge-contacts-section-header">
                   <h3 className="merge-contacts-section-title">Nerasta atitikmens — pasirinkite eilutę arba praleiskite</h3>
-                  <button type="button" onClick={() => skipAll(unmatchedGroups)}>
-                    Praleisti visus ({unmatchedGroups.length})
-                  </button>
+                  <div className="merge-contacts-section-actions">
+                    {unresolvedUnmatchedCount > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => downloadGroupsCsv(unresolvedUnmatchedGroups, 'nerasta_atitikmens.csv')}
+                      >
+                        <Download className="icon" size={14} /> Atsiųsti {unresolvedUnmatchedCount}
+                      </button>
+                    )}
+                    <button type="button" onClick={() => skipAll(unmatchedGroups)}>
+                      Praleisti visus ({unmatchedGroups.length})
+                    </button>
+                  </div>
                 </div>
                 <div className="merge-contacts-list">{unmatchedGroups.map(renderGroupRow)}</div>
               </>

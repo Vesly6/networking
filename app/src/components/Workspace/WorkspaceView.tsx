@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useWorkspaceStore } from '../../store/useWorkspaceStore';
 import { useAuthStore } from '../../store/useAuthStore';
+import { useWorkersStore } from '../../store/useWorkersStore';
 import { confirmDeleteTable } from '../../utils/confirmDeleteTable';
 import { countRowsForTable } from '../../db/db';
 import { BrandLogo } from '../BrandLogo';
@@ -58,6 +59,7 @@ export function WorkspaceView({
   const renameTable = useWorkspaceStore((s) => s.renameTable);
   const deleteTable = useWorkspaceStore((s) => s.deleteTable);
   const setTableBackupFlag = useWorkspaceStore((s) => s.setTableBackupFlag);
+  const setTableOwner = useWorkspaceStore((s) => s.setTableOwner);
   const logout = useAuthStore((s) => s.logout);
   const currentUser = useAuthStore((s) => s.user);
   // A real, reported gap: this screen never checked role/permissions at
@@ -74,6 +76,15 @@ export function WorkspaceView({
   // ordinary row cleanup inside a table they're scoped to shouldn't also
   // mean they can make the whole table disappear.
   const canManageTables = currentUser?.role !== 'worker';
+
+  // Needed for the per-table owner picker below (admin-only) — a worker
+  // never sees this screen's management controls at all, so there's
+  // nothing to load in that case.
+  const workers = useWorkersStore((s) => s.workers);
+  const loadWorkers = useWorkersStore((s) => s.load);
+  useEffect(() => {
+    if (canManageTables) void loadWorkers();
+  }, [canManageTables, loadWorkers]);
 
   const [rowCounts, setRowCounts] = useState<Record<string, number>>({});
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -203,6 +214,20 @@ export function WorkspaceView({
                   >
                     Ištrinti
                   </button>
+                  <select
+                    className="table-card-owner-select"
+                    title="Kam priklauso ši lentelė — matys tik jis (ir jūs)"
+                    value={t.ownerUserId ?? currentUser?.id ?? ''}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={(e) => setTableOwner(t.id, e.target.value)}
+                  >
+                    {currentUser && <option value={currentUser.id}>Aš (privatu)</option>}
+                    {workers.map((w) => (
+                      <option key={w.id} value={w.id}>
+                        {`${w.firstName} ${w.lastName}`.trim()}
+                      </option>
+                    ))}
+                  </select>
                 </div>
               )}
             </div>

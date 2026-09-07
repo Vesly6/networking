@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { getCampaign, listEmails, listLeads, type InstantlyLead } from './instantly.js';
 import { loadTables, getTable, saveTable, updateTableColumns, loadRowsForTable, saveRows, type TableMeta, type Row } from './tableData/db.js';
+import { getCompanySuperAdmin } from './accounts/db.js';
 
 /** Server-side port of app/src/utils/instantlyReplySync.ts, for the
  * automatic webhook path (server/src/index.ts's POST /api/instantly/webhook)
@@ -117,6 +118,11 @@ interface SyncColumn {
  * hand via the normal "+ Nauja lentelė" flow before this ever ran would
  * have the generic seed columns, not REPLY_COLUMNS). */
 function findOrCreateTargetTable(companyId: string, name: string): TableMeta {
+  // Deliberately unfiltered (no TableAccessContext) — this has to find the
+  // company's one "Visi atsakymai" table regardless of who currently owns
+  // it, not just a copy owned by whichever identity happens to be
+  // resolvable in this webhook/system context (there usually isn't one at
+  // all — see this function's own owner-assignment line below).
   const existing = loadTables(companyId).find((t) => t.name === name);
   if (existing) {
     const fresh = getTable(existing.id, companyId) ?? existing;
@@ -135,7 +141,22 @@ function findOrCreateTargetTable(companyId: string, name: string): TableMeta {
   // as every other table-creation path (see tableData/db.ts's
   // restoreBackupAsNewTable for the identical query).
   const nextOrder = loadTables(companyId).reduce((max, t) => Math.max(max, t.order), -1) + 1;
-  const table: TableMeta = { id: randomUUID(), name, columns, dailyBackupEnabled: false, order: nextOrder, createdAt: now, updatedAt: now };
+  // No acting user in scope here (triggered by a platform-admin action or
+  // an unauthenticated webhook — see this file's own top-of-file doc
+  // comment) — defaults to this company's own super_admin, same as every
+  // other system-context table creation (tableData/db.ts's
+  // backfillTableOwners/restoreBackupAsNewTable). The admin can reassign
+  // it afterward via the normal owner picker like any other table.
+  const table: TableMeta = {
+    id: randomUUID(),
+    name,
+    columns,
+    dailyBackupEnabled: false,
+    order: nextOrder,
+    ownerUserId: getCompanySuperAdmin(companyId)?.id,
+    createdAt: now,
+    updatedAt: now,
+  };
   saveTable(table, companyId);
   return table;
 }

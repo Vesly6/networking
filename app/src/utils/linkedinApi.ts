@@ -109,6 +109,12 @@ export interface LinkedInSafetySettings {
   likesMinGapMinutes: number;
   aiScheduleEnabled: boolean;
   autoPersonalizeEnabled: boolean;
+  /** Opt-in, off by default — when on, the LinkedIn tab only opens during
+   * randomized "visit windows" (see LinkedInVisitPlan below) instead of
+   * staying open indefinitely once opened. */
+  visitWindowsEnabled: boolean;
+  visitGapHours: number;
+  visitDurationMinutes: number;
 }
 
 // Message caps/counters were missing here even though the server has
@@ -203,4 +209,24 @@ export interface LinkedInTodaysPlan {
  * reused for the rest of the day). */
 export function fetchTodaysLinkedInPlan(): Promise<LinkedInTodaysPlan> {
   return localApiRequest('/api/linkedin/plan/today');
+}
+
+export interface LinkedInVisitPlan {
+  /** False whenever visitWindowsEnabled is off — in that case `windows` is
+   * always empty and `currentlyOnline` is always true (the tab's open/
+   * closed state is untouched by this feature, same as before it existed). */
+  enabled: boolean;
+  date: string | null;
+  windows: Array<{ start: number; end: number }>;
+  currentlyOnline: boolean;
+  nextWindowStart: number | null;
+}
+
+/** The Apžvalga dashboard's "is the account currently online" glance — see
+ * server/src/linkedin/visitSchedule.ts for what a visit window actually is
+ * (a randomized span of time during which the LinkedIn tab is allowed to
+ * be open at all, independent of fetchTodaysLinkedInPlan's own per-action
+ * send pacing within whatever window is currently open). */
+export function fetchTodaysLinkedInVisitPlan(): Promise<LinkedInVisitPlan> {
+  return localApiRequest('/api/linkedin/visit-plan/today');
 }

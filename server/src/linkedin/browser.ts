@@ -135,6 +135,68 @@ export async function getLinkedInPage(requireExistingTab = false): Promise<Page 
   return page;
 }
 
+// --- Tab lifecycle for visit windows (visitSchedule.ts) ---
+// Everything above this point only ever *opens* (or reuses) a tab — until
+// the visit-windows feature, nothing in this codebase ever closed one.
+// These two additions exist together: closing a tab mid-operation (a
+// scheduler tick deciding a visit window just ended while syncInbox() or a
+// send is still mid `page.click()`/`page.goto()`) would throw a "Target
+// closed" error somewhere in the middle of that call — a real risk once
+// visit windows make "outside the window" the common state for most of the
+// day, not a rare edge case. withLinkedInBusyGuard() wraps every real
+// Playwright-driving call site in this feature; closeLinkedInPageIfOpen()
+// checks it first and simply skips closing this tick if anything is still
+// in flight, deferring to the next tick (5 minutes later) instead — the
+// same bounded-lag tradeoff already accepted for the close timing itself.
+
+let activeOperations = 0;
+
+function isLinkedInPageBusy(): boolean {
+  return activeOperations > 0;
+}
+
+/** Wrap any call that performs real Playwright actions against the shared
+ * LinkedIn tab (sending a connect/message, scraping the inbox, liking a
+ * post, withdrawing an invite) — see the module doc comment above for why
+ * this matters once tabs can be closed automatically. */
+export async function withLinkedInBusyGuard<T>(fn: () => Promise<T>): Promise<T> {
+  activeOperations++;
+  try {
+    return await fn();
+  } finally {
+    activeOperations--;
+  }
+}
+
+/** Closes every currently-open linkedin.com tab, if any — the "leaving"
+ * half of a visit window ending. Deliberately closes *every* matching tab,
+ * not just the first found (getLinkedInPage()'s reuse lookup only ever
+ * needs to find one, but a human could have opened a second LinkedIn tab
+ * by hand in the same shared profile — leaving that one open would defeat
+ * "fully closed and dormant"). Never touches browser.close() — the
+ * underlying Chrome process/CDP connection and the human's one-time manual
+ * launch are completely unaffected, only this specific tab goes away.
+ * Never throws and never attempts a fresh CDP connection (deliberately
+ * checks the module-level `browser` variable directly rather than calling
+ * getBrowser()) — once visit windows are in normal use, "outside a window"
+ * is the majority state for most of the day, including stretches where
+ * Chrome may not even be running, and that must never surface as an error
+ * from a background tick. */
+export async function closeLinkedInPageIfOpen(): Promise<boolean> {
+  if (isLinkedInPageBusy()) return false;
+  try {
+    if (!browser?.isConnected()) return false;
+    const ctx = browser.contexts()[0];
+    if (!ctx) return false;
+    const tabs = ctx.pages().filter((p) => p.url().includes('linkedin.com'));
+    if (tabs.length === 0) return false;
+    await Promise.all(tabs.map((t) => t.close().catch(() => {})));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // --- Human-like interaction primitives ---
 // Every one of these exists for the same reason: an instant click, a
 // constant-speed mouse move, or a fixed-interval keystroke stream is

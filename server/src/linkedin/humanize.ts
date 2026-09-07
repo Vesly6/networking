@@ -1,6 +1,7 @@
 import { getSetting, setSetting, logAction } from './db.js';
 import { getSafetySettings, isPaused, isWithinWorkHours } from './safety.js';
 import { likeRecentFeedPosts } from './page.js';
+import { withLinkedInBusyGuard } from './browser.js';
 
 // Account-level activity texture, independent of whether any connect is
 // actually due — the research done for the timing/scheduling rework this
@@ -76,7 +77,7 @@ export async function maybeRunHumanizePass(now = Date.now()): Promise<HumanizeRe
   const maxLikes = Math.random() < 0.5 ? 1 : 2;
   const startedAt = Date.now();
   try {
-    const liked = await likeRecentFeedPosts(maxLikes);
+    const liked = await withLinkedInBusyGuard(() => likeRecentFeedPosts(maxLikes));
     logAction({
       leadId: null,
       stepId: null,

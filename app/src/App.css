@@ -168,6 +168,71 @@ svg.icon {
   }
 }
 
+/* Persistent impersonation indicator (ImpersonationBanner.tsx) — a company
+   super_admin acting as one of their own workers. Fixed, full-width, at the
+   very top (higher z-index than .incoming-call-banner's 200, since both
+   could in principle be visible at once and this one is the more important
+   "which account am I in" signal) — deliberately NOT dismissible, so it
+   stays visible for the entire impersonation session regardless of scroll
+   position or which tab/screen is open. Amber, not the app's own --accent/
+   --danger tokens, specifically so it reads as its own distinct "you're in
+   a different mode" signal rather than blending in as an ordinary info/
+   error banner. */
+.impersonation-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  padding: 0.45em 1rem;
+  background: #fdf1d6;
+  border-bottom: 1px solid #e0b23d;
+  color: #7a5b0a;
+  font-size: 0.85rem;
+}
+.impersonation-banner-text strong {
+  font-weight: 700;
+}
+.impersonation-banner-return {
+  flex-shrink: 0;
+  font-size: 0.82rem;
+  font-weight: 600;
+  padding: 0.3em 0.7em;
+  border-radius: 6px;
+  background: #7a5b0a;
+  color: #fff8e8;
+  border: none;
+  white-space: nowrap;
+}
+.impersonation-banner-return:hover {
+  background: #6b4f08;
+}
+.impersonation-banner-return:disabled {
+  opacity: 0.7;
+}
+:root[data-theme='dark'] .impersonation-banner {
+  background: #3d3316;
+  border-bottom-color: #6b551c;
+  color: #f0d78c;
+}
+:root[data-theme='dark'] .impersonation-banner-return {
+  background: #f0d78c;
+  color: #2e2e2c;
+}
+:root[data-theme='dark'] .impersonation-banner-return:hover {
+  background: #e3c86b;
+}
+@media (max-width: 640px) {
+  .impersonation-banner {
+    font-size: 0.78rem;
+    padding: 0.4em 0.6em;
+  }
+}
+
 .recovery-banner {
   display: flex;
   align-items: center;
@@ -2917,6 +2982,24 @@ tr.row-drop-end td {
 .cell-hover-contact-edit:hover {
   background: var(--bg-hover);
 }
+.cell-hover-contact-find-email,
+.cell-hover-contact-find-phone {
+  flex: 0 0 auto;
+  border: none;
+  background: transparent;
+  font-size: 0.85rem;
+  line-height: 1;
+  padding: 0.2em 0.3em;
+}
+.cell-hover-contact-find-email:hover,
+.cell-hover-contact-find-phone:hover {
+  background: var(--bg-hover);
+}
+.cell-hover-contact-find-email:disabled,
+.cell-hover-contact-find-phone:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
 
 /* The "sent/replied" tracking icon — a single icon, colored by state
    (blue: sent, no reply yet; green: at least one reply pushed in via
@@ -3138,6 +3221,16 @@ tr.row-drop-end td {
 .cell-hover-apollo-result-add:disabled {
   opacity: 0.6;
   cursor: default;
+}
+.cell-hover-apollo-result-add-group {
+  display: flex;
+  gap: 0.35rem;
+  flex-shrink: 0;
+}
+.cell-hover-apollo-result-add-phone {
+  border-color: var(--border);
+  background: transparent;
+  color: var(--text);
 }
 
 /* A result already present among this row's own Contacts entries (best-
@@ -3848,6 +3941,7 @@ tr.row-drop-end td {
 
 .table-card-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
   margin-top: auto;
   padding-top: 0.4rem;
@@ -3870,6 +3964,16 @@ tr.row-drop-end td {
   opacity: 1;
   background: var(--bg-alt);
   border-color: var(--accent);
+}
+
+/* Per-table owner reassignment picker (see WorkspaceView.tsx and
+   server/src/tableData/db.ts's ownership migration) — matches the sibling
+   action buttons' own compact sizing rather than the browser's larger
+   default <select> chrome. */
+.table-card-owner-select {
+  font-size: 0.78rem;
+  padding: 0.3em 0.5em;
+  max-width: 140px;
 }
 
 /* Owner's Admin dashboard (AdminView.tsx) — reuses .workspace-view/
@@ -4776,6 +4880,53 @@ tr.row-drop-end td {
 }
 .combobox-option-active {
   background: var(--bg-hover);
+}
+
+/* RowPickerField — a <select> replacement for choosing one row out of a
+   list too large to render as plain <option> elements (see the
+   component's own doc comment — this exists because MergeContactsModal.tsx
+   used to render one <option> per table row, per rendered group, which
+   crashed the tab outright against a real ~14,500-row table). The trigger
+   button mimics a native select's box; the popover reuses
+   .date-cell-contact-option for its rows and only needs its own scroll
+   container + a couple of hint states. */
+.row-picker-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+  text-align: left;
+  font-weight: 400;
+}
+.row-picker-trigger-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.row-picker-search {
+  width: 100%;
+}
+/* Deliberately NOT display:flex — .date-cell-contact-option (reused for
+   these rows) sets its own overflow: hidden for text-ellipsis, and a
+   flex column container's default flex-shrink:1 combines with that to
+   collapse the automatic minimum size to 0, letting the browser squash
+   every row down to a few px tall instead of actually overflowing and
+   scrolling (confirmed live: rows rendered at ~12px instead of their
+   natural ~24px against 51 stacked options). The buttons are already
+   `display: block; width: 100%` on their own, so a plain block container
+   here — no flexbox at all — stacks them normally and lets overflow-y:
+   auto do its actual job. This is exactly how the same class already
+   works everywhere else it's used (DataCell.tsx's contact-picker popover
+   renders these as plain Popover children, no flex wrapper at all). */
+.row-picker-options {
+  max-height: 240px;
+  overflow-y: auto;
+}
+.row-picker-hint {
+  padding: 0.4em 0.5em;
+  font-size: 0.78rem;
+  color: var(--text-muted);
 }
 
 /* CompanyLookupInput — same chips/dropdown look as .combobox, plus a
@@ -6818,6 +6969,12 @@ tr.row-drop-end td {
   padding: 0.25em 0.6em;
   flex-shrink: 0;
 }
+.merge-contacts-section-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
 .merge-contacts-warning {
   margin: 0;
   padding: 0.5rem 0.7rem;
@@ -6859,7 +7016,7 @@ tr.row-drop-end td {
   font-size: 0.75rem;
   color: var(--text-muted);
 }
-.merge-contacts-group select {
+.merge-contacts-group .row-picker-trigger {
   width: 100%;
   font-size: 0.8rem;
 }

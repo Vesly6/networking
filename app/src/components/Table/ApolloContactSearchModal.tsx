@@ -11,6 +11,7 @@ import {
   type PeopleSearchParams,
 } from '../../utils/apolloApi';
 import { cleanCompanyNameForSearch, guessCompanyDomain } from '../../utils/companyName';
+import { normalizeDomain } from '../../utils/domainMatch';
 import { joinContactFields, parseContacts, contactTextToFields } from '../../utils/contacts';
 import { useToastStore } from '../../store/useToastStore';
 import { usePendingPhoneSearchStore } from '../../store/usePendingPhoneSearchStore';
@@ -22,6 +23,17 @@ interface ApolloContactSearchModalProps {
    * query (cleaned, still fully editable) so the common case is still
    * "open, confirm, done," not "open, retype the company from scratch." */
   initialCompanyName: string;
+  /** This row's actual website URL (utils/row.ts's getWebsiteUrl), if the
+   * table has one reliably identified — normalized (utils/domainMatch.ts's
+   * normalizeDomain) to seed the "Įmonės domenas" field with the row's
+   * REAL domain. Fixed a real, reported bug: this field used to always be
+   * guessed from the company name (guessCompanyDomain below), which
+   * fabricates a plausible-looking but wrong ".com" domain (e.g. "Saudingos
+   * autotransportas" -> "saudingosautotransportas.com") even when the row
+   * already had a real website like "saudingos.lt" sitting in its own
+   * link column — the guess was never even consulting that column.
+   * Undefined falls back to the guess exactly as before. */
+  initialWebsiteUrl?: string;
   /** This row's raw Contacts-cell value (same string CellHoverEditor's own
    * `value` prop already holds in contact mode) — used only to flag people
    * search results that have already been added to this row (see
@@ -73,16 +85,20 @@ const PHONE_POLL_MAX_MS = 5 * 60 * 1000;
  * modal usually already has a good guess for.
  *
  * Both the name and domain fields are pre-filled from the row's own known
- * data (cleaned name, best-effort guessed domain — see
- * guessCompanyDomain in companyName.ts) but nothing is sent to Apollo
- * until the user explicitly submits (Enter in either field, or the
- * search button). Domain is what's actually searched on; if the field is
- * empty but a name is present, a domain is guessed from the name at
- * submit time. If a domain search comes up empty, the fix is editing
- * either field and searching again — there's no separate "browse
- * companies and pick one" step to fall back to anymore. */
+ * data — cleaned name, and the row's REAL website domain when one can be
+ * reliably identified (initialWebsiteUrl, normalized via
+ * utils/domainMatch.ts's normalizeDomain), falling back to a best-effort
+ * guessed domain (guessCompanyDomain in companyName.ts) only when the row
+ * has no identifiable website value at all — but nothing is sent to Apollo
+ * until the user explicitly submits (Enter in either field, or the search
+ * button). Domain is what's actually searched on; if the field is empty,
+ * the same real-website-first-then-guess fallback runs again at submit
+ * time. If a domain search comes up empty, the fix is editing either field
+ * and searching again — there's no separate "browse companies and pick
+ * one" step to fall back to anymore. */
 export function ApolloContactSearchModal({
   initialCompanyName,
+  initialWebsiteUrl,
   existingContactsRaw,
   onAddContact,
   onUpdateContact,
@@ -108,7 +124,13 @@ export function ApolloContactSearchModal({
   onUpdateContactRef.current = onUpdateContact;
 
   const [companyNameQuery, setCompanyNameQuery] = useState(cleanCompanyNameForSearch(initialCompanyName));
-  const [companyDomainQuery, setCompanyDomainQuery] = useState(() => guessCompanyDomain(initialCompanyName));
+  // The row's real website (normalized to a bare domain) always wins over
+  // guessing one from the company name — see initialWebsiteUrl's own doc
+  // comment above for the exact bug this fixes. Only guesses from the name
+  // when the row genuinely has no identifiable website value at all.
+  const [companyDomainQuery, setCompanyDomainQuery] = useState(
+    () => normalizeDomain(initialWebsiteUrl ?? '') ?? guessCompanyDomain(initialCompanyName),
+  );
 
   const [peopleParams, setPeopleParams] = useState<PeopleSearchParams>({ per_page: 100 });
   const [peopleResults, setPeopleResults] = useState<ApolloSearchPerson[]>([]);
@@ -188,7 +210,8 @@ export function ApolloContactSearchModal({
   // same finding that originally motivated preferring domain over id in
   // the old company-search flow this replaces).
   const runQuickPeopleSearch = async () => {
-    const domain = companyDomainQuery.trim() || guessCompanyDomain(companyNameQuery.trim());
+    const domain =
+      companyDomainQuery.trim() || normalizeDomain(initialWebsiteUrl ?? '') || guessCompanyDomain(companyNameQuery.trim());
     if (!domain) return;
     const params: PeopleSearchParams = { per_page: 100, q_organization_domains_list: [domain] };
     setPeopleParams(params);
@@ -266,7 +289,7 @@ export function ApolloContactSearchModal({
   // parallel*, not queued one after another; the wall-clock cost of adding
   // 10 people with phones is "however long the slowest one takes," not 10x
   // that.
-  const handleAddPerson = async (person: ApolloSearchPerson) => {
+  const handleAddPerson = async (person: ApolloSearchPerson, withPhone: boolean) => {
     setAddingPersonIds((prev) => new Set(prev).add(person.id));
     try {
       const result = await enrichPerson({
@@ -274,7 +297,7 @@ export function ApolloContactSearchModal({
         name: [person.first_name, person.last_name_obfuscated].filter(Boolean).join(' ') || undefined,
         organization_name: companyNameQuery.trim() || undefined,
         domain: activeDomain || companyDomainQuery.trim() || undefined,
-        reveal_phone_number: true,
+        reveal_phone_number: withPhone,
       });
       const firstName = result.person?.first_name || person.first_name || '';
       const lastName = result.person?.last_name || person.last_name_obfuscated || '';
@@ -301,7 +324,17 @@ export function ApolloContactSearchModal({
         id,
       );
       setPeopleResults((prev) => prev.filter((p) => p.id !== person.id));
-      showToast(`${firstName || 'Kontaktas'} pridėtas`);
+      // "pridėtas/a" — Apollo doesn't expose the contact's gender, so the
+      // Lithuanian masculine/feminine verb-agreement suffix is written as
+      // both options rather than hardcoding the masculine form for every
+      // name (on explicit request, after "Jonas pridėtas" read fine but
+      // "Eglė pridėtas" is grammatically wrong).
+      showToast(`${firstName || 'Kontaktas'} pridėtas/a`);
+
+      // The cheap path stops right here — never touches request_id or the
+      // poll loop below, so a plain "+ Pridėti" click never attempts (and
+      // never risks paying for) a phone lookup the user didn't ask for.
+      if (!withPhone) return;
 
       const applyPhone = (phone: string) => {
         onUpdateContactRef.current(
@@ -402,9 +435,9 @@ export function ApolloContactSearchModal({
           {filtersExpanded && (
           <div className="apollo-search-modal-filters">
             <p className="apollo-search-modal-hint">
-              Domenas ieškomas pirmiausia — jei jo nėra, spėjamas iš pavadinimo. Apollo užklausa vykdoma tik
-              paspaudus paieškos mygtuką arba Enter, ne automatiškai atidarius šį langą, ir žmonių paieška yra
-              nemokama.
+              Domenas ieškomas pirmiausia — jei eilutėje yra pažymėta svetainės nuoroda, domenas paimamas iš jos;
+              jei ne, jis spėjamas iš pavadinimo. Apollo užklausa vykdoma tik paspaudus paieškos mygtuką arba
+              Enter, ne automatiškai atidarius šį langą, ir žmonių paieška yra nemokama.
             </p>
             <form
               className="apollo-company-quick-search"
@@ -481,19 +514,32 @@ export function ApolloContactSearchModal({
                     {p.title && <span className="search-result-detail-muted"> — {p.title}</span>}
                     {added && <span className="cell-hover-apollo-result-added-badge"><Check className="icon" size={12} /> Jau pridėta</span>}
                   </span>
-                  <button
-                    type="button"
-                    className="cell-hover-apollo-result-add"
-                    disabled={addingPersonIds.has(p.id)}
-                    title={
-                      added
-                        ? 'Panašus kontaktas jau yra šioje eilutėje — vis tiek galima pridėti dar kartą'
-                        : 'Prideda kontaktą iškart; telefono numerį (jei jį pavyksta rasti) įrašo pačiam po kelių minučių'
-                    }
-                    onClick={() => void handleAddPerson(p)}
-                  >
-                    {addingPersonIds.has(p.id) ? '…' : added ? '+ Pridėti vėl' : '+ Pridėti'}
-                  </button>
+                  <div className="cell-hover-apollo-result-add-group">
+                    <button
+                      type="button"
+                      className="cell-hover-apollo-result-add"
+                      disabled={addingPersonIds.has(p.id)}
+                      title={
+                        (added ? 'Panašus kontaktas jau yra šioje eilutėje — vis tiek galima pridėti dar kartą. ' : '') +
+                        'Prideda kontaktą su vardu ir el. paštu (jei rastas) — telefono kreditų nesunaudoja.'
+                      }
+                      onClick={() => void handleAddPerson(p, false)}
+                    >
+                      {addingPersonIds.has(p.id) ? '…' : added ? '+ Pridėti vėl' : '+ Pridėti'}
+                    </button>
+                    <button
+                      type="button"
+                      className="cell-hover-apollo-result-add cell-hover-apollo-result-add-phone"
+                      disabled={addingPersonIds.has(p.id)}
+                      title={
+                        (added ? 'Panašus kontaktas jau yra šioje eilutėje — vis tiek galima pridėti dar kartą. ' : '') +
+                        'Prideda kontaktą iškart; telefono numerį (jei jį pavyksta rasti, +8 kreditai) įrašo pačiam po kelių minučių.'
+                      }
+                      onClick={() => void handleAddPerson(p, true)}
+                    >
+                      {addingPersonIds.has(p.id) ? '…' : added ? '+ Pridėti vėl su tel.' : '+ Pridėti su tel.'}
+                    </button>
+                  </div>
                 </div>
               );
             })}

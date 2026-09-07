@@ -4,9 +4,11 @@ import { confirmDialog } from '../../store/useConfirmStore';
 import { useToastStore } from '../../store/useToastStore';
 import {
   fetchTodaysLinkedInPlan,
+  fetchTodaysLinkedInVisitPlan,
   parseConnectTiming,
   type LinkedInSafetySettings,
   type LinkedInTodaysPlan,
+  type LinkedInVisitPlan,
   type LinkedInActionLogEntry,
 } from '../../utils/linkedinApi';
 import { CampaignsPanel } from './CampaignsPanel';
@@ -118,6 +120,9 @@ interface SettingsDraft {
   likesMinGapMinutes: string;
   aiScheduleEnabled: boolean;
   autoPersonalizeEnabled: boolean;
+  visitWindowsEnabled: boolean;
+  visitGapHours: string;
+  visitDurationMinutes: string;
 }
 
 function toDraft(s: LinkedInSafetySettings): SettingsDraft {
@@ -141,6 +146,9 @@ function toDraft(s: LinkedInSafetySettings): SettingsDraft {
     likesMinGapMinutes: String(s.likesMinGapMinutes),
     aiScheduleEnabled: s.aiScheduleEnabled,
     autoPersonalizeEnabled: s.autoPersonalizeEnabled,
+    visitWindowsEnabled: s.visitWindowsEnabled,
+    visitGapHours: String(s.visitGapHours),
+    visitDurationMinutes: String(s.visitDurationMinutes),
   };
 }
 
@@ -202,6 +210,7 @@ export function LinkedInView() {
   const [draft, setDraft] = useState<SettingsDraft | null>(null);
   const [subTab, setSubTab] = useState<SubTab>('overview');
   const [todaysPlan, setTodaysPlan] = useState<LinkedInTodaysPlan | null>(null);
+  const [visitPlan, setVisitPlan] = useState<LinkedInVisitPlan | null>(null);
   const [expandedLogIds, setExpandedLogIds] = useState<Set<string>>(new Set());
 
   // refreshStatus() deliberately does NOT run here — a real, reported
@@ -227,6 +236,13 @@ export function LinkedInView() {
     // any other component needs to react to.
     fetchTodaysLinkedInPlan()
       .then(setTodaysPlan)
+      .catch(() => {});
+    // Same "cheap, read-only, no Chrome involved" reasoning as above —
+    // the route itself is a no-op read (no visit_schedule row grows) when
+    // visitWindowsEnabled is off, so fetching this unconditionally on
+    // mount costs nothing for an account that's never turned this on.
+    fetchTodaysLinkedInVisitPlan()
+      .then(setVisitPlan)
       .catch(() => {});
   }, [refreshActions, refreshSafety]);
 
@@ -315,6 +331,9 @@ export function LinkedInView() {
       likes_min_gap_minutes: Number(draft.likesMinGapMinutes) || 0,
       ai_schedule_enabled: draft.aiScheduleEnabled,
       auto_personalize_enabled: draft.autoPersonalizeEnabled,
+      visit_windows_enabled: draft.visitWindowsEnabled,
+      visit_gap_hours: Number(draft.visitGapHours) || 2.5,
+      visit_duration_minutes: Number(draft.visitDurationMinutes) || 30,
     });
     if (ok) showToast('Nustatymai išsaugoti');
   };
@@ -400,6 +419,18 @@ export function LinkedInView() {
           {new Date(safety.settings.searchBlockedUntil).toLocaleString('lt-LT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
         </p>
       )}
+      {visitPlan?.enabled && !visitPlan.currentlyOnline && (
+        <p className="linkedin-paused-banner" title="Neprisijungti prie LinkedIn ištisai — apsilankymai vyksta atsitiktiniais laiko tarpais, ne pagal fiksuotą tvarkaraštį.">
+          <Clock className="icon" size={14} /> Šiuo metu neprisijungę (natūralus ritmas)
+          {visitPlan.nextWindowStart !== null && (
+            <>
+              {' '}
+              — kitas apsilankymas ~
+              {new Date(visitPlan.nextWindowStart).toLocaleTimeString('lt-LT', { hour: '2-digit', minute: '2-digit' })}
+            </>
+          )}
+        </p>
+      )}
 
       {safety && (
         <div className="linkedin-safety-summary">
@@ -471,6 +502,29 @@ export function LinkedInView() {
                   <p className="linkedin-hint">Kraunama…</p>
                 )}
               </div>
+
+              {visitPlan?.enabled && (
+                <div className="linkedin-overview-card">
+                  <h3>
+                    <Clock className="icon" size={16} /> Šiandienos apsilankymai
+                  </h3>
+                  {visitPlan.windows.length === 0 ? (
+                    <p className="linkedin-hint">Šiandien apsilankymų nesuplanuota (darbo valandos jau pasibaigė arba dar neprasidėjo).</p>
+                  ) : (
+                    <ul className="linkedin-overview-list">
+                      {visitPlan.windows.map((w, i) => {
+                        const active = Date.now() >= w.start && Date.now() < w.end;
+                        const fmt = (ms: number) => new Date(ms).toLocaleTimeString('lt-LT', { hour: '2-digit', minute: '2-digit' });
+                        return (
+                          <li key={i}>
+                            {fmt(w.start)}–{fmt(w.end)} {active && <strong>(dabar)</strong>}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </div>
+              )}
 
               {safety && (
                 <div className="linkedin-overview-card">
@@ -751,6 +805,35 @@ export function LinkedInView() {
               onChange={(e) => setDraft({ ...draft, autoPersonalizeEnabled: e.target.checked })}
             />
             Automatiškai DI-personalizuoti kiekvieną žinutę prieš siunčiant (be to — tik {'{{firstName}}'} ir pan. pakeitimas)
+          </label>
+          <label className="linkedin-settings-checkbox">
+            <input
+              type="checkbox"
+              checked={draft.visitWindowsEnabled}
+              onChange={(e) => setDraft({ ...draft, visitWindowsEnabled: e.target.checked })}
+            />
+            Neprisijungti prie LinkedIn ištisai — atsijungti tarp apsilankymų (natūralesnis ritmas)
+          </label>
+          <label>
+            Vidutinis tarpas tarp apsilankymų (val.)
+            <input
+              type="number"
+              min={0.5}
+              step={0.5}
+              value={draft.visitGapHours}
+              onChange={(e) => setDraft({ ...draft, visitGapHours: e.target.value })}
+              title="Vidutinis laikas tarp dviejų prisijungimų prie LinkedIn — kiekvienas realus tarpas šiek tiek svyruoja aplink šį skaičių."
+            />
+          </label>
+          <label>
+            Vidutinė apsilankymo trukmė (min.)
+            <input
+              type="number"
+              min={5}
+              value={draft.visitDurationMinutes}
+              onChange={(e) => setDraft({ ...draft, visitDurationMinutes: e.target.value })}
+              title="Kiek laiko paprastai lieka atidaryta LinkedIn kortelė per vieną apsilankymą — reali trukmė svyruoja apie šį skaičių."
+            />
           </label>
           <button type="button" className="primary" disabled={savingSettings} onClick={() => void handleSaveSettings()}>
             {savingSettings ? 'Saugoma…' : <><Save className="icon" size={16} /> Išsaugoti nustatymus</>}

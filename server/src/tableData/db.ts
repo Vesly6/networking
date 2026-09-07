@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import Papa from 'papaparse';
 import { randomUUID } from 'node:crypto';
 import { dataFilePath } from '../dataDir.js';
+import { listCompanies, getCompanySuperAdmin } from '../accounts/db.js';
 
 // Same reasoning as linkedin/db.ts and smsInbox/db.ts: the whole point of
 // this feature is that a table's data is the same regardless of which
@@ -88,6 +89,19 @@ function migrate(database: Database.Database): void {
   } catch {
     // Column already exists — nothing to do.
   }
+  // Dual-identity attribution for impersonated writes (a company
+  // super_admin acting as one of their own workers — see auth.ts's
+  // AuthContext.actingAs). Both nullable and left NULL for every
+  // pre-existing row and for every ordinary (non-impersonated) worker
+  // action going forward — only populated when index.ts's
+  // rowActionAttribution() resolves an active impersonation session.
+  for (const column of ['real_user_id', 'real_user_name']) {
+    try {
+      database.exec(`ALTER TABLE worker_actions ADD COLUMN ${column} TEXT`);
+    } catch {
+      // Column already exists — nothing to do.
+    }
+  }
   // Multi-tenant isolation (see accounts/db.ts) — added to both tables
   // AND rows (denormalized rather than joining through tables.company_id
   // on every row query) because a row's table never changes after
@@ -147,6 +161,17 @@ function migrate(database: Database.Database): void {
   } catch {
     // Column already exists — nothing to do.
   }
+  // Per-table ownership — see PATCH /api/tables/:id/owner and index.ts's
+  // tableAccessibleToRequest/tableAccessContext for how this is enforced.
+  // Nullable, no DEFAULT: unlike company_id's `DEFAULT ''` this doesn't
+  // need a NOT NULL placeholder to satisfy SQLite's ALTER TABLE
+  // restriction, since NULL is itself the legitimate "not yet backfilled"
+  // transient state backfillTableOwners() (below) resolves on every boot.
+  try {
+    database.exec(`ALTER TABLE tables ADD COLUMN owner_user_id TEXT`);
+  } catch {
+    // Column already exists — nothing to do.
+  }
 
   database.exec(`
     -- One row per daily snapshot of one flagged table. Stores the SAME
@@ -185,6 +210,36 @@ export function backfillCompanyId(ownerCompanyId: string): void {
   database.prepare(`UPDATE rows SET company_id = ? WHERE company_id = ''`).run(ownerCompanyId);
 }
 
+/** Called once from index.ts's startup sequence, right after
+ * backfillCompanyId (so every table already has a real, non-'' company_id
+ * to look a super_admin up against). Assigns every pre-existing table
+ * still carrying the owner_user_id ALTER TABLE's NULL default to its own
+ * company's super_admin — under the new per-table-ownership model (see
+ * PATCH /api/tables/:id/owner), a table with no explicit owner is treated
+ * as private to that company's admin, never as shared with everyone, so
+ * this is what makes a company's real pre-existing tables become that
+ * admin's private tables instead of staying invisible to everyone
+ * (NULL owner matches nobody's effectiveUser().id — see
+ * tableAccessibleToRequest in index.ts). Safe on every boot: the WHERE
+ * clause only ever touches owner_user_id IS NULL rows, so this is a no-op
+ * once a company's tables are claimed — it also doubles as a self-healing
+ * safety net if some future bug ever leaves a table's owner NULL again.
+ * A company with no super_admin at all (unreachable today — see
+ * getCompanySuperAdmin's own doc comment) is simply skipped, not crashed.
+ *
+ * Deliberate, confirmed, one-time behavior change on first deploy: a
+ * company's existing workers (who currently see every one of the
+ * company's tables) will see NONE of them until the admin explicitly
+ * reassigns at least one via the new owner picker — see the plan this
+ * feature shipped from for why this was accepted rather than avoided. */
+export function backfillTableOwners(): void {
+  const stmt = getDb().prepare(`UPDATE tables SET owner_user_id = ? WHERE company_id = ? AND owner_user_id IS NULL`);
+  for (const company of listCompanies()) {
+    const admin = getCompanySuperAdmin(company.id);
+    if (admin) stmt.run(admin.id, company.id);
+  }
+}
+
 function getDb(): Database.Database {
   if (!db) {
     db = new Database(DB_PATH);
@@ -213,8 +268,30 @@ export interface TableMeta {
   dailyBackupEnabled: boolean;
   order: number;
   folderId?: string;
+  /** Which user (a company's super_admin, or a specific worker) this
+   * table is exclusively visible to — see index.ts's
+   * tableAccessibleToRequest/tableAccessContext for the actual
+   * enforcement, and backfillTableOwners' own doc comment for the
+   * migration story. Undefined only ever transiently (mapped from a NULL
+   * `owner_user_id` row, which backfillTableOwners resolves on every
+   * boot) — never treated as "shared with everyone." */
+  ownerUserId?: string;
   createdAt: number;
   updatedAt: number;
+}
+
+/** Plain-data shape of "who is asking and are they exempt from the
+ * per-table ownership filter" — built by index.ts's tableAccessContext()
+ * from req.auth/effectiveUser(). This file has no Express/Request
+ * dependency and shouldn't gain one just for this. */
+export interface TableAccessContext {
+  /** True only for a company's own super_admin in their own, real,
+   * non-impersonating session — sees every table regardless of owner. */
+  isRealAdmin: boolean;
+  /** effectiveUser(req)'s id (the impersonated worker if a super_admin is
+   * currently acting as one, else the real logged-in user) — ignored when
+   * isRealAdmin is true. */
+  ownerUserId: string;
 }
 
 interface TableRow {
@@ -224,6 +301,7 @@ interface TableRow {
   daily_backup_enabled: number;
   order_num: number;
   folder_id: string | null;
+  owner_user_id: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -236,16 +314,28 @@ function tableFromRow(r: TableRow): TableMeta {
     dailyBackupEnabled: r.daily_backup_enabled === 1,
     order: r.order_num,
     folderId: r.folder_id ?? undefined,
+    ownerUserId: r.owner_user_id ?? undefined,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
 }
 
-export function loadTables(companyId: string): TableMeta[] {
+/** `access` omitted: every table in the company, unfiltered — the
+ * behavior every internal call site (instantlyReplySync.ts's
+ * findOrCreateTargetTable checking whether "Visi atsakymai" already
+ * exists by name, this file's own order-backfill logic) needs to keep
+ * exactly as it was before per-table ownership existed. Only index.ts's
+ * GET /api/tables route and findTimedNextActionRows pass `access`. */
+export function loadTables(companyId: string, access?: TableAccessContext): TableMeta[] {
   const rows = getDb()
     .prepare(`SELECT * FROM tables WHERE company_id = ? ORDER BY order_num ASC, created_at ASC`)
     .all(companyId) as TableRow[];
-  return rows.map(tableFromRow);
+  const tables = rows.map(tableFromRow);
+  if (!access || access.isRealAdmin) return tables;
+  // A NULL/undefined owner never equals a real user's id, so an
+  // unassigned table is automatically excluded here without a separate
+  // branch — matches the "no owner == admin-only" rule exactly.
+  return tables.filter((t) => t.ownerUserId === access.ownerUserId);
 }
 
 /** Scoped by companyId so a request for another company's table id
@@ -264,21 +354,32 @@ export function getTable(id: string, companyId: string): TableMeta | null {
  * belongs to that same company — this is what stops a crafted request
  * from overwriting another company's table even if it somehow guessed a
  * real id (astronomically unlikely given UUIDs, but free to guard). */
-// order_num/folder_id are only ever meaningful for the INSERT branch (a
-// brand-new table) — the ON CONFLICT DO UPDATE clause deliberately leaves
-// them out, same as it already leaves out created_at, so a re-save (the
-// CSV-migration upsert path, restoreBackupAsNewTable) never clobbers a
-// table's manual order/folder placement with whatever stale value the
-// caller happened to be holding.
+// order_num/folder_id/owner_user_id are only ever meaningful for the
+// INSERT branch (a brand-new table) — the ON CONFLICT DO UPDATE clause
+// deliberately leaves them out, same as it already leaves out created_at,
+// so a re-save (the CSV-migration upsert path, restoreBackupAsNewTable)
+// never clobbers a table's manual order/folder/owner with whatever stale
+// value the caller happened to be holding — an existing table's owner can
+// only ever change via the explicit setTableOwner() below.
 export function saveTable(table: TableMeta, companyId: string): void {
   getDb()
     .prepare(
-      `INSERT INTO tables (id, name, columns_json, order_num, folder_id, company_id, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO tables (id, name, columns_json, order_num, folder_id, owner_user_id, company_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET name = excluded.name, columns_json = excluded.columns_json, updated_at = excluded.updated_at
        WHERE tables.company_id = excluded.company_id`,
     )
-    .run(table.id, table.name, JSON.stringify(table.columns), table.order, table.folderId ?? null, companyId, table.createdAt, table.updatedAt);
+    .run(
+      table.id,
+      table.name,
+      JSON.stringify(table.columns),
+      table.order,
+      table.folderId ?? null,
+      table.ownerUserId ?? null,
+      companyId,
+      table.createdAt,
+      table.updatedAt,
+    );
 }
 
 /** Read-modify-write, matching the client's own `updateTableColumns` —
@@ -316,6 +417,20 @@ export function setTableFolder(tableId: string, folderId: string | null, company
   database
     .prepare(`UPDATE tables SET folder_id = ?, updated_at = ? WHERE id = ? AND company_id = ?`)
     .run(folderId, Date.now(), tableId, companyId);
+}
+
+/** The one explicit way an existing table's owner ever changes after
+ * creation — see index.ts's PATCH /api/tables/:id/owner. Same
+ * read-check-then-UPDATE shape as setTableFolder above. */
+export function setTableOwner(tableId: string, ownerUserId: string, companyId: string): void {
+  const database = getDb();
+  const existing = database.prepare(`SELECT id FROM tables WHERE id = ? AND company_id = ?`).get(tableId, companyId) as
+    | { id: string }
+    | undefined;
+  if (!existing) return;
+  database
+    .prepare(`UPDATE tables SET owner_user_id = ?, updated_at = ? WHERE id = ? AND company_id = ?`)
+    .run(ownerUserId, Date.now(), tableId, companyId);
 }
 
 /** SheetTabs' drag-reorder — one transaction for the whole batch, same
@@ -470,8 +585,11 @@ function rowFromRow(r: RowRow): Row {
 /** Scoped by companyId, same isolation rule as getTable — used by
  * sanitizeRowForWorker (below) to compare an incoming write against what's
  * actually stored, since a worker's write restrictions depend on what
- * *changed*, not just what was sent. */
-function getRowById(id: string, companyId: string): Row | null {
+ * *changed*, not just what was sent. Also exported for index.ts's
+ * DELETE /api/rows/:id, which has no tableId in its request at all and
+ * needs to look the row's own table up first for the per-table ownership
+ * check. */
+export function getRowById(id: string, companyId: string): Row | null {
   const row = getDb().prepare(`SELECT * FROM rows WHERE id = ? AND company_id = ?`).get(id, companyId) as RowRow | undefined;
   return row ? rowFromRow(row) : null;
 }
@@ -557,6 +675,24 @@ export interface WorkerRowRestriction {
   canEditContacts: boolean;
   canDeleteContacts: boolean;
   canHideRowsColumns: boolean;
+}
+
+/** What saveRow/saveRows need to know about who's writing, split into two
+ * independent halves that used to be conflated into one WorkerRowRestriction:
+ * `restriction` gates sanitizeRowForWorker (null = full rights, no
+ * sanitization — an ordinary owner/super_admin write, OR a company
+ * super_admin impersonating one of their own workers, who gets full admin
+ * rights by design even while acting as that worker); actingUserId/
+ * actingUserName is who worker_actions attributes the change to regardless.
+ * realUserId/realUserName are set only while impersonating — the REAL
+ * super_admin behind the write — so an audit entry can show both "who it
+ * looks like did this" and "who actually did it." */
+export interface RowActionAttribution {
+  restriction: WorkerRowRestriction | null;
+  actingUserId: string;
+  actingUserName: string;
+  realUserId?: string;
+  realUserName?: string;
 }
 
 /** Server-side backstop for what a worker can change on an *existing* row.
@@ -694,6 +830,8 @@ interface WorkerActionRow {
   contact_id: string | null;
   detail: string;
   created_at: number;
+  real_user_id: string | null;
+  real_user_name: string | null;
 }
 
 export interface WorkerActionLogEntry {
@@ -709,6 +847,11 @@ export interface WorkerActionLogEntry {
   contactId?: string;
   detail: string;
   createdAt: number;
+  /** Set only when this action was performed by a company super_admin
+   * impersonating the worker named above (userId/userName) — see auth.ts's
+   * AuthContext.actingAs and index.ts's rowActionAttribution(). */
+  realUserId?: string;
+  realUserName?: string;
 }
 
 function workerActionFromRow(r: WorkerActionRow): WorkerActionLogEntry {
@@ -725,14 +868,22 @@ function workerActionFromRow(r: WorkerActionRow): WorkerActionLogEntry {
     contactId: r.contact_id ?? undefined,
     detail: r.detail,
     createdAt: r.created_at,
+    realUserId: r.real_user_id ?? undefined,
+    realUserName: r.real_user_name ?? undefined,
   };
 }
 
-function logWorkerActions(companyId: string, userId: string, userName: string, actions: WorkerActionRecord[]): void {
+function logWorkerActions(
+  companyId: string,
+  userId: string,
+  userName: string,
+  actions: WorkerActionRecord[],
+  realUser?: { id: string; name: string },
+): void {
   if (actions.length === 0) return;
   const stmt = getDb().prepare(
-    `INSERT INTO worker_actions (id, company_id, user_id, user_name, action_type, table_id, table_name, row_id, column_id, column_name, contact_id, detail, created_at)
-     VALUES (@id, @companyId, @userId, @userName, @actionType, @tableId, @tableName, @rowId, @columnId, @columnName, @contactId, @detail, @createdAt)`,
+    `INSERT INTO worker_actions (id, company_id, user_id, user_name, action_type, table_id, table_name, row_id, column_id, column_name, contact_id, detail, created_at, real_user_id, real_user_name)
+     VALUES (@id, @companyId, @userId, @userName, @actionType, @tableId, @tableName, @rowId, @columnId, @columnName, @contactId, @detail, @createdAt, @realUserId, @realUserName)`,
   );
   const now = Date.now();
   const tx = getDb().transaction((batch: WorkerActionRecord[]) => {
@@ -751,6 +902,8 @@ function logWorkerActions(companyId: string, userId: string, userName: string, a
         contactId: a.contactId ?? null,
         detail: a.detail,
         createdAt: now,
+        realUserId: realUser?.id ?? null,
+        realUserName: realUser?.name ?? null,
       });
     }
   });
@@ -816,9 +969,9 @@ export interface TimedReminderGroup {
  * (`yyyy-MM-ddTHH:mm` has no timezone suffix, and this server's own
  * clock — Render, normally UTC — has no reliable way to know what
  * timezone the user actually meant when they typed that time). */
-export function findTimedNextActionRows(companyId: string): TimedReminderGroup[] {
+export function findTimedNextActionRows(companyId: string, access?: TableAccessContext): TimedReminderGroup[] {
   const database = getDb();
-  const tables = loadTables(companyId);
+  const tables = loadTables(companyId, access);
   const groups: TimedReminderGroup[] = [];
   for (const table of tables) {
     const dateColumn = (table.columns as Array<{ id: string; type?: string; isNextActionDate?: boolean }>).find(
@@ -841,19 +994,26 @@ export function findTimedNextActionRows(companyId: string): TimedReminderGroup[]
   return groups;
 }
 
-/** True only if every id in `tableIds` is a table that belongs to
- * `companyId` — the route handler for PUT /api/rows calls this (with the
- * distinct tableIds present in the incoming batch) before saveRows(),
- * since that endpoint receives whole Row objects (each carrying its own
- * tableId) rather than a single :id param to check against getTable(). */
-export function allTablesBelongToCompany(tableIds: string[], companyId: string): boolean {
-  if (tableIds.length === 0) return true;
+/** Loads exactly the tables named in `tableIds` that also belong to
+ * `companyId` — a foreign-company or made-up id is silently absent from
+ * the result (mirrors getTable's own "missing id -> route maps to 404"
+ * convention) rather than thrown on. The route handlers for PUT
+ * /api/rows, POST /api/rows/import, and PUT /api/rows/:id call this (with
+ * the distinct tableIds present in the incoming batch) before
+ * saveRow(s)(), since those endpoints receive whole Row objects (each
+ * carrying its own tableId) rather than a single :id param to check
+ * against getTable() — and now also need each table's actual ownerUserId
+ * to run through index.ts's tableAccessibleToRequest, not just a
+ * count-based existence check (this replaces the old
+ * allTablesBelongToCompany, which only returned a boolean). */
+export function getTablesByIds(tableIds: string[], companyId: string): TableMeta[] {
+  if (tableIds.length === 0) return [];
   const unique = [...new Set(tableIds)];
   const placeholders = unique.map(() => '?').join(',');
-  const row = getDb()
-    .prepare(`SELECT COUNT(*) AS n FROM tables WHERE company_id = ? AND id IN (${placeholders})`)
-    .get(companyId, ...unique) as { n: number };
-  return row.n === unique.length;
+  const rows = getDb()
+    .prepare(`SELECT * FROM tables WHERE company_id = ? AND id IN (${placeholders})`)
+    .all(companyId, ...unique) as TableRow[];
+  return rows.map(tableFromRow);
 }
 
 const UPSERT_ROW_SQL = `
@@ -896,19 +1056,32 @@ function rowToParams(row: Row, companyId: string) {
  * the second layer of this (an update only applies if the existing row
  * already belongs to the same company).
  *
- * `workerRestriction`, when passed (only ever for req.auth.role ===
- * 'worker' — owner/super_admin writes always pass undefined/null and skip
- * this entirely), runs the row through sanitizeRowForWorker first — an
- * extra SELECT + SELECT of the table's columns, paid only on the worker
- * path. */
-export function saveRow(row: Row, companyId: string, workerRestriction?: WorkerRowRestriction | null): void {
+ * `attribution`, when passed (only ever for a real worker's own write, or a
+ * company super_admin impersonating one — an ordinary, non-impersonating
+ * owner/super_admin write always passes undefined/null and skips this
+ * entirely), runs the row through sanitizeRowForWorker first when
+ * `attribution.restriction` is set (a real worker) — an extra SELECT +
+ * SELECT of the table's columns, paid only on that path. An impersonating
+ * super_admin's `attribution.restriction` is null (full admin rights, by
+ * design), so the row is written exactly as sent, but the change is still
+ * logged with dual attribution — see RowActionAttribution's own doc
+ * comment. */
+export function saveRow(row: Row, companyId: string, attribution?: RowActionAttribution | null): void {
   let toSave = row;
-  if (workerRestriction) {
+  if (attribution) {
     const existing = getRowById(row.id, companyId);
     const table = getTable(row.tableId, companyId);
-    toSave = sanitizeRowForWorker(existing, row, table?.columns ?? [], workerRestriction);
+    toSave = attribution.restriction
+      ? sanitizeRowForWorker(existing, row, table?.columns ?? [], attribution.restriction)
+      : row;
     const actions = detectWorkerActions(existing, toSave, table?.columns ?? [], row.tableId, table?.name ?? '');
-    logWorkerActions(companyId, workerRestriction.userId, workerRestriction.userName, actions);
+    logWorkerActions(
+      companyId,
+      attribution.actingUserId,
+      attribution.actingUserName,
+      actions,
+      attribution.realUserId ? { id: attribution.realUserId, name: attribution.realUserName ?? '' } : undefined,
+    );
   }
   getDb().prepare(UPSERT_ROW_SQL).run(rowToParams(toSave, companyId));
 }
@@ -922,16 +1095,16 @@ export function saveRow(row: Row, companyId: string, workerRestriction?: WorkerR
  * client's own `saveRows` (one IndexedDB tx, Promise.all of puts) and the
  * `addLeads`/other bulk-insert precedent already in linkedin/db.ts.
  *
- * `workerRestriction` — see saveRow's own doc comment; applied per-row
- * before the batch is written, with the target table's columns fetched
- * once per distinct tableId in the batch (not once per row) since a bulk
- * save is almost always all-one-table. */
-export function saveRows(rows: Row[], companyId: string, workerRestriction?: WorkerRowRestriction | null): void {
+ * `attribution` — see saveRow's own doc comment; applied per-row before the
+ * batch is written, with the target table's columns fetched once per
+ * distinct tableId in the batch (not once per row) since a bulk save is
+ * almost always all-one-table. */
+export function saveRows(rows: Row[], companyId: string, attribution?: RowActionAttribution | null): void {
   if (rows.length === 0) return;
   const database = getDb();
   const stmt = database.prepare(UPSERT_ROW_SQL);
   let toSave = rows;
-  if (workerRestriction) {
+  if (attribution) {
     const tablesById = new Map<string, { name: string; columns: unknown[] }>();
     const allActions: WorkerActionRecord[] = [];
     toSave = rows.map((row) => {
@@ -941,11 +1114,19 @@ export function saveRows(rows: Row[], companyId: string, workerRestriction?: Wor
       }
       const { name: tableName, columns } = tablesById.get(row.tableId)!;
       const existing = getRowById(row.id, companyId);
-      const sanitized = sanitizeRowForWorker(existing, row, columns, workerRestriction);
+      const sanitized = attribution.restriction
+        ? sanitizeRowForWorker(existing, row, columns, attribution.restriction)
+        : row;
       allActions.push(...detectWorkerActions(existing, sanitized, columns, row.tableId, tableName));
       return sanitized;
     });
-    logWorkerActions(companyId, workerRestriction.userId, workerRestriction.userName, allActions);
+    logWorkerActions(
+      companyId,
+      attribution.actingUserId,
+      attribution.actingUserName,
+      allActions,
+      attribution.realUserId ? { id: attribution.realUserId, name: attribution.realUserName ?? '' } : undefined,
+    );
   }
   const tx = database.transaction((batch: Row[]) => {
     for (const row of batch) stmt.run(rowToParams(row, companyId));
@@ -1117,10 +1298,18 @@ export function backupToCsvText(id: string, companyId?: string): { filename: str
  * back from the backup record itself, via getBackupFull's unscoped
  * lookup) — never the owner's own company, which would silently move a
  * client's restored data into the owner's own workspace. */
-export function restoreBackupAsNewTable(id: string, companyId?: string): TableMeta | null {
+/** `ownerUserId` — the same "one uniform table-creation rule" as every
+ * other saveTable() call site (see index.ts's tableAccessibleToRequest's
+ * own doc comment): omitted only from the platform-admin restore route,
+ * which has no company-user context at all and falls back to that
+ * company's own super_admin; the company-scoped restore route always
+ * passes effectiveUser(req)?.id, so restoring while impersonating a
+ * worker correctly lands the restored table as that worker's own. */
+export function restoreBackupAsNewTable(id: string, companyId?: string, ownerUserId?: string): TableMeta | null {
   const backup = getBackupFull(id, companyId);
   if (!backup) return null;
   const targetCompanyId = companyId ?? backup.companyId;
+  const owner = ownerUserId ?? getCompanySuperAdmin(targetCompanyId)?.id;
   const now = Date.now();
   const date = new Date(backup.createdAt).toISOString().slice(0, 10);
   // Appended at the end of the target company's ungrouped tables, same
@@ -1135,6 +1324,7 @@ export function restoreBackupAsNewTable(id: string, companyId?: string): TableMe
     columns: backup.columns,
     dailyBackupEnabled: false,
     order: nextOrder.nextOrder,
+    ownerUserId: owner,
     createdAt: now,
     updatedAt: now,
   };

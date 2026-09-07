@@ -18,6 +18,19 @@ export interface Column {
    * of status transitions ("Rejected" → "Accepted") without a separate
    * audit UI. */
   isStatusColumn?: boolean;
+  /** Only used when type === 'link'. A table can have several `link`
+   * columns (Website, LinkedIn, Facebook…), all structurally identical —
+   * this flag is the only way to say "this specific one is the company's
+   * actual website," same one-at-a-time convention as isNextActionDate/
+   * isStatusColumn above. It's what the "🔍 Paieška" decision-maker search
+   * (ApolloContactSearchModal.tsx) reads to get a real domain instead of
+   * guessing one from the company name — see utils/row.ts's
+   * getWebsiteColumn(). Never auto-set when a column becomes type 'link'
+   * (mirroring isStatusColumn's own reasoning: a link column is just as
+   * often LinkedIn/Facebook as it is the real website, so guessing would
+   * be wrong more often than right) — the user marks it explicitly via
+   * ColumnMenu's "Naudoti kaip svetainę" checkbox. */
+  isWebsiteColumn?: boolean;
   /** Column width in pixels; falls back to a default when unset. */
   width?: number;
   /** Hidden from the grid (header + data cells) but its data is untouched —
@@ -45,6 +58,13 @@ export interface TableMeta {
   /** Which TableFolder (if any) this table is grouped under in SheetTabs.
    * null/undefined = ungrouped. */
   folderId?: string | null;
+  /** Which user (the company's super_admin, or a specific worker) this
+   * table is exclusively visible to — see server/src/tableData/db.ts's
+   * own migration doc comment for the ownership model, and
+   * WorkspaceView.tsx's owner picker for how it's reassigned. The server
+   * always derives/overwrites this on create; the client never sets it
+   * explicitly. */
+  ownerUserId?: string | null;
   createdAt: number;
   updatedAt: number;
 }

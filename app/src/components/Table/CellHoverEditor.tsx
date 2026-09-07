@@ -28,8 +28,12 @@ import { phoneMatchKey } from '../../utils/phoneMatch';
 import { randomUUID } from '../../utils/uuid';
 import { contrastTextColor } from '../../utils/color';
 import { REPLY_HEADER_FIELD_ORDER, replyStatusColor } from '../../utils/replyHistoryFormat';
+import { enrichPerson } from '../../utils/apolloApi';
+import { resolveApolloPhone } from '../../utils/apolloPhonePoll';
+import { normalizeDomain } from '../../utils/domainMatch';
 import { useToastStore } from '../../store/useToastStore';
 import { useAuthStore } from '../../store/useAuthStore';
+import { usePendingPhoneSearchStore } from '../../store/usePendingPhoneSearchStore';
 import { confirmDialog } from '../../store/useConfirmStore';
 import { getAllTranscriptions, saveSmsLogEntry, getAllSmsLog } from '../../db/db';
 import { ApolloContactSearchModal } from './ApolloContactSearchModal';
@@ -46,6 +50,14 @@ interface CellHoverEditorProps {
    * people at that company). Undefined/empty just disables that lookup
    * with an explanatory tooltip; contact mode otherwise works unchanged. */
   companyName?: string;
+  /** This row's actual website URL (utils/row.ts's getWebsiteUrl) — feeds
+   * the "🔍 Paieška" Apollo lookup's "Įmonės domenas" field with a real
+   * domain instead of one guessed from the company name. Undefined when
+   * the table has no reliably-identifiable website column (see
+   * getWebsiteColumn's own doc comment) or the cell is empty — the lookup
+   * still works in that case, just falls back to guessing from the name
+   * exactly as before. */
+  websiteUrl?: string;
   /** Scrolls to and briefly flashes one specific contact entry once this
    * editor has placed itself — driven by the Calls tab's "🔍 Ieškoti" jump
    * (a missed call matched to a specific person inside this row's Contacts
@@ -341,6 +353,7 @@ export function CellHoverEditor({
   mode,
   value,
   companyName,
+  websiteUrl,
   highlightEntryId,
   contactsRaw,
   statusOptionColors,
@@ -514,12 +527,36 @@ export function CellHoverEditor({
   };
   const newEntryRef = useRef<HTMLTextAreaElement>(null);
   useEffect(() => autoGrow(newEntryRef.current), [newEntryDraft]);
+  // Replaces a plain `autoFocus` on the textarea below — autoFocus has no
+  // way to opt out of the browser's own default "scroll the newly-focused
+  // element into view" behavior, and this editor's very first render is
+  // always at a placeholder off-screen position (pos starts null, see
+  // `style` below) before the position-computing layout effect has run
+  // even once. Focusing there natively risked the browser trying to
+  // scroll toward that placeholder position/direction — preventScroll:
+  // true rules that out unconditionally, regardless of exactly when this
+  // fires relative to the panel's own real positioning.
+  useEffect(() => {
+    if (mode === 'note') newEntryRef.current?.focus({ preventScroll: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const editRef = useRef<HTMLTextAreaElement>(null);
   useEffect(() => autoGrow(editRef.current), [editDraft, editingNoteId]);
 
   const [addFields, setAddFields] = useState<ContactFormFields>(EMPTY_CONTACT_FIELDS);
   const [editingContactId, setEditingContactId] = useState<string | null>(null);
   const [editFields, setEditFields] = useState<ContactFormFields>(EMPTY_CONTACT_FIELDS);
+
+  // "Find email" is a single synchronous round trip (no polling — Apollo
+  // returns email unconditionally, never gated behind async delivery), so
+  // plain local state is safe here, same as addingPersonIds in
+  // ApolloContactSearchModal.tsx. "Find phone" is NOT local state — see
+  // usePendingPhoneSearchStore's own doc comment on pendingContactIds for
+  // why a CRM contact entry (which never disappears from view the way a
+  // just-added search result does) needs the guard to live in a store
+  // that survives this popup being closed and reopened mid-poll.
+  const [findingEmailIds, setFindingEmailIds] = useState<Set<string>>(new Set());
+  const pendingPhoneContactIds = usePendingPhoneSearchStore((s) => s.pendingContactIds);
 
   useLayoutEffect(() => {
     const place = () => {
@@ -615,19 +652,69 @@ export function CellHoverEditor({
       );
       const viewportHeight = rawViewportHeight - (Number.isFinite(safeAreaBottom) ? safeAreaBottom : 0);
       // How tall the editor actually wants to be, measured from its own
-      // rendered content (scrollHeight reflects the full content height
-      // regardless of any maxHeight/overflow already applied to the node —
-      // it's never "capped" by a previous placement). This used to be a
-      // flat MIN_USABLE_HEIGHT guess, which fell out of date the moment the
-      // contact form grew a Paieška button + results panel: the guess was
-      // smaller than the now-taller (non-scrolling) form, so overflow:
-      // hidden silently clipped the bottom of the form away on rows near
-      // the viewport edge — a real, reported bug ("komentaras"/"kontaktas"
-      // still unreachable on the last few rows even after the first fix).
-      // Measuring the real content instead of guessing a constant makes
-      // this correct regardless of how tall either mode's content gets in
-      // the future.
-      const naturalHeight = rootRef.current?.scrollHeight ?? MIN_USABLE_HEIGHT;
+      // rendered content. This used to be a flat MIN_USABLE_HEIGHT guess,
+      // which fell out of date the moment the contact form grew a Paieška
+      // button + results panel: the guess was smaller than the now-taller
+      // (non-scrolling) form, so overflow: hidden silently clipped the
+      // bottom of the form away on rows near the viewport edge — a real,
+      // reported bug ("komentaras"/"kontaktas" still unreachable on the
+      // last few rows even after the first fix). Measuring the real
+      // content instead of guessing a constant makes this correct
+      // regardless of how tall either mode's content gets in the future.
+      //
+      // CRITICAL: this element's own maxHeight (set below, and by every
+      // PREVIOUS call to this same function) must be cleared before
+      // reading scrollHeight, or the measurement isn't or the content's
+      // true natural height at all — it's an echo of whatever height a
+      // prior call already constrained this element to. A real, live-
+      // reproduced bug this fixes: with maxHeight left in place,
+      // scrollHeight came back ~2px LESS than the just-applied maxHeight
+      // every time (box-sizing: border-box means the border itself is
+      // included in maxHeight but excluded from scrollHeight) — and since
+      // that reading feeds directly into the NEXT maxHeight, each
+      // ResizeObserver notification (fired because maxHeight had in fact
+      // just changed) ratcheted the box 2px shorter than the last, in a
+      // self-sustaining loop that ran for 70+ animation frames (confirmed
+      // live via instrumentation — one iteration every ~16.7ms, i.e.
+      // lockstep with the browser's own paint cadence) before the test
+      // was cut off, likely without ever truly settling. This is exactly
+      // what read as "the cell keeps sliding/scrolling on its own after I
+      // open it" — a large note/contact list makes it worse only because
+      // a bigger gap between the real content height and the viewport-
+      // capped maxHeight means more 2px-steps are needed before the loop
+      // would even reach a size where it stops mattering, not because
+      // large content is inherently more prone to it. Clearing maxHeight
+      // first (a forced, synchronous reflow — no visible flicker, since
+      // this all happens inside useLayoutEffect before the browser ever
+      // paints) makes scrollHeight reflect the content's actual size
+      // regardless of any constraint a previous call left behind, so a
+      // second call converges on the SAME numbers as the first instead of
+      // ratcheting further down — see the ResizeObserver comment further
+      // below for why a second call happens at all.
+      const el = rootRef.current;
+      const prevMaxHeight = el?.style.maxHeight;
+      // .cell-hover-history (the note/contact history list) is a
+      // `flex: 1 1 auto; overflow-y: auto` child that shrinks to fit
+      // whatever room .cell-hover-editor's own maxHeight leaves it —
+      // temporarily clearing that maxHeight (above) to measure the TRUE
+      // content height also, as a side effect, temporarily lets THIS
+      // child grow to its own full unclipped size (nothing left to
+      // shrink it), which means it briefly isn't scrollable at all. A
+      // real, live-reproduced consequence: the browser reports scrollTop
+      // 0 the instant an element stops overflowing, and does not restore
+      // whatever it was scrolled to once the constraint comes back and
+      // it starts overflowing again — so any user who'd already scrolled
+      // this list got silently snapped back to the top the next time
+      // this function ran (e.g. from a later, legitimate content change,
+      // not just the initial open). Saving and restoring its scrollTop
+      // around the same measurement this function already has to do
+      // fixes that without touching the measurement technique itself.
+      const historyEl = el?.querySelector<HTMLElement>('.cell-hover-history');
+      const prevHistoryScrollTop = historyEl?.scrollTop;
+      if (el) el.style.maxHeight = 'none';
+      const naturalHeight = el?.scrollHeight ?? MIN_USABLE_HEIGHT;
+      if (el) el.style.maxHeight = prevMaxHeight ?? '';
+      if (historyEl && prevHistoryScrollTop !== undefined) historyEl.scrollTop = prevHistoryScrollTop;
       const desiredHeight = Math.min(naturalHeight, viewportHeight - MARGIN * 2);
       // Anchored at the cell's own top edge, growing downward, whenever
       // there's room below it for the full desired height. Once that room
@@ -850,6 +937,93 @@ export function CellHoverEditor({
 
   const removeContact = async (id: string) => {
     if (await confirmDialog({ message: 'Ištrinti šį kontaktą?', danger: true })) onRemoveContact(id);
+  };
+
+  /** Targeted Apollo lookup for ONE already-saved contact entry — "find
+   * phone" (find email is below). Deliberately prefers the entry's OWN
+   * stored email/LinkedIn URL over the row-level companyName/websiteUrl
+   * fallbacks as match identifiers: the more precise the identifier, the
+   * more likely Apollo resolves to the exact same person it may already
+   * have partially unlocked (from an earlier bulk import or a lookup done
+   * directly in Apollo's own account), which is what actually keeps a
+   * repeat query from re-charging for data already revealed — see the
+   * saved plan's own Context section. Guarded by
+   * usePendingPhoneSearchStore.pendingContactIds, not local state — see
+   * that store's own doc comment for why a CRM entry (unlike a search
+   * result) needs a guard that survives this popup closing/reopening
+   * mid-poll. */
+  const handleFindPhone = async (c: ContactEntry) => {
+    if (usePendingPhoneSearchStore.getState().isPending(c.id)) return;
+    const current = contactTextToFields(c.text);
+    const domain = normalizeDomain(websiteUrl ?? '') ?? undefined;
+    const name = [current.firstName, current.lastName].filter(Boolean).join(' ') || undefined;
+    const organizationName = current.company || companyName || undefined;
+    if (!current.email && !current.linkedinUrl && !name && !organizationName && !domain) {
+      showToast('Nepakanka duomenų šiam kontaktui ieškoti telefono');
+      return;
+    }
+    usePendingPhoneSearchStore.getState().startFor(c.id);
+    try {
+      const result = await enrichPerson({
+        email: current.email || undefined,
+        linkedin_url: current.linkedinUrl || undefined,
+        name,
+        organization_name: organizationName,
+        domain,
+        reveal_phone_number: true,
+      });
+      const { phone, message } = await resolveApolloPhone(result);
+      if (phone) {
+        onUpdateContact(c.id, joinContactFields({ ...current, phone }));
+        showToast(`${current.firstName || 'Kontaktas'}: rastas telefono numeris`);
+      } else {
+        showToast(message ?? 'Telefono numeris nerastas');
+      }
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Nepavyko ieškoti telefono numerio');
+    } finally {
+      usePendingPhoneSearchStore.getState().finishFor(c.id);
+    }
+  };
+
+  /** Same identifying-data recipe as handleFindPhone above, minus
+   * reveal_phone_number — email comes back unconditionally in every
+   * /people/match response regardless of that flag, so this stays the
+   * cheap, synchronous (no polling) path. */
+  const handleFindEmail = async (c: ContactEntry) => {
+    if (findingEmailIds.has(c.id)) return;
+    const current = contactTextToFields(c.text);
+    const domain = normalizeDomain(websiteUrl ?? '') ?? undefined;
+    const name = [current.firstName, current.lastName].filter(Boolean).join(' ') || undefined;
+    const organizationName = current.company || companyName || undefined;
+    if (!current.linkedinUrl && !name && !organizationName && !domain) {
+      showToast('Nepakanka duomenų šiam kontaktui ieškoti el. pašto');
+      return;
+    }
+    setFindingEmailIds((prev) => new Set(prev).add(c.id));
+    try {
+      const result = await enrichPerson({
+        linkedin_url: current.linkedinUrl || undefined,
+        name,
+        organization_name: organizationName,
+        domain,
+      });
+      const email = result.person?.email || result.person?.contact?.email || '';
+      if (email) {
+        onUpdateContact(c.id, joinContactFields({ ...current, email }));
+        showToast(`${current.firstName || 'Kontaktas'}: rastas el. paštas`);
+      } else {
+        showToast('El. paštas nerastas');
+      }
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Nepavyko ieškoti el. pašto');
+    } finally {
+      setFindingEmailIds((prev) => {
+        const next = new Set(prev);
+        next.delete(c.id);
+        return next;
+      });
+    }
   };
 
   const handleEditKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
@@ -1164,7 +1338,6 @@ export function CellHoverEditor({
                 <textarea
                   ref={newEntryRef}
                   className="cell-hover-new-entry"
-                  autoFocus
                   placeholder="Pridėti komentarą…"
                   value={newEntryDraft}
                   onChange={(e) => setNewEntryDraft(e.target.value)}
@@ -1490,6 +1663,7 @@ export function CellHoverEditor({
                     const linkedinField = fields.find((f) => f.kind === 'linkedin');
                     const instagramField = fields.find((f) => f.kind === 'instagram');
                     const facebookField = fields.find((f) => f.kind === 'facebook');
+                    const emailField = fields.find((f) => f.kind === 'email');
                     const showSocialRow =
                       linkedinField ||
                       instagramField ||
@@ -1676,6 +1850,28 @@ export function CellHoverEditor({
                                   >
                                     <Search className="icon" size={14} />
                                   </button>
+                                  {canEditContacts && !emailField && (
+                                    <button
+                                      type="button"
+                                      className="cell-hover-contact-find-email"
+                                      title={findingEmailIds.has(c.id) ? 'Ieškoma…' : 'Ieškoti el. pašto (Apollo)'}
+                                      disabled={findingEmailIds.has(c.id)}
+                                      onClick={() => void handleFindEmail(c)}
+                                    >
+                                      {findingEmailIds.has(c.id) ? <Hourglass className="icon" size={14} /> : <Mail className="icon" size={14} />}
+                                    </button>
+                                  )}
+                                  {canEditContacts && !phone && (
+                                    <button
+                                      type="button"
+                                      className="cell-hover-contact-find-phone"
+                                      title={pendingPhoneContactIds.has(c.id) ? 'Ieškoma…' : 'Ieškoti telefono numerio (Apollo)'}
+                                      disabled={pendingPhoneContactIds.has(c.id)}
+                                      onClick={() => void handleFindPhone(c)}
+                                    >
+                                      {pendingPhoneContactIds.has(c.id) ? <Hourglass className="icon" size={14} /> : <Phone className="icon" size={14} />}
+                                    </button>
+                                  )}
                                   {canEditContacts && (
                                     <button
                                       type="button"
@@ -1832,6 +2028,7 @@ export function CellHoverEditor({
       {apolloModalOpen && companyName?.trim() && (
         <ApolloContactSearchModal
           initialCompanyName={companyName}
+          initialWebsiteUrl={websiteUrl}
           existingContactsRaw={value}
           onAddContact={onAddContact}
           onUpdateContact={onUpdateContact}

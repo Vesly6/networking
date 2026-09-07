@@ -1,6 +1,12 @@
 import { create } from 'zustand';
 import { localApiRequest } from '../utils/localApi';
-import { getAuthToken, setAuthToken, setUnauthorizedHandler } from '../utils/authToken';
+import {
+  getAuthToken,
+  setAuthToken,
+  setUnauthorizedHandler,
+  getStashedAdminToken,
+  setStashedAdminToken,
+} from '../utils/authToken';
 
 export type Role = 'super_admin' | 'worker';
 
@@ -42,6 +48,35 @@ export interface AuthUser {
   visibleTabs: string[] | null;
   permissions: UserPermissions;
   company: { id: string; name: string; enabledFeatures: string[] } | null;
+  /** Per-worker Zadarma overrides (see server/src/accounts/db.ts's
+   * migration) — null/undefined means "fall back to the company/deployment
+   * default." Only meaningful for a worker account; a super_admin's own
+   * row doesn't use these directly (see GET /api/webrtc/key's
+   * effectiveUser resolution). */
+  zadarmaSip?: string | null;
+  zadarmaWidgetSip?: string | null;
+  zadarmaCallerNumber?: string | null;
+  /** Whether this worker has their OWN override key set for each remaining
+   * plain-API-key integration (see server/src/accounts/db.ts's migration)
+   * — booleans only, same "never re-send a saved secret to the browser"
+   * rule this app's own IntegrationsView.tsx already follows for the
+   * company-wide keys (server/src/index.ts's workerToPublic() is what
+   * redacts these before any /api/workers response reaches the client).
+   * Unset/false falls back to the company-wide key. LinkedIn's CDP URL has
+   * no per-worker equivalent (see that migration's own doc comment). */
+  instantlyApiKeySet?: boolean;
+  apolloApiKeySet?: boolean;
+  serperApiKeySet?: boolean;
+  openaiApiKeySet?: boolean;
+  anthropicApiKeySet?: boolean;
+  elevenlabsApiKeySet?: boolean;
+  /** Non-null only while a super_admin is impersonating one of their own
+   * workers (see server/src/auth.ts's AuthContext.actingAs) — drives
+   * ImpersonationBanner.tsx and App.tsx's tab-visibility filtering. Only
+   * GET /api/auth/me actually populates this (login/register responses
+   * omit it, since a fresh login is never mid-impersonation) — treat a
+   * missing field the same as null. */
+  impersonating?: { workerId: string; workerName: string; adminUserId: string; adminName: string } | null;
 }
 
 interface AuthState {
@@ -62,6 +97,17 @@ interface AuthState {
   register: (input: { secret: string; companyName: string; username: string; password: string; firstName: string; lastName: string }) => Promise<void>;
   fetchMe: () => Promise<void>;
   logout: () => void;
+  /** "Prisijungti kaip" — stashes the real admin's own token, swaps to a
+   * short-lived impersonation token for `workerId` (server-verified to
+   * belong to the admin's own company), and re-hydrates `user` from
+   * /api/auth/me so the UI reflects the worker's display identity. Throws
+   * on failure (e.g. a worker from another company, or nested
+   * impersonation) — the caller (WorkersView) toasts it. */
+  impersonateWorker: (workerId: string) => Promise<void>;
+  /** "Grįžti į Super Admin" — pure client-side restore (no session to
+   * invalidate server-side, see auth.ts's own doc comment on why sessions
+   * are stateless); a no-op if there's no stashed admin token to restore. */
+  stopImpersonating: () => Promise<void>;
 }
 
 export const useAuthStore = create<AuthState>((set) => ({
@@ -114,7 +160,30 @@ export const useAuthStore = create<AuthState>((set) => ({
 
   logout: () => {
     setAuthToken(null);
+    setStashedAdminToken(null); // defensive: a shared-machine logout mid-impersonation
+    // shouldn't leave a stale admin token sitting in localStorage.
     set({ token: null, user: null });
+  },
+
+  impersonateWorker: async (workerId) => {
+    const { token: impersonationToken } = await localApiRequest<{ token: string }>(
+      `/api/workers/${encodeURIComponent(workerId)}/impersonate`,
+      { method: 'POST' },
+    );
+    const realToken = getAuthToken();
+    if (realToken) setStashedAdminToken(realToken); // stash BEFORE switching
+    setAuthToken(impersonationToken);
+    set({ token: impersonationToken });
+    await useAuthStore.getState().fetchMe();
+  },
+
+  stopImpersonating: async () => {
+    const realToken = getStashedAdminToken();
+    if (!realToken) return;
+    setStashedAdminToken(null);
+    setAuthToken(realToken);
+    set({ token: realToken });
+    await useAuthStore.getState().fetchMe();
   },
 }));
 

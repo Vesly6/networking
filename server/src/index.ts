@@ -36,6 +36,7 @@ import {
   moveNewsSavedItem,
   getInstantlyTableMap,
   setInstantlyTableMapping,
+  type User,
 } from './accounts/db.js';
 import {
   ZadarmaApiError,
@@ -83,8 +84,11 @@ import {
   saveRow,
   saveRows,
   deleteRow,
-  allTablesBelongToCompany,
+  getRowById,
+  getTablesByIds,
+  setTableOwner,
   backfillCompanyId,
+  backfillTableOwners,
   listWorkerActions,
   findTimedNextActionRows,
   setTableBackupFlag,
@@ -97,7 +101,9 @@ import {
   purgeOldBackups,
   backupToCsvText,
   restoreBackupAsNewTable,
-  type WorkerRowRestriction,
+  type RowActionAttribution,
+  type TableMeta,
+  type TableAccessContext,
 } from './tableData/db.js';
 import {
   AuthError,
@@ -108,6 +114,7 @@ import {
   checkSuperAdminPassword,
   issueSuperAdminToken,
   requireSuperAdmin,
+  issueImpersonationToken,
 } from './auth.js';
 import { ApolloApiError, searchPeople, searchCompanies, enrichPerson, pollWebhookResult, getCreditUsageStats } from './apollo.js';
 import {
@@ -158,7 +165,7 @@ import {
   getImportOperation,
   markImportOperationRolledBack,
 } from './importHistory/db.js';
-import { LinkedInBrowserError, humanDelay } from './linkedin/browser.js';
+import { LinkedInBrowserError, humanDelay, withLinkedInBusyGuard } from './linkedin/browser.js';
 import { LinkedInPageError, getLinkedInStatus, sendConnectionRequest, replyInThread, searchLeads } from './linkedin/page.js';
 import { logAction, getRecentActions } from './linkedin/db.js';
 import {
@@ -192,8 +199,9 @@ import {
   setPaused,
 } from './linkedin/safety.js';
 import { getOrCreateTodaysPlan, nextDueSlot } from './linkedin/dailyPlan.js';
-import { runSchedulerTick, findStaleInvites, withdrawInvite } from './linkedin/scheduler.js';
+import { runSchedulerTick, findStaleInvites, withdrawInvite, SINGLE_TENANT_PLAN_ID } from './linkedin/scheduler.js';
 import { syncInbox } from './linkedin/inbox.js';
+import { getOrCreateTodaysVisitPlan, isWithinVisitWindow, nextVisitWindowStart } from './linkedin/visitSchedule.js';
 import { getAnalyticsSummary, getCampaignStepBreakdown, getDailyActivity } from './linkedin/analytics.js';
 
 const PORT = Number(process.env.PORT) || 4000;
@@ -284,6 +292,51 @@ class IntegrationNotConfiguredError extends Error {
   }
 }
 
+// Resolves "whose settings actually apply to this request" — the
+// impersonated worker's own, if a company super_admin is currently acting
+// as one (req.auth!.actingAs, see auth.ts), otherwise the request's own
+// user. Every requireXKey() helper below calls this first so a worker's
+// (or an admin impersonating one — see WorkersView.tsx's "Prisijungti
+// kaip") own per-integration key, when set, is used in preference to the
+// company-wide company_integrations value, with zero extra work needed at
+// any individual route.
+function effectiveUser(req: Request) {
+  return getUserById(req.auth!.actingAs ? req.auth!.actingAs.userId : req.auth!.userId);
+}
+
+// Per-table ownership (see PATCH /api/tables/:id/owner and
+// tableData/db.ts's own migration doc comment). One rule everywhere: a
+// table is visible/writable if the request is a company's own super_admin
+// in their real, non-impersonating session (full oversight, sees every
+// table regardless of owner), OR the table's ownerUserId matches
+// effectiveUser(req) — the impersonated worker's own id while
+// impersonating, otherwise the real logged-in user's own id. This is also
+// exactly how a super_admin's OWN newly-created tables end up private to
+// them by default: effectiveUser(req) in their own session already
+// resolves to their own id, with no special-casing needed at all.
+function tableAccessibleToRequest(req: Request, table: TableMeta): boolean {
+  if (req.auth!.role === 'super_admin' && !req.auth!.actingAs) return true;
+  const user = effectiveUser(req);
+  return !!user && table.ownerUserId === user.id;
+}
+
+// Same rule as tableAccessibleToRequest above, shaped for loadTables()/
+// findTimedNextActionRows()'s batch filtering instead of a single
+// already-loaded TableMeta.
+function tableAccessContext(req: Request): TableAccessContext {
+  return {
+    isRealAdmin: req.auth!.role === 'super_admin' && !req.auth!.actingAs,
+    ownerUserId: effectiveUser(req)?.id ?? '', // '' never matches a real table's owner_user_id — inert fallback
+  };
+}
+
+// Zadarma's API key/secret deliberately stay company-scoped, unlike every
+// other requireXKey() below — they authenticate to the Zadarma ACCOUNT
+// itself (one per company), a different concept from the per-worker SIP
+// extension/caller number (accounts/db.ts's zadarma_sip etc., resolved via
+// effectiveUser in GET /api/webrtc/key and POST /api/callback), which is a
+// property of one specific line within that account. See the per-worker
+// migration's own doc comment for the same reasoning.
 function requireZadarmaCreds(companyId: string): { key: string; secret: string } {
   const integrations = getCompanyIntegrations(companyId);
   if (!integrations?.zadarmaApiKey || !integrations?.zadarmaApiSecret) {
@@ -292,59 +345,53 @@ function requireZadarmaCreds(companyId: string): { key: string; secret: string }
   return { key: integrations.zadarmaApiKey, secret: integrations.zadarmaApiSecret };
 }
 
-function requireInstantlyKey(companyId: string): string {
-  const integrations = getCompanyIntegrations(companyId);
-  if (!integrations?.instantlyApiKey) {
-    throw new IntegrationNotConfiguredError();
-  }
-  return integrations.instantlyApiKey;
+// Every helper below follows the same shape: prefer the effective user's
+// (real or impersonated) own per-worker key (accounts/db.ts's per-worker
+// migration), falling back to this company's shared company_integrations
+// key — so a company that never sets up per-worker keys keeps working
+// exactly as before, and a worker with their own key transparently uses it
+// instead, on every route that already called this helper.
+function requireInstantlyKey(req: Request): string {
+  const key = effectiveUser(req)?.instantlyApiKey || getCompanyIntegrations(req.auth!.companyId)?.instantlyApiKey;
+  if (!key) throw new IntegrationNotConfiguredError();
+  return key;
 }
 
-function requireApolloKey(companyId: string): string {
-  const integrations = getCompanyIntegrations(companyId);
-  if (!integrations?.apolloApiKey) {
-    throw new IntegrationNotConfiguredError();
-  }
-  return integrations.apolloApiKey;
+function requireApolloKey(req: Request): string {
+  const key = effectiveUser(req)?.apolloApiKey || getCompanyIntegrations(req.auth!.companyId)?.apolloApiKey;
+  if (!key) throw new IntegrationNotConfiguredError();
+  return key;
 }
 
-function requireSerperKey(companyId: string): string {
-  const integrations = getCompanyIntegrations(companyId);
-  if (!integrations?.serperApiKey) {
-    throw new IntegrationNotConfiguredError();
-  }
-  return integrations.serperApiKey;
+function requireSerperKey(req: Request): string {
+  const key = effectiveUser(req)?.serperApiKey || getCompanyIntegrations(req.auth!.companyId)?.serperApiKey;
+  if (!key) throw new IntegrationNotConfiguredError();
+  return key;
 }
 
-function requireOpenaiKey(companyId: string): string {
-  const integrations = getCompanyIntegrations(companyId);
-  if (!integrations?.openaiApiKey) {
-    throw new IntegrationNotConfiguredError();
-  }
-  return integrations.openaiApiKey;
+function requireOpenaiKey(req: Request): string {
+  const key = effectiveUser(req)?.openaiApiKey || getCompanyIntegrations(req.auth!.companyId)?.openaiApiKey;
+  if (!key) throw new IntegrationNotConfiguredError();
+  return key;
 }
 
 /** Returns undefined instead of throwing — the diacritic-guess step inside
  * serper.ts's searchSocialProfiles is a best-effort enhancement, not a
  * hard requirement, see that function's own doc comment. */
-function optionalOpenaiKey(companyId: string): string | undefined {
-  return getCompanyIntegrations(companyId)?.openaiApiKey ?? undefined;
+function optionalOpenaiKey(req: Request): string | undefined {
+  return effectiveUser(req)?.openaiApiKey || getCompanyIntegrations(req.auth!.companyId)?.openaiApiKey || undefined;
 }
 
-function requireAnthropicKey(companyId: string): string {
-  const integrations = getCompanyIntegrations(companyId);
-  if (!integrations?.anthropicApiKey) {
-    throw new IntegrationNotConfiguredError();
-  }
-  return integrations.anthropicApiKey;
+function requireAnthropicKey(req: Request): string {
+  const key = effectiveUser(req)?.anthropicApiKey || getCompanyIntegrations(req.auth!.companyId)?.anthropicApiKey;
+  if (!key) throw new IntegrationNotConfiguredError();
+  return key;
 }
 
-function requireElevenlabsKey(companyId: string): string {
-  const integrations = getCompanyIntegrations(companyId);
-  if (!integrations?.elevenlabsApiKey) {
-    throw new IntegrationNotConfiguredError();
-  }
-  return integrations.elevenlabsApiKey;
+function requireElevenlabsKey(req: Request): string {
+  const key = effectiveUser(req)?.elevenlabsApiKey || getCompanyIntegrations(req.auth!.companyId)?.elevenlabsApiKey;
+  if (!key) throw new IntegrationNotConfiguredError();
+  return key;
 }
 
 app.get('/health', (_req, res) => {
@@ -784,7 +831,7 @@ app.get(
   '/api/admin/companies/:id/workers',
   requireSuperAdmin,
   asyncHandler(async (req, res) => {
-    res.json({ workers: listWorkers(req.params.id) });
+    res.json({ workers: listWorkers(req.params.id).map(workerToPublic) });
   }),
 );
 
@@ -819,7 +866,7 @@ app.post(
       visibleTabs: Array.isArray(visibleTabs) ? visibleTabs : [],
       permissions: permissions && typeof permissions === 'object' ? permissions : undefined,
     });
-    res.json(worker);
+    res.json(workerToPublic(worker));
   }),
 );
 
@@ -827,12 +874,18 @@ app.patch(
   '/api/admin/companies/:id/workers/:userId',
   requireSuperAdmin,
   asyncHandler(async (req, res) => {
-    const { visibleTabs, permissions, password } = req.body ?? {};
+    const { visibleTabs, permissions, password, firstName, lastName } = req.body ?? {};
     if (password !== undefined && (typeof password !== 'string' || !password)) {
       res.status(400).json({ error: 'Slaptažodis negali būti tuščias' });
       return;
     }
+    if (firstName !== undefined && (typeof firstName !== 'string' || !firstName.trim())) {
+      res.status(400).json({ error: 'Vardas negali būti tuščias' });
+      return;
+    }
     const worker = updateWorker(req.params.userId, req.params.id, {
+      firstName: typeof firstName === 'string' ? firstName : undefined,
+      lastName: typeof lastName === 'string' ? lastName : undefined,
       visibleTabs: Array.isArray(visibleTabs) ? visibleTabs : undefined,
       permissions: permissions && typeof permissions === 'object' ? permissions : undefined,
       password: typeof password === 'string' ? password : undefined,
@@ -841,7 +894,7 @@ app.patch(
       res.status(404).json({ error: 'Worker not found' });
       return;
     }
-    res.json(worker);
+    res.json(workerToPublic(worker));
   }),
 );
 
@@ -1029,16 +1082,38 @@ app.get(
       res.status(401).json({ error: 'Neautentifikuota' });
       return;
     }
+    // While impersonating (req.auth!.actingAs set — see auth.ts), display
+    // identity (name/visibleTabs) comes from the WORKER being acted as, but
+    // role/permissions stay the REAL admin's own — full admin rights while
+    // impersonating is the whole point (see plan/CLAUDE.md). id/companyId
+    // are always the real admin's too: every write is still attributed to
+    // req.auth.userId server-side regardless of what this response shows
+    // for display.
+    let displayUser = user;
+    let impersonating: { workerId: string; workerName: string; adminUserId: string; adminName: string } | null = null;
+    if (req.auth!.actingAs) {
+      const worker = getUserById(req.auth!.actingAs.userId);
+      if (worker && worker.companyId === user.companyId && worker.role === 'worker') {
+        displayUser = worker;
+        impersonating = {
+          workerId: worker.id,
+          workerName: `${worker.firstName} ${worker.lastName}`.trim(),
+          adminUserId: user.id,
+          adminName: `${user.firstName} ${user.lastName}`.trim(),
+        };
+      }
+    }
     res.json({
       id: user.id,
       companyId: user.companyId,
       username: user.username,
-      firstName: user.firstName,
-      lastName: user.lastName,
+      firstName: displayUser.firstName,
+      lastName: displayUser.lastName,
       role: user.role,
-      visibleTabs: user.visibleTabs,
+      visibleTabs: displayUser.visibleTabs,
       permissions: user.permissions,
       company: companyWithFeatures(user.companyId),
+      impersonating,
     });
   }),
 );
@@ -1059,15 +1134,72 @@ app.get(
   '/api/workers',
   requireNotWorker,
   asyncHandler(async (req, res) => {
-    res.json({ workers: listWorkers(req.auth!.companyId) });
+    res.json({ workers: listWorkers(req.auth!.companyId).map(workerToPublic) });
   }),
 );
+
+// Every per-worker integration override (Zadarma's own three, plus the six
+// plain-API-key ones — see accounts/db.ts's per-worker migrations) shares
+// the identical "typeof === 'string' or omit" extraction, so both routes
+// below pull them out through this one helper rather than repeating nine
+// near-identical `typeof x === 'string' ? x : undefined` lines twice. An
+// omitted field stays `undefined` (createUser leaves it null; updateWorker
+// leaves the existing value unchanged); an explicit '' is still a real
+// string, so it passes through and clears the override (see
+// UpdateWorkerInput's own doc comment on this exact convention).
+const WORKER_INTEGRATION_FIELDS = [
+  'zadarmaSip',
+  'zadarmaWidgetSip',
+  'zadarmaCallerNumber',
+  'instantlyApiKey',
+  'apolloApiKey',
+  'serperApiKey',
+  'openaiApiKey',
+  'anthropicApiKey',
+  'elevenlabsApiKey',
+] as const;
+type WorkerIntegrationOverrides = Partial<Record<(typeof WORKER_INTEGRATION_FIELDS)[number], string>>;
+function pickWorkerIntegrationOverrides(body: Record<string, unknown>): WorkerIntegrationOverrides {
+  const result: WorkerIntegrationOverrides = {};
+  for (const field of WORKER_INTEGRATION_FIELDS) {
+    if (typeof body[field] === 'string') result[field] = body[field] as string;
+  }
+  return result;
+}
+
+// The six plain-API-key overrides are real secrets — same "never re-send a
+// saved secret to the browser" rule this app's own IntegrationsView.tsx
+// already follows for the company-wide keys (see INTEGRATION_FIELDS/
+// NON_SECRET_INTEGRATION_FIELDS below). Every response that includes a
+// worker (GET/POST/PATCH /api/workers* on both the company's own route and
+// the platform admin's cross-company one) must go through this first —
+// the six fields are replaced with a plain boolean ("is one set"), the
+// three Zadarma overrides pass through unredacted since they're not
+// actually secret (a phone number, an extension), matching how
+// zadarmaCallerNumber is already treated at the company level.
+const WORKER_SECRET_FIELDS = new Set(['instantlyApiKey', 'apolloApiKey', 'serperApiKey', 'openaiApiKey', 'anthropicApiKey', 'elevenlabsApiKey']);
+function workerToPublic(worker: User): Record<string, unknown> {
+  const rest: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(worker)) {
+    if (!WORKER_SECRET_FIELDS.has(key)) rest[key] = value;
+  }
+  return {
+    ...rest,
+    instantlyApiKeySet: !!worker.instantlyApiKey,
+    apolloApiKeySet: !!worker.apolloApiKey,
+    serperApiKeySet: !!worker.serperApiKey,
+    openaiApiKeySet: !!worker.openaiApiKey,
+    anthropicApiKeySet: !!worker.anthropicApiKey,
+    elevenlabsApiKeySet: !!worker.elevenlabsApiKey,
+  };
+}
 
 app.post(
   '/api/workers',
   requireNotWorker,
   asyncHandler(async (req, res) => {
-    const { username, password, firstName, lastName, visibleTabs, permissions } = req.body ?? {};
+    const body = req.body ?? {};
+    const { username, password, firstName, lastName, visibleTabs, permissions } = body;
     if (
       typeof username !== 'string' ||
       !username.trim() ||
@@ -1093,8 +1225,9 @@ app.post(
       role: 'worker',
       visibleTabs: Array.isArray(visibleTabs) ? visibleTabs : [],
       permissions: permissions && typeof permissions === 'object' ? permissions : undefined,
+      ...pickWorkerIntegrationOverrides(body),
     });
-    res.json(worker);
+    res.json(workerToPublic(worker));
   }),
 );
 
@@ -1102,21 +1235,29 @@ app.patch(
   '/api/workers/:id',
   requireNotWorker,
   asyncHandler(async (req, res) => {
-    const { visibleTabs, permissions, password } = req.body ?? {};
+    const body = req.body ?? {};
+    const { visibleTabs, permissions, password, firstName, lastName } = body;
     if (password !== undefined && (typeof password !== 'string' || !password)) {
       res.status(400).json({ error: 'Slaptažodis negali būti tuščias' });
       return;
     }
+    if (firstName !== undefined && (typeof firstName !== 'string' || !firstName.trim())) {
+      res.status(400).json({ error: 'Vardas negali būti tuščias' });
+      return;
+    }
     const worker = updateWorker(req.params.id, req.auth!.companyId, {
+      firstName: typeof firstName === 'string' ? firstName : undefined,
+      lastName: typeof lastName === 'string' ? lastName : undefined,
       visibleTabs: Array.isArray(visibleTabs) ? visibleTabs : undefined,
       permissions: permissions && typeof permissions === 'object' ? permissions : undefined,
       password: typeof password === 'string' ? password : undefined,
+      ...pickWorkerIntegrationOverrides(body),
     });
     if (!worker) {
       res.status(404).json({ error: 'Worker not found' });
       return;
     }
-    res.json(worker);
+    res.json(workerToPublic(worker));
   }),
 );
 
@@ -1126,6 +1267,41 @@ app.delete(
   asyncHandler(async (req, res) => {
     deleteWorker(req.params.id, req.auth!.companyId);
     res.json({ ok: true });
+  }),
+);
+
+// "Log in as worker" — a company super_admin temporarily acts inside one of
+// their own workers' sessions without ever knowing that worker's password.
+// Deliberately NOT a real logout/login: this just issues a second,
+// independent token (see auth.ts's issueImpersonationToken) that keeps the
+// admin's own identity/role authoritative (full admin rights throughout)
+// while layering on the worker's display identity/visibleTabs — see
+// GET /api/auth/me above. Same requireNotWorker gate as every other
+// /api/workers route (a worker can never impersonate anyone). Both the
+// "target belongs to my own company" and "target is actually a worker"
+// checks are done here, fresh from the DB, never trusted from the URL —
+// this is the hard backend boundary that makes Admin A → Admin B's own
+// worker impossible regardless of what the frontend sends.
+app.post(
+  '/api/workers/:id/impersonate',
+  requireNotWorker,
+  asyncHandler(async (req, res) => {
+    if (req.auth!.actingAs) {
+      res.status(403).json({ error: 'Jau veikiate kaip kitas darbuotojas — pirmiausia grįžkite į savo paskyrą.' });
+      return;
+    }
+    const admin = getUserById(req.auth!.userId);
+    if (!admin) {
+      res.status(401).json({ error: 'Neautentifikuota' });
+      return;
+    }
+    const worker = getUserById(req.params.id);
+    if (!worker || worker.companyId !== admin.companyId || worker.role !== 'worker') {
+      res.status(404).json({ error: 'Worker not found' });
+      return;
+    }
+    const token = issueImpersonationToken(admin, worker);
+    res.json({ token });
   }),
 );
 
@@ -1313,7 +1489,7 @@ app.post(
       res.status(502).json({ error: 'Šiam skambučiui įrašo nėra' });
       return;
     }
-    const result = await transcribeFromUrl(link, requireElevenlabsKey(req.auth!.companyId), lang);
+    const result = await transcribeFromUrl(link, requireElevenlabsKey(req), lang);
     res.json(result);
   }),
 );
@@ -1352,7 +1528,7 @@ app.post(
     const rawLang = req.body?.lang;
     const lang = rawLang === 'auto' ? undefined : typeof rawLang === 'string' ? rawLang : 'lt';
     const buffer = Buffer.from(audioBase64, 'base64');
-    const result = await transcribeFromBuffer(buffer, mimeType, requireElevenlabsKey(req.auth!.companyId), lang);
+    const result = await transcribeFromBuffer(buffer, mimeType, requireElevenlabsKey(req), lang);
     res.json(result);
   }),
 );
@@ -1369,15 +1545,17 @@ app.post(
       res.status(400).json({ error: 'Missing "text" to summarize' });
       return;
     }
-    const result = await summarizeCall(text, requireOpenaiKey(req.auth!.companyId));
+    const result = await summarizeCall(text, requireOpenaiKey(req));
     res.json(result);
   }),
 );
 
 // Click-to-call: dials your own number first, then connects you to `to`
-// once you pick up. `from` defaults to this company's own configured
-// zadarmaCallerNumber (see requireZadarmaCreds below) so the frontend
-// never needs to know/hardcode which number is "yours".
+// once you pick up. `from` prefers this specific user's own configured
+// zadarmaCallerNumber (see accounts/db.ts's per-worker migration), falling
+// back to the company-wide zadarmaCallerNumber (requireZadarmaCreds below)
+// so a company that hasn't set up per-worker numbers keeps working exactly
+// as before.
 app.post(
   '/api/callback',
   asyncHandler(async (req, res) => {
@@ -1387,7 +1565,7 @@ app.post(
       return;
     }
     const creds = requireZadarmaCreds(req.auth!.companyId);
-    const from = getCompanyIntegrations(req.auth!.companyId)?.zadarmaCallerNumber;
+    const from = effectiveUser(req)?.zadarmaCallerNumber || getCompanyIntegrations(req.auth!.companyId)?.zadarmaCallerNumber;
     if (!from) {
       res.status(409).json({ error: 'Skambinančio numerio dar nesukonfigūruota — susisiekite su administratoriumi, kad jį sukonfigūruotų.' });
       return;
@@ -1468,10 +1646,23 @@ app.get(
     // account) — using the bare extension there is what produced the
     // integrationDisabled/"Sip not found" error, not anything about the
     // domain or the key itself.
-    const sip = process.env.ZADARMA_WEBRTC_SIP;
-    const widgetSip = process.env.ZADARMA_WEBRTC_WIDGET_SIP;
+    //
+    // Prefers this specific user's own configured SIP/widget SIP (see
+    // accounts/db.ts's per-worker migration and effectiveUser above),
+    // falling back to the existing process.env values so a deployment that
+    // hasn't set up per-worker numbers keeps working exactly as before.
+    // effectiveUser() is also what makes this resolve the impersonated
+    // worker's own SIP (not the admin's) while impersonating, for free.
+    const user = effectiveUser(req);
+    const sip = user?.zadarmaSip || process.env.ZADARMA_WEBRTC_SIP;
+    const widgetSip = user?.zadarmaWidgetSip || process.env.ZADARMA_WEBRTC_WIDGET_SIP;
     if (!sip || !widgetSip) {
-      res.status(500).json({ error: 'ZADARMA_WEBRTC_SIP / ZADARMA_WEBRTC_WIDGET_SIP are not set — check server/.env' });
+      res
+        .status(500)
+        .json({
+          error:
+            'ZADARMA_WEBRTC_SIP / ZADARMA_WEBRTC_WIDGET_SIP are not set — check server/.env, or configure this worker\'s own SIP under Darbuotojai',
+        });
       return;
     }
     const result = await getWebrtcKey(sip, requireZadarmaCreds(req.auth!.companyId));
@@ -1487,7 +1678,7 @@ app.post(
       res.status(400).json({ error: 'Missing "text" to parse' });
       return;
     }
-    const result = await parseContactText(text, requireOpenaiKey(req.auth!.companyId));
+    const result = await parseContactText(text, requireOpenaiKey(req));
     res.json(result);
   }),
 );
@@ -1500,7 +1691,7 @@ app.post(
       res.status(400).json({ error: 'Missing "title" to translate' });
       return;
     }
-    const translated = await translateJobTitleToEnglish(title.trim(), requireOpenaiKey(req.auth!.companyId));
+    const translated = await translateJobTitleToEnglish(title.trim(), requireOpenaiKey(req));
     res.json({ title: translated ?? title.trim() });
   }),
 );
@@ -1545,7 +1736,7 @@ app.post(
     }
     const result = await generateEmail(
       { mode, lang, model, instructions, clientEmail, clientHistory },
-      requireAnthropicKey(req.auth!.companyId),
+      requireAnthropicKey(req),
     );
     res.json(result);
   }),
@@ -1572,8 +1763,8 @@ app.post(
     }
     const result = await searchSocialProfiles(
       { firstName, lastName },
-      requireSerperKey(req.auth!.companyId),
-      optionalOpenaiKey(req.auth!.companyId),
+      requireSerperKey(req),
+      optionalOpenaiKey(req),
     );
     res.json(result);
   }),
@@ -1745,7 +1936,7 @@ app.patch(
 app.get(
   '/api/news',
   asyncHandler(async (req, res) => {
-    const apiKey = requireSerperKey(req.auth!.companyId);
+    const apiKey = requireSerperKey(req);
     // Only active topics actually get searched (and billed) — a
     // soft-deleted one stays recoverable (see deleteNewsTopic's own doc
     // comment) but shouldn't keep spending serper.dev credits while it's
@@ -1796,7 +1987,7 @@ app.get(
 app.post(
   '/api/apollo/people/search',
   asyncHandler(async (req, res) => {
-    const result = await searchPeople(req.body ?? {}, requireApolloKey(req.auth!.companyId));
+    const result = await searchPeople(req.body ?? {}, requireApolloKey(req));
     res.json(result);
   }),
 );
@@ -1808,7 +1999,7 @@ app.post(
 app.post(
   '/api/apollo/companies/search',
   asyncHandler(async (req, res) => {
-    const result = await searchCompanies(req.body ?? {}, requireApolloKey(req.auth!.companyId));
+    const result = await searchCompanies(req.body ?? {}, requireApolloKey(req));
     res.json(result);
   }),
 );
@@ -1835,7 +2026,7 @@ app.post(
       }
       body.webhook_url = `${base}/api/apollo/webhook`;
     }
-    const result = await enrichPerson(body, requireApolloKey(req.auth!.companyId));
+    const result = await enrichPerson(body, requireApolloKey(req));
     res.json(result);
   }),
 );
@@ -1847,7 +2038,7 @@ app.post(
 app.get(
   '/api/apollo/webhook/:requestId',
   asyncHandler(async (req, res) => {
-    const result = await pollWebhookResult(req.params.requestId, requireApolloKey(req.auth!.companyId));
+    const result = await pollWebhookResult(req.params.requestId, requireApolloKey(req));
     res.json(result);
   }),
 );
@@ -1860,7 +2051,7 @@ app.get(
 app.get(
   '/api/apollo/credits',
   asyncHandler(async (req, res) => {
-    const result = await getCreditUsageStats(requireApolloKey(req.auth!.companyId));
+    const result = await getCreditUsageStats(requireApolloKey(req));
     res.json(result);
   }),
 );
@@ -1974,7 +2165,7 @@ app.get(
         search: typeof search === 'string' ? search : undefined,
         status: status ? Number(status) : undefined,
       },
-      requireInstantlyKey(req.auth!.companyId),
+      requireInstantlyKey(req),
     );
     res.json(result);
   }),
@@ -1990,7 +2181,7 @@ app.get(
         start_date: typeof start_date === 'string' ? start_date : undefined,
         end_date: typeof end_date === 'string' ? end_date : undefined,
       },
-      requireInstantlyKey(req.auth!.companyId),
+      requireInstantlyKey(req),
     );
     res.json(result);
   }),
@@ -2006,7 +2197,7 @@ app.get(
         start_date: typeof start_date === 'string' ? start_date : undefined,
         end_date: typeof end_date === 'string' ? end_date : undefined,
       },
-      requireInstantlyKey(req.auth!.companyId),
+      requireInstantlyKey(req),
     );
     res.json(result);
   }),
@@ -2023,7 +2214,7 @@ app.get(
         start_date: typeof start_date === 'string' ? start_date : undefined,
         end_date: typeof end_date === 'string' ? end_date : undefined,
       },
-      requireInstantlyKey(req.auth!.companyId),
+      requireInstantlyKey(req),
     );
     res.json(result);
   }),
@@ -2032,7 +2223,7 @@ app.get(
 app.get(
   '/api/instantly/campaigns/:id',
   asyncHandler(async (req, res) => {
-    const result = await getInstantlyCampaign(req.params.id, requireInstantlyKey(req.auth!.companyId));
+    const result = await getInstantlyCampaign(req.params.id, requireInstantlyKey(req));
     res.json(result);
   }),
 );
@@ -2047,7 +2238,7 @@ app.get(
 app.patch(
   '/api/instantly/campaigns/:id',
   asyncHandler(async (req, res) => {
-    const result = await updateInstantlyCampaign(req.params.id, req.body ?? {}, requireInstantlyKey(req.auth!.companyId));
+    const result = await updateInstantlyCampaign(req.params.id, req.body ?? {}, requireInstantlyKey(req));
     res.json(result);
   }),
 );
@@ -2059,7 +2250,7 @@ app.patch(
 app.post(
   '/api/instantly/campaigns/:id/activate',
   asyncHandler(async (req, res) => {
-    const result = await activateInstantlyCampaign(req.params.id, requireInstantlyKey(req.auth!.companyId));
+    const result = await activateInstantlyCampaign(req.params.id, requireInstantlyKey(req));
     res.json(result);
   }),
 );
@@ -2067,7 +2258,7 @@ app.post(
 app.post(
   '/api/instantly/campaigns/:id/pause',
   asyncHandler(async (req, res) => {
-    const result = await pauseInstantlyCampaign(req.params.id, requireInstantlyKey(req.auth!.companyId));
+    const result = await pauseInstantlyCampaign(req.params.id, requireInstantlyKey(req));
     res.json(result);
   }),
 );
@@ -2075,7 +2266,7 @@ app.post(
 app.post(
   '/api/instantly/leads/list',
   asyncHandler(async (req, res) => {
-    const result = await listInstantlyLeads(req.body ?? {}, requireInstantlyKey(req.auth!.companyId));
+    const result = await listInstantlyLeads(req.body ?? {}, requireInstantlyKey(req));
     res.json(result);
   }),
 );
@@ -2083,7 +2274,7 @@ app.post(
 app.post(
   '/api/instantly/leads',
   asyncHandler(async (req, res) => {
-    const result = await createInstantlyLead(req.body ?? {}, requireInstantlyKey(req.auth!.companyId));
+    const result = await createInstantlyLead(req.body ?? {}, requireInstantlyKey(req));
     res.json(result);
   }),
 );
@@ -2091,7 +2282,7 @@ app.post(
 app.patch(
   '/api/instantly/leads/:id',
   asyncHandler(async (req, res) => {
-    const result = await updateInstantlyLead(req.params.id, req.body ?? {}, requireInstantlyKey(req.auth!.companyId));
+    const result = await updateInstantlyLead(req.params.id, req.body ?? {}, requireInstantlyKey(req));
     res.json(result);
   }),
 );
@@ -2099,7 +2290,7 @@ app.patch(
 app.delete(
   '/api/instantly/leads/:id',
   asyncHandler(async (req, res) => {
-    const result = await deleteInstantlyLead(req.params.id, requireInstantlyKey(req.auth!.companyId));
+    const result = await deleteInstantlyLead(req.params.id, requireInstantlyKey(req));
     res.json(result);
   }),
 );
@@ -2116,7 +2307,7 @@ app.post(
       res.status(400).json({ error: 'bl_value (email or domain) is required' });
       return;
     }
-    const result = await addToBlockList(bl_value, requireInstantlyKey(req.auth!.companyId));
+    const result = await addToBlockList(bl_value, requireInstantlyKey(req));
     res.json(result);
   }),
 );
@@ -2131,7 +2322,7 @@ app.get(
         starting_after: typeof starting_after === 'string' ? starting_after : undefined,
         search: typeof search === 'string' ? search : undefined,
       },
-      requireInstantlyKey(req.auth!.companyId),
+      requireInstantlyKey(req),
     );
     res.json(result);
   }),
@@ -2140,7 +2331,7 @@ app.get(
 app.delete(
   '/api/instantly/block-list/:id',
   asyncHandler(async (req, res) => {
-    const result = await removeFromBlockList(req.params.id, requireInstantlyKey(req.auth!.companyId));
+    const result = await removeFromBlockList(req.params.id, requireInstantlyKey(req));
     res.json(result);
   }),
 );
@@ -2156,7 +2347,7 @@ app.get(
         search: typeof search === 'string' ? search : undefined,
         status: status ? Number(status) : undefined,
       },
-      requireInstantlyKey(req.auth!.companyId),
+      requireInstantlyKey(req),
     );
     res.json(result);
   }),
@@ -2170,7 +2361,7 @@ app.get(
 app.post(
   '/api/instantly/accounts',
   asyncHandler(async (req, res) => {
-    const result = await createInstantlyAccount(req.body ?? {}, requireInstantlyKey(req.auth!.companyId));
+    const result = await createInstantlyAccount(req.body ?? {}, requireInstantlyKey(req));
     res.json(result);
   }),
 );
@@ -2178,7 +2369,7 @@ app.post(
 app.post(
   '/api/instantly/accounts/:email/pause',
   asyncHandler(async (req, res) => {
-    const result = await pauseInstantlyAccount(req.params.email, requireInstantlyKey(req.auth!.companyId));
+    const result = await pauseInstantlyAccount(req.params.email, requireInstantlyKey(req));
     res.json(result);
   }),
 );
@@ -2186,7 +2377,7 @@ app.post(
 app.post(
   '/api/instantly/accounts/:email/resume',
   asyncHandler(async (req, res) => {
-    const result = await resumeInstantlyAccount(req.params.email, requireInstantlyKey(req.auth!.companyId));
+    const result = await resumeInstantlyAccount(req.params.email, requireInstantlyKey(req));
     res.json(result);
   }),
 );
@@ -2199,7 +2390,7 @@ app.post(
       res.status(400).json({ error: 'emails (non-empty array) is required' });
       return;
     }
-    const result = await enableWarmup(emails, requireInstantlyKey(req.auth!.companyId));
+    const result = await enableWarmup(emails, requireInstantlyKey(req));
     res.json(result);
   }),
 );
@@ -2212,7 +2403,7 @@ app.post(
       res.status(400).json({ error: 'emails (non-empty array) is required' });
       return;
     }
-    const result = await disableWarmup(emails, requireInstantlyKey(req.auth!.companyId));
+    const result = await disableWarmup(emails, requireInstantlyKey(req));
     res.json(result);
   }),
 );
@@ -2232,7 +2423,7 @@ app.get(
         has_reminder: has_reminder === 'true' ? true : undefined,
         scheduled_only: scheduled_only === 'true' ? true : undefined,
       },
-      requireInstantlyKey(req.auth!.companyId),
+      requireInstantlyKey(req),
     );
     res.json(result);
   }),
@@ -2241,7 +2432,7 @@ app.get(
 app.get(
   '/api/instantly/emails/unread/count',
   asyncHandler(async (req, res) => {
-    const result = await getUnreadCount(requireInstantlyKey(req.auth!.companyId));
+    const result = await getUnreadCount(requireInstantlyKey(req));
     res.json(result);
   }),
 );
@@ -2252,7 +2443,7 @@ app.get(
 app.post(
   '/api/instantly/emails/reply',
   asyncHandler(async (req, res) => {
-    const result = await replyToInstantlyEmail(req.body ?? {}, requireInstantlyKey(req.auth!.companyId));
+    const result = await replyToInstantlyEmail(req.body ?? {}, requireInstantlyKey(req));
     res.json(result);
   }),
 );
@@ -2260,7 +2451,7 @@ app.post(
 app.post(
   '/api/instantly/emails/threads/:threadId/mark-as-read',
   asyncHandler(async (req, res) => {
-    const result = await markThreadRead(req.params.threadId, requireInstantlyKey(req.auth!.companyId));
+    const result = await markThreadRead(req.params.threadId, requireInstantlyKey(req));
     res.json(result);
   }),
 );
@@ -2278,7 +2469,7 @@ app.patch(
       res.status(400).json({ error: 'Invalid "is_unread" — must be 0 or 1' });
       return;
     }
-    const result = await updateEmail(req.params.id, { is_unread }, requireInstantlyKey(req.auth!.companyId));
+    const result = await updateEmail(req.params.id, { is_unread }, requireInstantlyKey(req));
     res.json(result);
   }),
 );
@@ -2287,7 +2478,7 @@ app.patch(
 app.post(
   '/api/instantly/emails/forward',
   asyncHandler(async (req, res) => {
-    const result = await forwardInstantlyEmail(req.body ?? {}, requireInstantlyKey(req.auth!.companyId));
+    const result = await forwardInstantlyEmail(req.body ?? {}, requireInstantlyKey(req));
     res.json(result);
   }),
 );
@@ -2305,7 +2496,7 @@ app.post(
     }
     const result = await updateLeadInterestStatus(
       { leadEmail, interestValue: interestValue ?? null, campaignId },
-      requireInstantlyKey(req.auth!.companyId),
+      requireInstantlyKey(req),
     );
     res.json(result);
   }),
@@ -2363,7 +2554,7 @@ app.post(
     }
     const startedAt = Date.now();
     try {
-      const timing = await sendConnectionRequest(profileUrl, note);
+      const timing = await withLinkedInBusyGuard(() => sendConnectionRequest(profileUrl, note));
       recordConnectSent();
       logAction({
         leadId: null,
@@ -2434,7 +2625,7 @@ app.post(
       }
       const startedAt = Date.now();
       try {
-        const timing = await sendConnectionRequest(profileUrl);
+        const timing = await withLinkedInBusyGuard(() => sendConnectionRequest(profileUrl));
         recordConnectSent();
         logAction({
           leadId: null,
@@ -2503,6 +2694,30 @@ app.get(
       // means "nothing due at this exact moment," not "nothing left
       // today" (a later un-fired slot can still exist further in plannedSlots).
       nextSlotDueNowAt: nextSlot,
+    });
+  }),
+);
+
+app.get(
+  '/api/linkedin/visit-plan/today',
+  asyncHandler(async (_req, res) => {
+    const settings = getSafetySettings();
+    // Short-circuits without ever touching visit_schedule when the
+    // feature is off, so a company that's never turned this on doesn't
+    // grow a visit_schedule row every single day purely from the
+    // Apžvalga tab's own mount-fetch of this route.
+    if (!settings.visitWindowsEnabled) {
+      res.json({ enabled: false, date: null, windows: [], currentlyOnline: true, nextWindowStart: null });
+      return;
+    }
+    const plan = await getOrCreateTodaysVisitPlan(settings, SINGLE_TENANT_PLAN_ID);
+    const now = Date.now();
+    res.json({
+      enabled: true,
+      date: plan.date,
+      windows: plan.windows,
+      currentlyOnline: isWithinVisitWindow(plan, now),
+      nextWindowStart: nextVisitWindowStart(plan, now),
     });
   }),
 );
@@ -2882,7 +3097,7 @@ app.post(
     const result = await suggestLinkedInReply(
       conversation.participantName,
       messages.map((m) => ({ direction: m.direction, content: m.content })),
-      requireOpenaiKey(req.auth!.companyId),
+      requireOpenaiKey(req),
     );
     res.json(result);
   }),
@@ -2933,7 +3148,7 @@ app.get(
 app.get(
   '/api/tables',
   asyncHandler(async (req, res) => {
-    res.json({ tables: loadTables(req.auth!.companyId) });
+    res.json({ tables: loadTables(req.auth!.companyId, tableAccessContext(req)) });
   }),
 );
 
@@ -2954,7 +3169,19 @@ app.post(
       res.status(400).json({ error: 'Invalid table payload' });
       return;
     }
-    saveTable(table, req.auth!.companyId);
+    // ownerUserId is ALWAYS derived server-side from effectiveUser(req) —
+    // never trusted from the client body (a worker can't create tables at
+    // all per requireNotWorker above, but an impersonating admin's client
+    // could otherwise claim any owner it liked). This is the one rule that
+    // makes a table private to the admin in their own session, or
+    // assigned to the impersonated worker while impersonating — see
+    // tableAccessibleToRequest's own doc comment.
+    const owner = effectiveUser(req);
+    if (!owner) {
+      res.status(401).json({ error: 'Neautentifikuota' });
+      return;
+    }
+    saveTable({ ...table, ownerUserId: owner.id }, req.auth!.companyId);
     res.json({ ok: true });
   }),
 );
@@ -2963,7 +3190,7 @@ app.get(
   '/api/tables/:id',
   asyncHandler(async (req, res) => {
     const table = getTable(req.params.id, req.auth!.companyId);
-    if (!table) {
+    if (!table || !tableAccessibleToRequest(req, table)) {
       res.status(404).json({ error: 'Table not found' });
       return;
     }
@@ -2979,6 +3206,11 @@ app.patch(
       return;
     }
     const companyId = req.auth!.companyId;
+    const existing = getTable(req.params.id, companyId);
+    if (!existing || !tableAccessibleToRequest(req, existing)) {
+      res.status(404).json({ error: 'Table not found' });
+      return;
+    }
     // A worker without can_insert_columns/can_delete_columns may still
     // freely rename/reorder columns — this endpoint gets the *whole*
     // column list every time, so unlike the row bulk-save path below, a
@@ -2998,8 +3230,7 @@ app.patch(
     // can_insert_columns stays a client-side-only UI gate, same accepted-
     // limitation reasoning the original plan used for CSV export.
     if (req.auth!.role === 'worker') {
-      const existing = getTable(req.params.id, companyId);
-      const existingColumns = (existing?.columns as Array<{ id: string; hidden?: boolean; type: string }> | undefined) ?? [];
+      const existingColumns = (existing.columns as Array<{ id: string; hidden?: boolean; type: string }> | undefined) ?? [];
       const existingById = new Map(existingColumns.map((c) => [c.id, c]));
       const incomingColumns = req.body.columns as Array<{ id: string; hidden?: boolean; type: string }>;
       const incomingIds = new Set(incomingColumns.map((c) => c.id));
@@ -3044,7 +3275,13 @@ app.patch(
       res.status(400).json({ error: 'Invalid "name"' });
       return;
     }
-    updateTableName(req.params.id, req.body.name, req.auth!.companyId);
+    const companyId = req.auth!.companyId;
+    const existing = getTable(req.params.id, companyId);
+    if (!existing || !tableAccessibleToRequest(req, existing)) {
+      res.status(404).json({ error: 'Table not found' });
+      return;
+    }
+    updateTableName(req.params.id, req.body.name, companyId);
     res.json({ ok: true });
   }),
 );
@@ -3062,7 +3299,13 @@ app.post(
       res.status(400).json({ error: 'Invalid "enabled"' });
       return;
     }
-    setTableBackupFlag(req.params.id, req.auth!.companyId, req.body.enabled);
+    const companyId = req.auth!.companyId;
+    const existing = getTable(req.params.id, companyId);
+    if (!existing || !tableAccessibleToRequest(req, existing)) {
+      res.status(404).json({ error: 'Table not found' });
+      return;
+    }
+    setTableBackupFlag(req.params.id, companyId, req.body.enabled);
     res.json({ ok: true });
   }),
 );
@@ -3074,8 +3317,46 @@ app.patch(
   '/api/tables/:id/folder',
   requireNotWorker,
   asyncHandler(async (req, res) => {
+    const companyId = req.auth!.companyId;
+    const existing = getTable(req.params.id, companyId);
+    if (!existing || !tableAccessibleToRequest(req, existing)) {
+      res.status(404).json({ error: 'Table not found' });
+      return;
+    }
     const folderId = typeof req.body?.folderId === 'string' ? req.body.folderId : null;
-    setTableFolder(req.params.id, folderId, req.auth!.companyId);
+    setTableFolder(req.params.id, folderId, companyId);
+    res.json({ ok: true });
+  }),
+);
+
+// The one explicit way to hand an existing table off to a specific worker
+// (or reclaim it back to a specific admin) — see the per-table ownership
+// migration's own doc comment in tableData/db.ts. Required, not optional:
+// since a table's owner_user_id now defaults to the creating/effective
+// user with no "shared" fallback, this is the only way a worker who
+// didn't create a table themselves (via impersonation) ever gets access
+// to one. `ownerUserId` must be a real user of the same company — worker
+// or the super_admin themself (no role restriction on the target).
+app.patch(
+  '/api/tables/:id/owner',
+  requireNotWorker,
+  asyncHandler(async (req, res) => {
+    const companyId = req.auth!.companyId;
+    const existing = getTable(req.params.id, companyId);
+    if (!existing || !tableAccessibleToRequest(req, existing)) {
+      res.status(404).json({ error: 'Table not found' });
+      return;
+    }
+    if (typeof req.body?.ownerUserId !== 'string') {
+      res.status(400).json({ error: 'Invalid "ownerUserId"' });
+      return;
+    }
+    const newOwner = getUserById(req.body.ownerUserId);
+    if (!newOwner || newOwner.companyId !== companyId) {
+      res.status(400).json({ error: 'Invalid owner' });
+      return;
+    }
+    setTableOwner(req.params.id, newOwner.id, companyId);
     res.json({ ok: true });
   }),
 );
@@ -3091,7 +3372,15 @@ app.put(
       res.status(400).json({ error: 'Invalid "tables"' });
       return;
     }
-    reorderTables(req.body.tables, req.auth!.companyId);
+    const companyId = req.auth!.companyId;
+    const updates = req.body.tables as Array<{ id: string }>;
+    const ids = updates.map((u) => u.id);
+    const tables = getTablesByIds(ids, companyId);
+    if (tables.length !== new Set(ids).size || !tables.every((t) => tableAccessibleToRequest(req, t))) {
+      res.status(404).json({ error: 'Table not found' });
+      return;
+    }
+    reorderTables(req.body.tables, companyId);
     res.json({ ok: true });
   }),
 );
@@ -3163,7 +3452,13 @@ app.delete(
   '/api/tables/:id',
   requireNotWorker,
   asyncHandler(async (req, res) => {
-    deleteTable(req.params.id, req.auth!.companyId);
+    const companyId = req.auth!.companyId;
+    const existing = getTable(req.params.id, companyId);
+    if (!existing || !tableAccessibleToRequest(req, existing)) {
+      res.status(404).json({ error: 'Table not found' });
+      return;
+    }
+    deleteTable(req.params.id, companyId);
     res.json({ ok: true });
   }),
 );
@@ -3171,14 +3466,26 @@ app.delete(
 app.get(
   '/api/tables/:id/rows',
   asyncHandler(async (req, res) => {
-    res.json({ rows: loadRowsForTable(req.params.id, req.auth!.companyId) });
+    const companyId = req.auth!.companyId;
+    const table = getTable(req.params.id, companyId);
+    if (!table || !tableAccessibleToRequest(req, table)) {
+      res.status(404).json({ error: 'Table not found' });
+      return;
+    }
+    res.json({ rows: loadRowsForTable(req.params.id, companyId) });
   }),
 );
 
 app.get(
   '/api/tables/:id/rows/count',
   asyncHandler(async (req, res) => {
-    res.json({ count: countRowsForTable(req.params.id, req.auth!.companyId) });
+    const companyId = req.auth!.companyId;
+    const table = getTable(req.params.id, companyId);
+    if (!table || !tableAccessibleToRequest(req, table)) {
+      res.status(404).json({ error: 'Table not found' });
+      return;
+    }
+    res.json({ count: countRowsForTable(req.params.id, companyId) });
   }),
 );
 
@@ -3233,7 +3540,7 @@ app.post(
   '/api/backups/:id/restore',
   requireNotWorker,
   asyncHandler(async (req, res) => {
-    const table = restoreBackupAsNewTable(req.params.id, req.auth!.companyId);
+    const table = restoreBackupAsNewTable(req.params.id, req.auth!.companyId, effectiveUser(req)?.id);
     if (!table) {
       res.status(404).json({ error: 'Backup not found' });
       return;
@@ -3252,7 +3559,7 @@ app.post(
 app.get(
   '/api/reminders/timed',
   asyncHandler(async (req, res) => {
-    res.json({ groups: findTimedNextActionRows(req.auth!.companyId) });
+    res.json({ groups: findTimedNextActionRows(req.auth!.companyId, tableAccessContext(req)) });
   }),
 );
 
@@ -3263,20 +3570,46 @@ app.get(
 // new row id in this batch"), so can_insert_rows stays a client-side-only
 // UI gate; what *is* enforceable here (append-only text/phone/company/
 // link, the note/contact edit/delete lock, and can_hide_rows_columns) is
-// exactly what sanitizeRowForWorker checks. Returns null for anyone who
-// isn't a worker (owner/super_admin writes are never restricted).
-function workerRowRestriction(req: Request): WorkerRowRestriction | null {
-  if (req.auth!.role !== 'worker') return null;
-  const user = getUserById(req.auth!.userId);
-  if (!user) return null;
-  return {
-    userId: user.id,
-    userName: `${user.firstName} ${user.lastName}`.trim(),
-    canDeleteNotes: user.permissions.canDeleteNotes,
-    canEditContacts: user.permissions.canEditContacts,
-    canDeleteContacts: user.permissions.canDeleteContacts,
-    canHideRowsColumns: user.permissions.canHideRowsColumns,
-  };
+// exactly what sanitizeRowForWorker checks. Returns null for an ordinary,
+// non-impersonating owner/super_admin (writes are never restricted or
+// logged); for a real worker, restriction is set and the write is
+// attributed to them; for a super_admin impersonating a worker (see
+// auth.ts's AuthContext.actingAs), restriction is null (full admin rights
+// while impersonating, by design) but the write is still attributed to the
+// impersonated worker AND logged with the real admin's identity too — see
+// RowActionAttribution's own doc comment (tableData/db.ts).
+function rowActionAttribution(req: Request): RowActionAttribution | null {
+  const auth = req.auth!;
+  if (auth.role === 'worker') {
+    const user = getUserById(auth.userId);
+    if (!user) return null;
+    const name = `${user.firstName} ${user.lastName}`.trim();
+    return {
+      restriction: {
+        userId: user.id,
+        userName: name,
+        canDeleteNotes: user.permissions.canDeleteNotes,
+        canEditContacts: user.permissions.canEditContacts,
+        canDeleteContacts: user.permissions.canDeleteContacts,
+        canHideRowsColumns: user.permissions.canHideRowsColumns,
+      },
+      actingUserId: user.id,
+      actingUserName: name,
+    };
+  }
+  if (auth.actingAs) {
+    const admin = getUserById(auth.userId);
+    const worker = getUserById(auth.actingAs.userId);
+    if (!admin || !worker) return null;
+    return {
+      restriction: null,
+      actingUserId: worker.id,
+      actingUserName: `${worker.firstName} ${worker.lastName}`.trim(),
+      realUserId: admin.id,
+      realUserName: `${admin.firstName} ${admin.lastName}`.trim(),
+    };
+  }
+  return null;
 }
 
 // Bulk save — the one endpoint that actually matters for real usage at
@@ -3289,7 +3622,7 @@ function workerRowRestriction(req: Request): WorkerRowRestriction | null {
 // every ordinary edit (paste, drag-reorder, cell writes), not just CSV
 // import; see POST /api/rows/import below for the actual import-specific
 // endpoint that can_export_import additionally gates. A worker's write
-// still passes through workerRowRestriction/sanitizeRowForWorker though —
+// still passes through rowActionAttribution/sanitizeRowForWorker though —
 // see that function's own doc comment for exactly what it does and doesn't
 // catch.
 app.put(
@@ -3301,11 +3634,13 @@ app.put(
     }
     const companyId = req.auth!.companyId;
     const tableIds = (req.body.rows as Array<{ tableId?: string }>).map((r) => r.tableId).filter((id): id is string => !!id);
-    if (!allTablesBelongToCompany(tableIds, companyId)) {
+    const uniqueTableIds = [...new Set(tableIds)];
+    const tables = getTablesByIds(uniqueTableIds, companyId);
+    if (tables.length !== uniqueTableIds.length || !tables.every((t) => tableAccessibleToRequest(req, t))) {
       res.status(404).json({ error: 'Table not found' });
       return;
     }
-    saveRows(req.body.rows, companyId, workerRowRestriction(req));
+    saveRows(req.body.rows, companyId, rowActionAttribution(req));
     res.json({ ok: true });
   }),
 );
@@ -3326,11 +3661,13 @@ app.post(
     }
     const companyId = req.auth!.companyId;
     const tableIds = (req.body.rows as Array<{ tableId?: string }>).map((r) => r.tableId).filter((id): id is string => !!id);
-    if (!allTablesBelongToCompany(tableIds, companyId)) {
+    const uniqueTableIds = [...new Set(tableIds)];
+    const tables = getTablesByIds(uniqueTableIds, companyId);
+    if (tables.length !== uniqueTableIds.length || !tables.every((t) => tableAccessibleToRequest(req, t))) {
       res.status(404).json({ error: 'Table not found' });
       return;
     }
-    saveRows(req.body.rows, companyId, workerRowRestriction(req));
+    saveRows(req.body.rows, companyId, rowActionAttribution(req));
     res.json({ ok: true });
   }),
 );
@@ -3344,11 +3681,12 @@ app.put(
       return;
     }
     const companyId = req.auth!.companyId;
-    if (!allTablesBelongToCompany([row.tableId], companyId)) {
+    const tables = getTablesByIds([row.tableId], companyId);
+    if (tables.length !== 1 || !tableAccessibleToRequest(req, tables[0])) {
       res.status(404).json({ error: 'Table not found' });
       return;
     }
-    saveRow(row, companyId, workerRowRestriction(req));
+    saveRow(row, companyId, rowActionAttribution(req));
     res.json({ ok: true });
   }),
 );
@@ -3357,7 +3695,18 @@ app.delete(
   '/api/rows/:id',
   requirePermission('canDeleteRows'),
   asyncHandler(async (req, res) => {
-    deleteRow(req.params.id, req.auth!.companyId);
+    const companyId = req.auth!.companyId;
+    const row = getRowById(req.params.id, companyId);
+    if (!row) {
+      res.status(404).json({ error: 'Row not found' });
+      return;
+    }
+    const table = getTable(row.tableId, companyId);
+    if (!table || !tableAccessibleToRequest(req, table)) {
+      res.status(404).json({ error: 'Row not found' });
+      return;
+    }
+    deleteRow(req.params.id, companyId);
     res.json({ ok: true });
   }),
 );
@@ -3406,7 +3755,7 @@ app.post(
       res.status(400).json({ error: 'Invalid "texts" — expected a string array' });
       return;
     }
-    const apiKey = requireOpenaiKey(req.auth!.companyId);
+    const apiKey = requireOpenaiKey(req);
     const results = new Array<string>(texts.length);
     let next = 0;
     async function worker() {
@@ -3518,6 +3867,7 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
 demoteOwnerUsers();
 const { companyId: firstCompanyId } = bootstrapFirstCompanyIfNeeded();
 backfillCompanyId(firstCompanyId);
+backfillTableOwners();
 
 // One-time seed, same "idempotent, real on the very first boot after this
 // shipped, a no-op forever after" shape as backfillCompanyId above — moves

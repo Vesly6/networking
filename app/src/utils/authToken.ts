@@ -14,6 +14,23 @@ export function setAuthToken(token: string | null): void {
   else localStorage.removeItem(TOKEN_KEY);
 }
 
+// Holds the real super_admin's own token while they're impersonating a
+// worker (see useAuthStore.ts's impersonateWorker/stopImpersonating) — a
+// second slot alongside the "live" token above, not a replacement for it,
+// so "Grįžti į Super Admin" can restore it without a server round trip
+// (there's no server-side session store to ask — see auth.ts's own doc
+// comment on why sessions are stateless).
+const STASHED_ADMIN_TOKEN_KEY = 'cold-crm:stashed-admin-token';
+
+export function getStashedAdminToken(): string | null {
+  return localStorage.getItem(STASHED_ADMIN_TOKEN_KEY);
+}
+
+export function setStashedAdminToken(token: string | null): void {
+  if (token) localStorage.setItem(STASHED_ADMIN_TOKEN_KEY, token);
+  else localStorage.removeItem(STASHED_ADMIN_TOKEN_KEY);
+}
+
 let onUnauthorized: (() => void) | null = null;
 
 /** Called once, by useAuthStore, so a 401 from any request (session token

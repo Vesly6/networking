@@ -1,7 +1,9 @@
 import { upsertConversation, addMessageIfNew, findLeadByLinkedinUrl, updateLeadStatus, logAction, type LeadStatus } from './db.js';
 import { listConversationThreads, scrapeThreadMessages } from './page.js';
-import { isPaused } from './safety.js';
-import { getLinkedInPage } from './browser.js';
+import { isPaused, getSafetySettings } from './safety.js';
+import { getLinkedInPage, withLinkedInBusyGuard } from './browser.js';
+import { getOrCreateTodaysVisitPlan, isWithinVisitWindow } from './visitSchedule.js';
+import { SINGLE_TENANT_PLAN_ID } from './scheduler.js';
 
 export interface InboxSyncResult {
   conversationsSynced: number;
@@ -9,10 +11,12 @@ export interface InboxSyncResult {
   leadsPromoted: number;
   leadsMarkedReplied: number;
   /** Set instead of actually syncing when the tick was automatic and
-   * either the pause switch is on or no LinkedIn tab is currently open —
-   * see the two real gaps documented below that let the old background
-   * interval "turn the window back on" regardless of pause state. */
-  skippedReason?: 'paused' | 'noTabOpen';
+   * either the pause switch is on, visit-windows (visitSchedule.ts) are
+   * enabled and we're currently outside every one of today's windows, or
+   * no LinkedIn tab is currently open — see the real gaps documented below
+   * that let the old background interval "turn the window back on"
+   * regardless of pause state. */
+  skippedReason?: 'paused' | 'outsideVisitWindow' | 'noTabOpen';
 }
 
 /** Called from InboxPanel.tsx's "↻ Sinchronizuoti dabar" (POST
@@ -51,6 +55,20 @@ export async function syncInbox(isAutomatic = false): Promise<InboxSyncResult> {
     if (isPaused()) {
       return { ...result, skippedReason: 'paused' };
     }
+    // Visit windows (visitSchedule.ts): this function never opens or closes
+    // a tab itself (see the requireExistingTab check right below) — it
+    // relies on the scheduler tick (runSchedulerTick, which runs twice as
+    // often, every 5 minutes vs. this function's 10) to have already
+    // "arrived" if a window is currently active. This check just stops
+    // this function from scraping while it's not supposed to be looking at
+    // all, for the same reason it shouldn't run while paused.
+    const settings = getSafetySettings();
+    if (settings.visitWindowsEnabled) {
+      const visitPlan = await getOrCreateTodaysVisitPlan(settings, SINGLE_TENANT_PLAN_ID);
+      if (!isWithinVisitWindow(visitPlan)) {
+        return { ...result, skippedReason: 'outsideVisitWindow' };
+      }
+    }
     // Same reasoning as scheduler.ts's own automatic-tick check: stop
     // *before* calling anything that would open a tab on demand
     // (listConversationThreads()/scrapeThreadMessages() below both call
@@ -60,56 +78,58 @@ export async function syncInbox(isAutomatic = false): Promise<InboxSyncResult> {
     }
   }
 
-  const threads = await listConversationThreads();
-  for (const thread of threads) {
-    const conversation = upsertConversation({
-      participantUrl: thread.participantUrl,
-      participantName: thread.participantName,
-      lastMessageAt: Date.now(),
-      lastMessagePreview: thread.preview,
-      unread: thread.unread,
-    });
-    result.conversationsSynced++;
-
-    const lead = findLeadByLinkedinUrl(thread.participantUrl);
-    if (lead && lead.status === 'pending') {
-      updateLeadStatus(lead.id, 'connected' satisfies LeadStatus);
-      // Logged so there's an actual timestamp for "when did this lead
-      // accept" — this promotion used to just flip status with no record
-      // at all of when, which meant the campaign UI had no way to show or
-      // filter leads by the day they connected (a real, explicitly
-      // requested need: "I want to see today's additions later").
-      // stepId is null since accepting a connection isn't itself a
-      // sequence step — it's what the connect step's own outcome gets
-      // detected as, asynchronously, by this sync.
-      logAction({
-        leadId: lead.id,
-        stepId: null,
-        actionType: 'connection_accepted',
-        status: 'success',
-        targetUrl: lead.linkedinUrl,
-        detail: 'Detected via inbox sync — a conversation now exists, meaning the invite was accepted.',
-        executedAt: Date.now(),
-        responseTimeMs: null,
+  await withLinkedInBusyGuard(async () => {
+    const threads = await listConversationThreads();
+    for (const thread of threads) {
+      const conversation = upsertConversation({
+        participantUrl: thread.participantUrl,
+        participantName: thread.participantName,
+        lastMessageAt: Date.now(),
+        lastMessagePreview: thread.preview,
+        unread: thread.unread,
       });
-      result.leadsPromoted++;
-    }
+      result.conversationsSynced++;
 
-    const messages = await scrapeThreadMessages(thread.threadUrl);
-    let sawNewInbound = false;
-    for (const msg of messages) {
-      const inserted = addMessageIfNew(conversation.id, lead?.id ?? null, msg.direction, msg.content, msg.timestamp);
-      if (inserted) {
-        result.newMessages++;
-        if (msg.direction === 'in') sawNewInbound = true;
+      const lead = findLeadByLinkedinUrl(thread.participantUrl);
+      if (lead && lead.status === 'pending') {
+        updateLeadStatus(lead.id, 'connected' satisfies LeadStatus);
+        // Logged so there's an actual timestamp for "when did this lead
+        // accept" — this promotion used to just flip status with no record
+        // at all of when, which meant the campaign UI had no way to show or
+        // filter leads by the day they connected (a real, explicitly
+        // requested need: "I want to see today's additions later").
+        // stepId is null since accepting a connection isn't itself a
+        // sequence step — it's what the connect step's own outcome gets
+        // detected as, asynchronously, by this sync.
+        logAction({
+          leadId: lead.id,
+          stepId: null,
+          actionType: 'connection_accepted',
+          status: 'success',
+          targetUrl: lead.linkedinUrl,
+          detail: 'Detected via inbox sync — a conversation now exists, meaning the invite was accepted.',
+          executedAt: Date.now(),
+          responseTimeMs: null,
+        });
+        result.leadsPromoted++;
+      }
+
+      const messages = await scrapeThreadMessages(thread.threadUrl);
+      let sawNewInbound = false;
+      for (const msg of messages) {
+        const inserted = addMessageIfNew(conversation.id, lead?.id ?? null, msg.direction, msg.content, msg.timestamp);
+        if (inserted) {
+          result.newMessages++;
+          if (msg.direction === 'in') sawNewInbound = true;
+        }
+      }
+
+      if (sawNewInbound && lead && lead.status !== 'replied' && lead.status !== 'skipped') {
+        updateLeadStatus(lead.id, 'replied' satisfies LeadStatus);
+        result.leadsMarkedReplied++;
       }
     }
-
-    if (sawNewInbound && lead && lead.status !== 'replied' && lead.status !== 'skipped') {
-      updateLeadStatus(lead.id, 'replied' satisfies LeadStatus);
-      result.leadsMarkedReplied++;
-    }
-  }
+  });
 
   return result;
 }

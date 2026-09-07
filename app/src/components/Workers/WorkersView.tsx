@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
 import type { UserPermissions } from '../../store/useAuthStore';
+import { useAuthStore } from '../../store/useAuthStore';
 import { useWorkersStore, type Worker, type WorkerActionLogEntry, type WorkerActionType } from '../../store/useWorkersStore';
 import { useToastStore } from '../../store/useToastStore';
 import { typeToConfirmDialog } from '../../store/useTypeToConfirmStore';
+import { confirmDialog } from '../../store/useConfirmStore';
 import { formatHistoryTimestamp } from '../../utils/date';
 import { TAB_LABELS } from '../../utils/tabLabels';
-import { ArrowRight, Key } from 'lucide-react';
+import { ArrowRight, Key, UserCog, X } from 'lucide-react';
 
 const PERMISSION_LABELS: Array<{ key: keyof UserPermissions; label: string }> = [
   { key: 'canDeleteRows', label: 'Trinti eilutes' },
@@ -83,6 +85,12 @@ function WorkerActivityPanel({
                 <span className="worker-activity-entry-detail">{a.detail}</span>
                 <span className="worker-activity-entry-meta">
                   {a.tableName} · {formatHistoryTimestamp(a.createdAt)}
+                  {/* Only present when a super_admin performed this while
+                      impersonating the worker (see useAuthStore.ts's
+                      impersonateWorker) — surfaces the real actor without
+                      losing which worker's activity this otherwise reads
+                      as. */}
+                  {a.realUserName && <> · (super adminas {a.realUserName} veikė kaip)</>}
                 </span>
               </div>
               <button type="button" className="worker-activity-jump" title="Pereiti prie langelio" onClick={() => jump(a)}>
@@ -144,29 +152,108 @@ const EMPTY_PERMISSIONS: UserPermissions = {
   canClearContent: false,
 };
 
+export interface WorkerZadarmaFields {
+  zadarmaSip: string;
+  zadarmaWidgetSip: string;
+  zadarmaCallerNumber: string;
+}
+
+const EMPTY_ZADARMA: WorkerZadarmaFields = { zadarmaSip: '', zadarmaWidgetSip: '', zadarmaCallerNumber: '' };
+
+/** The remaining plain-API-key integrations a worker can override — see
+ * server/src/accounts/db.ts's per-worker migration. Unlike the Zadarma
+ * fields above (a phone/extension number, not actually secret — always
+ * pre-filled with the real value), these are real secrets the server never
+ * re-sends once saved (see index.ts's workerToPublic()), so the form only
+ * ever knows whether one is *set* (WorkerSecretsSet below), never its
+ * actual value — same "never round-trip a saved secret into an input"
+ * rule this app's own IntegrationsView.tsx already follows for the
+ * company-wide keys. */
+type SecretApiKey = 'apolloApiKey' | 'instantlyApiKey' | 'serperApiKey' | 'openaiApiKey' | 'anthropicApiKey' | 'elevenlabsApiKey';
+const SECRET_API_KEY_FIELDS: Array<{ key: SecretApiKey; label: string }> = [
+  { key: 'apolloApiKey', label: 'Apollo.io' },
+  { key: 'instantlyApiKey', label: 'Instantly.ai' },
+  { key: 'serperApiKey', label: 'serper.dev' },
+  { key: 'openaiApiKey', label: 'OpenAI' },
+  { key: 'anthropicApiKey', label: 'Anthropic (Claude)' },
+  { key: 'elevenlabsApiKey', label: 'ElevenLabs' },
+];
+type WorkerSecretsSet = Partial<Record<SecretApiKey, boolean>>;
+/** Only the keys the admin actually touched this session end up here —
+ * typing a value adds `key: theValue`; clicking "Išvalyti" adds `key: ''`
+ * (a deliberate clear, distinct from simply never having typed anything);
+ * an untouched field is just absent, so submitting this object leaves
+ * every other secret exactly as it was (see UpdateWorkerInput's own
+ * "omitted ≠ blank" convention, mirrored here on the client). */
+type SecretDrafts = Partial<Record<SecretApiKey, string>>;
+
 function WorkerForm({
   companyTabs,
+  initialFirstName = '',
+  initialLastName = '',
   initialTabs,
   initialPermissions,
+  initialZadarma = EMPTY_ZADARMA,
+  initialSecretsSet = {},
   submitLabel,
   onSubmit,
   onCancel,
 }: {
   companyTabs: string[];
+  /** Empty for a brand-new worker (the create flow); the worker's current
+   * name when editing an existing one — this is what makes renaming a
+   * worker in place possible (see UpdateWorkerInput's own doc comment for
+   * why that's a deliberate, safe workflow: `id` never changes, and past
+   * note/comment authorship is a permanent snapshot, not re-resolved
+   * live). */
+  initialFirstName?: string;
+  initialLastName?: string;
   initialTabs: string[];
   initialPermissions: UserPermissions;
+  initialZadarma?: WorkerZadarmaFields;
+  initialSecretsSet?: WorkerSecretsSet;
   submitLabel: string;
-  onSubmit: (tabs: string[], permissions: UserPermissions) => void;
+  onSubmit: (
+    firstName: string,
+    lastName: string,
+    tabs: string[],
+    permissions: UserPermissions,
+    zadarma: WorkerZadarmaFields,
+    secretDrafts: SecretDrafts,
+  ) => void;
   onCancel?: () => void;
 }) {
+  const [firstName, setFirstName] = useState(initialFirstName);
+  const [lastName, setLastName] = useState(initialLastName);
   const [tabs, setTabs] = useState<string[]>(initialTabs);
   const [permissions, setPermissions] = useState<UserPermissions>(initialPermissions);
+  const [zadarma, setZadarma] = useState<WorkerZadarmaFields>(initialZadarma);
+  const [secretDrafts, setSecretDrafts] = useState<SecretDrafts>({});
 
   const toggleTab = (t: string) => setTabs((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
   const togglePermission = (key: keyof UserPermissions) => setPermissions((prev) => ({ ...prev, [key]: !prev[key] }));
 
+  const handleClearSecret = async (key: SecretApiKey, label: string) => {
+    const ok = await confirmDialog({ message: `Išvalyti „${label}“ raktą šiam darbuotojui?`, danger: true });
+    if (!ok) return;
+    setSecretDrafts((prev) => ({ ...prev, [key]: '' }));
+  };
+
   return (
     <div className="worker-form-permissions">
+      <div className="worker-form-section">
+        <span className="worker-form-section-label">Vardas Pavardė</span>
+        <div className="worker-form-fields">
+          <label className="popover-field">
+            <span>Vardas</span>
+            <input value={firstName} onChange={(e) => setFirstName(e.target.value)} />
+          </label>
+          <label className="popover-field">
+            <span>Pavardė</span>
+            <input value={lastName} onChange={(e) => setLastName(e.target.value)} />
+          </label>
+        </div>
+      </div>
       <div className="worker-form-section">
         <span className="worker-form-section-label">Matomos skiltys</span>
         <div className="worker-form-chips">
@@ -201,8 +288,78 @@ function WorkerForm({
           ))}
         </ul>
       </div>
+      <div className="worker-form-section">
+        <span className="worker-form-section-label">Zadarma (nebūtina — jei tuščia, naudojamas bendras įmonės/serverio numeris)</span>
+        <div className="worker-form-fields">
+          <label className="popover-field">
+            <span>SIP vidinis numeris</span>
+            <input
+              value={zadarma.zadarmaSip}
+              onChange={(e) => setZadarma((prev) => ({ ...prev, zadarmaSip: e.target.value }))}
+              placeholder="100"
+              autoComplete="off"
+            />
+          </label>
+          <label className="popover-field">
+            <span>Widget SIP (account-extension)</span>
+            <input
+              value={zadarma.zadarmaWidgetSip}
+              onChange={(e) => setZadarma((prev) => ({ ...prev, zadarmaWidgetSip: e.target.value }))}
+              placeholder="488048-100"
+              autoComplete="off"
+            />
+          </label>
+          <label className="popover-field">
+            <span>Skambinantis numeris</span>
+            <input
+              value={zadarma.zadarmaCallerNumber}
+              onChange={(e) => setZadarma((prev) => ({ ...prev, zadarmaCallerNumber: e.target.value }))}
+              placeholder="+37066653965"
+              autoComplete="off"
+            />
+          </label>
+        </div>
+      </div>
+      <div className="worker-form-section">
+        <span className="worker-form-section-label">
+          Kitos integracijos (nebūtina — jei tuščia, naudojamas bendras įmonės raktas)
+        </span>
+        <div className="worker-form-fields">
+          {SECRET_API_KEY_FIELDS.map(({ key, label }) => {
+            const isSet = !!initialSecretsSet[key];
+            const draft = secretDrafts[key];
+            const willClear = draft === '';
+            return (
+              <div key={key} className="integrations-field-row">
+                <label className="popover-field">
+                  <span>{label}</span>
+                  <input
+                    type="password"
+                    value={draft ?? ''}
+                    onChange={(e) => setSecretDrafts((prev) => ({ ...prev, [key]: e.target.value }))}
+                    placeholder={isSet && !willClear ? '••••••••' : 'API raktas'}
+                    autoComplete="off"
+                  />
+                </label>
+                {isSet && (
+                  <div className="integrations-field-status">
+                    <span className={willClear ? 'integrations-badge-unset' : 'integrations-badge-set'}>
+                      {willClear ? '— bus išvalyta' : 'Sukonfigūruota'}
+                    </span>
+                    {!willClear && (
+                      <button type="button" className="danger" onClick={() => void handleClearSecret(key, label)}>
+                        <X className="icon" size={14} /> Išvalyti
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
       <div className="worker-form-actions">
-        <button type="button" className="primary" onClick={() => onSubmit(tabs, permissions)}>
+        <button type="button" className="primary" onClick={() => onSubmit(firstName, lastName, tabs, permissions, zadarma, secretDrafts)}>
           {submitLabel}
         </button>
         {onCancel && (
@@ -240,6 +397,14 @@ interface WorkersViewProps {
    * per-worker "Veikla" activity panel is hidden in this mode — see its
    * own note below on why that route isn't cross-company-capable yet. */
   companyId?: string;
+  /** Called right after successfully impersonating a worker — App.tsx uses
+   * this to reset to the workspace root, same as ImpersonationBanner's own
+   * onReturned, since the admin's current screen/table may not exist or
+   * apply from the worker's point of view (or vice versa on return).
+   * Omitted in the owner's cross-company Admin dashboard usage (companyId
+   * set) — impersonation is only ever "log in as MY OWN worker," so that
+   * mode doesn't offer the button at all (see its own gating below). */
+  onImpersonated?: () => void;
 }
 
 /** Super-admin (or owner, viewing their own company) manages the workers
@@ -248,7 +413,7 @@ interface WorkersViewProps {
  * why "manage workers" isn't a Tab/enabledFeatures-gated concept the same
  * way Calls/LinkedIn/Search are). Also reused, with companyId set, by the
  * owner's Admin dashboard to manage an arbitrary client's workers. */
-export function WorkersView({ onJumpToRow, onJumpToContact, companyTabs, companyId }: WorkersViewProps) {
+export function WorkersView({ onJumpToRow, onJumpToContact, companyTabs, companyId, onImpersonated }: WorkersViewProps) {
   const workers = useWorkersStore((s) => s.workers);
   const loading = useWorkersStore((s) => s.loading);
   const error = useWorkersStore((s) => s.error);
@@ -257,16 +422,16 @@ export function WorkersView({ onJumpToRow, onJumpToContact, companyTabs, company
   const create = useWorkersStore((s) => s.create);
   const update = useWorkersStore((s) => s.update);
   const remove = useWorkersStore((s) => s.remove);
+  const impersonateWorker = useAuthStore((s) => s.impersonateWorker);
   const showToast = useToastStore((s) => s.show);
 
   const [addingOpen, setAddingOpen] = useState(false);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [firstName, setFirstName] = useState('');
-  const [lastName, setLastName] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [activityOpenId, setActivityOpenId] = useState<string | null>(null);
   const [passwordOpenId, setPasswordOpenId] = useState<string | null>(null);
+  const [impersonatingId, setImpersonatingId] = useState<string | null>(null);
 
   useEffect(() => {
     void load(companyId);
@@ -281,20 +446,36 @@ export function WorkersView({ onJumpToRow, onJumpToContact, companyTabs, company
     if (actionsError) showToast(actionsError);
   }, [actionsError, showToast]);
 
-  const handleCreate = async (tabs: string[], permissions: UserPermissions) => {
+  const handleCreate = async (
+    firstName: string,
+    lastName: string,
+    tabs: string[],
+    permissions: UserPermissions,
+    zadarma: WorkerZadarmaFields,
+    secretDrafts: SecretDrafts,
+  ) => {
     if (!username.trim() || !password || !firstName.trim()) {
       showToast('Užpildykite vardą, slaptažodį ir vardą');
       return;
     }
     try {
       await create(
-        { username: username.trim(), password, firstName: firstName.trim(), lastName: lastName.trim(), visibleTabs: tabs, permissions },
+        {
+          username: username.trim(),
+          password,
+          firstName: firstName.trim(),
+          lastName: lastName.trim(),
+          visibleTabs: tabs,
+          permissions,
+          zadarmaSip: zadarma.zadarmaSip || undefined,
+          zadarmaWidgetSip: zadarma.zadarmaWidgetSip || undefined,
+          zadarmaCallerNumber: zadarma.zadarmaCallerNumber || undefined,
+          ...secretDrafts,
+        },
         companyId,
       );
       setUsername('');
       setPassword('');
-      setFirstName('');
-      setLastName('');
       setAddingOpen(false);
       showToast('Darbuotojas pridėtas');
     } catch (err) {
@@ -302,13 +483,51 @@ export function WorkersView({ onJumpToRow, onJumpToContact, companyTabs, company
     }
   };
 
-  const handleUpdate = async (worker: Worker, tabs: string[], permissions: UserPermissions) => {
+  const handleUpdate = async (
+    worker: Worker,
+    firstName: string,
+    lastName: string,
+    tabs: string[],
+    permissions: UserPermissions,
+    zadarma: WorkerZadarmaFields,
+    secretDrafts: SecretDrafts,
+  ) => {
+    if (!firstName.trim()) {
+      showToast('Vardas negali būti tuščias');
+      return;
+    }
     try {
-      await update(worker.id, { visibleTabs: tabs, permissions }, companyId);
+      await update(
+        worker.id,
+        {
+          firstName: firstName.trim(),
+          lastName: lastName.trim(),
+          visibleTabs: tabs,
+          permissions,
+          zadarmaSip: zadarma.zadarmaSip,
+          zadarmaWidgetSip: zadarma.zadarmaWidgetSip,
+          zadarmaCallerNumber: zadarma.zadarmaCallerNumber,
+          ...secretDrafts,
+        },
+        companyId,
+      );
       setEditingId(null);
       showToast('Išsaugota');
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Nepavyko išsaugoti');
+    }
+  };
+
+  const handleImpersonate = async (worker: Worker) => {
+    setImpersonatingId(worker.id);
+    try {
+      await impersonateWorker(worker.id);
+      onImpersonated?.();
+      showToast(`Prisijungėte kaip ${worker.firstName} ${worker.lastName}`);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Nepavyko prisijungti kaip darbuotojas');
+    } finally {
+      setImpersonatingId(null);
     }
   };
 
@@ -361,14 +580,6 @@ export function WorkersView({ onJumpToRow, onJumpToContact, companyTabs, company
               <span>Slaptažodis</span>
               <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" />
             </label>
-            <label className="popover-field">
-              <span>Vardas</span>
-              <input value={firstName} onChange={(e) => setFirstName(e.target.value)} />
-            </label>
-            <label className="popover-field">
-              <span>Pavardė</span>
-              <input value={lastName} onChange={(e) => setLastName(e.target.value)} />
-            </label>
           </div>
           <WorkerForm
             companyTabs={companyTabs}
@@ -404,6 +615,20 @@ export function WorkersView({ onJumpToRow, onJumpToContact, companyTabs, company
                   {activityOpenId === worker.id ? 'Uždaryti veiklą' : 'Veikla'}
                 </button>
               )}
+              {/* Only in the "manage my own company" mode, same reasoning
+                  as the "Veikla" gating above — impersonation is only ever
+                  "log in as MY OWN worker," not something the owner's
+                  cross-company Admin dashboard should offer. */}
+              {!companyId && (
+                <button
+                  type="button"
+                  onClick={() => void handleImpersonate(worker)}
+                  disabled={impersonatingId === worker.id}
+                  title="Laikinai prisijungti prie šio darbuotojo peržiūros, išlaikant visas administratoriaus teises"
+                >
+                  <UserCog className="icon" size={14} /> {impersonatingId === worker.id ? 'Jungiamasi…' : 'Prisijungti kaip'}
+                </button>
+              )}
               <button type="button" onClick={() => setEditingId(editingId === worker.id ? null : worker.id)}>
                 {editingId === worker.id ? 'Uždaryti' : 'Redaguoti'}
               </button>
@@ -424,10 +649,27 @@ export function WorkersView({ onJumpToRow, onJumpToContact, companyTabs, company
           {editingId === worker.id ? (
             <WorkerForm
               companyTabs={companyTabs}
+              initialFirstName={worker.firstName}
+              initialLastName={worker.lastName}
               initialTabs={worker.visibleTabs ?? []}
               initialPermissions={worker.permissions}
+              initialZadarma={{
+                zadarmaSip: worker.zadarmaSip ?? '',
+                zadarmaWidgetSip: worker.zadarmaWidgetSip ?? '',
+                zadarmaCallerNumber: worker.zadarmaCallerNumber ?? '',
+              }}
+              initialSecretsSet={{
+                apolloApiKey: worker.apolloApiKeySet,
+                instantlyApiKey: worker.instantlyApiKeySet,
+                serperApiKey: worker.serperApiKeySet,
+                openaiApiKey: worker.openaiApiKeySet,
+                anthropicApiKey: worker.anthropicApiKeySet,
+                elevenlabsApiKey: worker.elevenlabsApiKeySet,
+              }}
               submitLabel="Išsaugoti"
-              onSubmit={(tabs, permissions) => void handleUpdate(worker, tabs, permissions)}
+              onSubmit={(firstName, lastName, tabs, permissions, zadarma, secretDrafts) =>
+                void handleUpdate(worker, firstName, lastName, tabs, permissions, zadarma, secretDrafts)
+              }
             />
           ) : (
             <div className="worker-card-summary">

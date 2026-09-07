@@ -20,13 +20,13 @@ const DAY_MS = 86_400_000;
 // account-to-account comparison every day, not re-rolled). A small
 // deterministic hash + mulberry32 PRNG gives that without storing
 // anything beyond companyId itself.
-function hashString(s: string): number {
+export function hashString(s: string): number {
   let h = 0;
   for (let i = 0; i < s.length; i++) h = (Math.imul(h, 31) + s.charCodeAt(i)) | 0;
   return h >>> 0;
 }
 
-function mulberry32(seed: number): () => number {
+export function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
   return () => {
     a = (a + 0x6d2b79f5) | 0;
@@ -41,7 +41,7 @@ function mulberry32(seed: number): () => number {
  * (not a sleeping Promise) since dailyPlan.ts needs actual clock times to
  * persist, not delays to await. Kept local rather than importing
  * humanDelay itself, which always sleeps as a side effect. */
-function triangularJitter(min: number, max: number, rand: () => number): number {
+export function triangularJitter(min: number, max: number, rand: () => number): number {
   const u = (rand() + rand() + rand()) / 3;
   return min + (max - min) * u;
 }
@@ -57,7 +57,7 @@ function triangularJitter(min: number, max: number, rand: () => number): number 
  * deliberately enough for this feature: slot times only need to land
  * within a minute or two of intended, this isn't a billing system where a
  * DST-transition edge case needs perfect precision. */
-function zonedMinuteOfDayToUtc(dateStr: string, minuteOfDay: number, timeZone: string): number {
+export function zonedMinuteOfDayToUtc(dateStr: string, minuteOfDay: number, timeZone: string): number {
   const clamped = Math.max(0, Math.min(24 * 60 - 1, Math.round(minuteOfDay)));
   const hour = Math.floor(clamped / 60);
   const minute = clamped % 60;
@@ -68,7 +68,7 @@ function zonedMinuteOfDayToUtc(dateStr: string, minuteOfDay: number, timeZone: s
   return guessUtc + diffMinutes * 60_000;
 }
 
-function workHoursToMinutes(settings: SafetySettings): { startMin: number; endMin: number } {
+export function workHoursToMinutes(settings: SafetySettings): { startMin: number; endMin: number } {
   const [sh, sm] = settings.workHoursStart.split(':').map(Number);
   const [eh, em] = settings.workHoursEnd.split(':').map(Number);
   return { startMin: sh * 60 + sm, endMin: eh * 60 + em };

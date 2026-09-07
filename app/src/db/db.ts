@@ -129,6 +129,18 @@ export async function updateTableName(tableId: string, name: string): Promise<vo
   });
 }
 
+/** Reassigns an existing table to a specific user (a worker, or the
+ * super_admin themself) — see server/src/tableData/db.ts's per-table
+ * ownership migration doc comment. Used by WorkspaceView.tsx's owner
+ * picker (admin-only). */
+export async function setTableOwnerDB(tableId: string, ownerUserId: string): Promise<void> {
+  await localApiRequest(`/api/tables/${encodeURIComponent(tableId)}/owner`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ownerUserId }),
+  });
+}
+
 /** The Workspace screen's per-table daily-backup toggle (Package icon) —
  * see server/src/tableData/db.ts's own doc comment on why this is explicit
  * per-table opt-in. Same "table mutation, goes through db/db.ts like

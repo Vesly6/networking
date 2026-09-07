@@ -35,6 +35,15 @@ export interface AuthContext {
   userId: string;
   companyId: string;
   role: Role;
+  /** Set only while a company super_admin is impersonating one of their own
+   * workers (see issueImpersonationToken below). userId/companyId/role above
+   * still describe the REAL super_admin — every existing company-scoped
+   * query and requirePermission/requireNotWorker check keeps treating this
+   * as an ordinary super_admin request (full admin rights, by design). This
+   * field only names which worker's *display identity* (visibleTabs, name)
+   * GET /api/auth/me should resolve, and which worker the audit log
+   * (worker_actions' real_user_id/real_user_name) attributes the write to. */
+  actingAs?: { userId: string };
 }
 
 function verifyToken(token: string): AuthContext | null {
@@ -104,7 +113,7 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
   }
   const header = req.headers.authorization;
   const token = header?.startsWith('Bearer ') ? header.slice(7) : null;
-  const auth = token ? verifyToken(token) : null;
+  const auth = token ? (resolveImpersonationAuth(token) ?? verifyToken(token)) : null;
   if (!auth) {
     res.status(401).json({ error: 'Neautentifikuota' });
     return;
@@ -220,6 +229,79 @@ export function requireSuperAdmin(req: Request, res: Response, next: NextFunctio
     return;
   }
   next();
+}
+
+// --- Impersonation ("log in as worker") ---
+//
+// A company's own super_admin can temporarily act inside one of their own
+// workers' sessions without knowing that worker's password. This is
+// deliberately NOT a real logout/login into the worker's account — the
+// super_admin's own session stays authoritative throughout (see AuthContext
+// .actingAs above); this token is just a second, independent identity
+// carrier layered on top, the same "distinct sentinel-prefixed shape"
+// pattern already used for the platform super-admin token below, so it can
+// never be confused with either a normal 5-part token or a superadmin
+// 3-part token by any verifier. companyId is included and re-checked fresh
+// on every request specifically so a worker who gets moved to a different
+// company mid-impersonation (or deleted) invalidates the token immediately,
+// same reasoning as requirePermission's own fresh-DB-read comment above.
+const IMPERSONATION_TOKEN_TTL_MS = 12 * 60 * 60 * 1000; // 12h — a deliberate,
+// elevated "acting as" mode, not a standing alternate identity; cheap to
+// re-issue (one click), so a short TTL costs little and bounds how long an
+// abandoned impersonation session could matter.
+
+export interface ImpersonationContext {
+  adminUserId: string;
+  workerUserId: string;
+  companyId: string;
+}
+
+export function issueImpersonationToken(admin: User, worker: User): string {
+  const expiry = Date.now() + IMPERSONATION_TOKEN_TTL_MS;
+  const payload = `impersonate.${admin.id}.${worker.id}.${admin.companyId}.${expiry}`;
+  const signature = sign(payload);
+  return Buffer.from(`${payload}.${signature}`).toString('base64url');
+}
+
+function verifyImpersonationToken(token: string): ImpersonationContext | null {
+  let decoded: string;
+  try {
+    decoded = Buffer.from(token, 'base64url').toString('utf8');
+  } catch {
+    return null;
+  }
+  const parts = decoded.split('.');
+  // 6 parts, sentinel-prefixed — never mistakable for a normal 5-part token
+  // or a "superadmin."-prefixed 3-part one.
+  if (parts.length !== 6 || parts[0] !== 'impersonate') return null;
+  const [, adminUserId, workerUserId, companyId, expiryStr, signature] = parts;
+  const payload = `impersonate.${adminUserId}.${workerUserId}.${companyId}.${expiryStr}`;
+  const expected = sign(payload);
+  const a = Buffer.from(signature);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
+  const expiry = Number(expiryStr);
+  if (!Number.isFinite(expiry) || Date.now() >= expiry) return null;
+  return { adminUserId, workerUserId, companyId };
+}
+
+/** Re-resolves BOTH identities fresh from the DB on every single request —
+ * never trusts the token's own snapshot, same reasoning as
+ * requirePermission above. This is what makes deleting the worker,
+ * demoting/deleting the admin, or moving either to another company mid-
+ * impersonation immediately invalidate the token, even though its
+ * signature stays valid until its own stated expiry. Returns null (falls
+ * through to the normal verifyToken() path below) for anything that isn't
+ * a currently-valid impersonation token — a real worker's 5-part token
+ * always fails the 6-part check above before ever reaching a DB read. */
+function resolveImpersonationAuth(token: string): AuthContext | null {
+  const ctx = verifyImpersonationToken(token);
+  if (!ctx) return null;
+  const admin = getUserById(ctx.adminUserId);
+  const worker = getUserById(ctx.workerUserId);
+  if (!admin || admin.role !== 'super_admin' || admin.companyId !== ctx.companyId) return null;
+  if (!worker || worker.role !== 'worker' || worker.companyId !== admin.companyId) return null;
+  return { userId: admin.id, companyId: admin.companyId, role: admin.role, actingAs: { userId: worker.id } };
 }
 
 declare global {

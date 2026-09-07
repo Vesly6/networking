@@ -17,6 +17,36 @@ export function getColumnByType(columns: Column[], type: Column['type']): Column
   return columns.find((c) => c.type === type);
 }
 
+/** The column holding this table's actual company-website URL, for the
+ * "🔍 Paieška" Apollo decision-maker search (ApolloContactSearchModal.tsx)
+ * — NOT just "the first link column," since a table can have several
+ * `link`-type columns (Website, LinkedIn, Facebook…) and picking blindly
+ * risked handing Apollo a LinkedIn/Facebook URL instead of the real site.
+ * Prefers the column explicitly marked isWebsiteColumn; when none is
+ * marked, falls back to the table's link column only if there's EXACTLY
+ * ONE (genuinely unambiguous — same "auto-select only when there's one
+ * candidate, otherwise make the user choose" precedent already used by
+ * MergeContactsModal's own link-column matching), never guessing among
+ * several. Returns undefined rather than guessing when there's no link
+ * data at all, or more than one un-flagged candidate. */
+export function getWebsiteColumn(columns: Column[]): Column | undefined {
+  const flagged = columns.find((c) => c.type === 'link' && c.isWebsiteColumn);
+  if (flagged) return flagged;
+  const linkColumns = columns.filter((c) => c.type === 'link');
+  return linkColumns.length === 1 ? linkColumns[0] : undefined;
+}
+
+/** This row's actual website URL, resolved via getWebsiteColumn above —
+ * the value ApolloContactSearchModal.tsx should turn into a domain
+ * (utils/domainMatch.ts's normalizeDomain) instead of guessing one from
+ * the company name. undefined when the table has no reliably-identifiable
+ * website column or the cell is empty. */
+export function getWebsiteUrl(row: Row, columns: Column[]): string | undefined {
+  const column = getWebsiteColumn(columns);
+  const value = column ? row.cells[column.id] : undefined;
+  return value?.trim() || undefined;
+}
+
 /** "First Last" for the contact linked to this row's next-action date
  * (row.linkedContactId — see types.ts), or null if none is linked, the
  * table has no contact-type column, or the linked entry was since

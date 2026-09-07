@@ -15,8 +15,10 @@ const LOGO_SRC = { light: '/irms-logo-light.svg', dark: '/irms-logo-dark.svg' } 
 /** Replaces the plain "Darbo sritis" text heading on the Workspace
  * screen, on explicit request. Theme-aware — swaps to the light-fill
  * variant automatically so it stays legible against this app's dark
- * background (#2e2e2c), not just white. */
+ * background (#2e2e2c), not just white. `title` gives a native
+ * hover-tooltip spelling out the acronym, on explicit request — no
+ * custom tooltip component needed, the browser already does this. */
 export function IrmsLogo() {
   const theme = useThemeStore((s) => s.theme);
-  return <img src={LOGO_SRC[theme]} alt="IRMS" className="irms-logo" />;
+  return <img src={LOGO_SRC[theme]} alt="IRMS" title="International Relationship Management System" className="irms-logo" />;
 }

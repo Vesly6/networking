@@ -130,6 +130,8 @@ interface TableState {
   clearNextActionDateColumn: () => void;
   setStatusColumn: (id: string) => void;
   clearStatusColumn: () => void;
+  setWebsiteColumn: (id: string) => void;
+  clearWebsiteColumn: () => void;
   reorderColumns: (draggedId: string, targetId: string) => void;
   moveColumns: (draggedIds: string[], targetColumnId: string | null) => void;
   addRow: () => string;
@@ -518,6 +520,14 @@ export const useTableStore = create<TableState>((set, get) => {
           // column stops being a dropdown at all.
           delete updated.isStatusColumn;
         }
+        if (type !== 'link') {
+          // Same non-auto-set reasoning as isStatusColumn above, mirrored
+          // for isWebsiteColumn: only cleared here when a column stops
+          // being type 'link' at all (it's never auto-claimed when a
+          // column *becomes* 'link' — a link column is just as often
+          // LinkedIn/Facebook as the real website).
+          delete updated.isWebsiteColumn;
+        }
         if (type === 'date') {
           // Auto-wired into the calendar the moment a column becomes
           // Date-typed — on explicit request, removing what used to be a
@@ -585,6 +595,20 @@ export const useTableStore = create<TableState>((set, get) => {
     clearStatusColumn: () => {
       snapshot();
       const columns = get().columns.map((c) => ({ ...c, isStatusColumn: false }));
+      set({ columns });
+      persistColumns(columns);
+    },
+
+    setWebsiteColumn: (id) => {
+      snapshot();
+      const columns = get().columns.map((c) => ({ ...c, isWebsiteColumn: c.id === id }));
+      set({ columns });
+      persistColumns(columns);
+    },
+
+    clearWebsiteColumn: () => {
+      snapshot();
+      const columns = get().columns.map((c) => ({ ...c, isWebsiteColumn: false }));
       set({ columns });
       persistColumns(columns);
     },

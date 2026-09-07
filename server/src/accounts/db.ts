@@ -160,6 +160,46 @@ function migrate(database: Database.Database): void {
       // Column already exists — nothing to do.
     }
   }
+  // Per-worker Zadarma phone number/softphone extension — first concrete
+  // step of "each worker has their own phone numbers and widgets." All
+  // three nullable: unset means "fall back to this company's/deployment's
+  // existing shared value" (see index.ts's GET /api/webrtc/key and
+  // POST /api/callback), so a company that never configures per-worker
+  // numbers keeps working exactly as before.
+  for (const column of ['zadarma_sip', 'zadarma_widget_sip', 'zadarma_caller_number']) {
+    try {
+      database.exec(`ALTER TABLE users ADD COLUMN ${column} TEXT`);
+    } catch {
+      // Column already exists — nothing to do.
+    }
+  }
+  // Completing "each worker has their own API" beyond Zadarma — one
+  // nullable override column per remaining integration that's a plain API
+  // key (see index.ts's requireXKey() helpers, which now prefer this over
+  // the company-wide company_integrations value). Requested explicitly as
+  // a completeness/insurance measure, not because per-worker Apollo/
+  // Instantly/etc. accounts are in active use yet — unset means "fall back
+  // to the company-wide key," so nothing changes for any company that
+  // never sets one. LinkedIn's own CDP URL is deliberately NOT included
+  // here — see server/src/linkedin/browser.ts's own doc comment: it's a
+  // single cached browser connection (one warm, persistent Chrome session
+  // *is* the safety premise of that whole feature), not a per-request
+  // credential, so "per worker" doesn't map onto it the same way without a
+  // much larger restructuring of that module.
+  for (const column of [
+    'instantly_api_key',
+    'apollo_api_key',
+    'serper_api_key',
+    'openai_api_key',
+    'anthropic_api_key',
+    'elevenlabs_api_key',
+  ]) {
+    try {
+      database.exec(`ALTER TABLE users ADD COLUMN ${column} TEXT`);
+    } catch {
+      // Column already exists — nothing to do.
+    }
+  }
   // Same additive-migration shape, for news_topics.active — added after
   // the initial ship (soft delete replacing a hard DELETE), so a database
   // that already has news_topics from before this needs the column added
@@ -742,6 +782,23 @@ export interface User {
   visibleTabs: string[] | null;
   permissions: UserPermissions;
   createdAt: number;
+  /** Per-worker Zadarma overrides — see the migration's own comment above.
+   * null/unset means "fall back to the company-wide or process.env value";
+   * see index.ts's GET /api/webrtc/key and POST /api/callback. */
+  zadarmaSip: string | null;
+  zadarmaWidgetSip: string | null;
+  zadarmaCallerNumber: string | null;
+  /** Per-worker overrides for the remaining plain-API-key integrations —
+   * see the migration's own comment above. null/unset means "fall back to
+   * this company's company_integrations value"; see index.ts's requireXKey()
+   * helpers. LinkedIn's CDP URL deliberately has no per-worker equivalent —
+   * see the migration comment for why. */
+  instantlyApiKey: string | null;
+  apolloApiKey: string | null;
+  serperApiKey: string | null;
+  openaiApiKey: string | null;
+  anthropicApiKey: string | null;
+  elevenlabsApiKey: string | null;
 }
 
 interface UserRow {
@@ -764,6 +821,15 @@ interface UserRow {
   can_hide_rows_columns: number;
   can_clear_content: number;
   created_at: number;
+  zadarma_sip: string | null;
+  zadarma_widget_sip: string | null;
+  zadarma_caller_number: string | null;
+  instantly_api_key: string | null;
+  apollo_api_key: string | null;
+  serper_api_key: string | null;
+  openai_api_key: string | null;
+  anthropic_api_key: string | null;
+  elevenlabs_api_key: string | null;
 }
 
 function userFromRow(r: UserRow): User {
@@ -788,6 +854,15 @@ function userFromRow(r: UserRow): User {
       canClearContent: r.can_clear_content === 1,
     },
     createdAt: r.created_at,
+    zadarmaSip: r.zadarma_sip,
+    zadarmaWidgetSip: r.zadarma_widget_sip,
+    zadarmaCallerNumber: r.zadarma_caller_number,
+    instantlyApiKey: r.instantly_api_key,
+    apolloApiKey: r.apollo_api_key,
+    serperApiKey: r.serper_api_key,
+    openaiApiKey: r.openai_api_key,
+    anthropicApiKey: r.anthropic_api_key,
+    elevenlabsApiKey: r.elevenlabs_api_key,
   };
 }
 
@@ -823,6 +898,15 @@ export interface CreateUserInput {
   role: Role;
   visibleTabs?: string[] | null;
   permissions?: Partial<UserPermissions>;
+  zadarmaSip?: string | null;
+  zadarmaWidgetSip?: string | null;
+  zadarmaCallerNumber?: string | null;
+  instantlyApiKey?: string | null;
+  apolloApiKey?: string | null;
+  serperApiKey?: string | null;
+  openaiApiKey?: string | null;
+  anthropicApiKey?: string | null;
+  elevenlabsApiKey?: string | null;
 }
 
 export function createUser(input: CreateUserInput): User {
@@ -835,11 +919,13 @@ export function createUser(input: CreateUserInput): User {
         id, company_id, username, password_hash, first_name, last_name, role, visible_tabs,
         can_delete_rows, can_delete_columns, can_delete_notes, can_edit_contacts, can_delete_contacts, can_export_import,
         can_insert_rows, can_insert_columns, can_hide_rows_columns, can_clear_content,
-        created_at
+        created_at, zadarma_sip, zadarma_widget_sip, zadarma_caller_number,
+        instantly_api_key, apollo_api_key, serper_api_key, openai_api_key, anthropic_api_key, elevenlabs_api_key
       ) VALUES (@id, @companyId, @username, @passwordHash, @firstName, @lastName, @role, @visibleTabs,
         @canDeleteRows, @canDeleteColumns, @canDeleteNotes, @canEditContacts, @canDeleteContacts, @canExportImport,
         @canInsertRows, @canInsertColumns, @canHideRowsColumns, @canClearContent,
-        @createdAt)`,
+        @createdAt, @zadarmaSip, @zadarmaWidgetSip, @zadarmaCallerNumber,
+        @instantlyApiKey, @apolloApiKey, @serperApiKey, @openaiApiKey, @anthropicApiKey, @elevenlabsApiKey)`,
     )
     .run({
       id,
@@ -861,6 +947,15 @@ export function createUser(input: CreateUserInput): User {
       canHideRowsColumns: p.canHideRowsColumns ? 1 : 0,
       canClearContent: p.canClearContent ? 1 : 0,
       createdAt: now,
+      zadarmaSip: input.zadarmaSip ?? null,
+      zadarmaWidgetSip: input.zadarmaWidgetSip ?? null,
+      zadarmaCallerNumber: input.zadarmaCallerNumber ?? null,
+      instantlyApiKey: input.instantlyApiKey ?? null,
+      apolloApiKey: input.apolloApiKey ?? null,
+      serperApiKey: input.serperApiKey ?? null,
+      openaiApiKey: input.openaiApiKey ?? null,
+      anthropicApiKey: input.anthropicApiKey ?? null,
+      elevenlabsApiKey: input.elevenlabsApiKey ?? null,
     });
   return getUserById(id)!;
 }
@@ -872,7 +967,43 @@ export function listWorkers(companyId: string): User[] {
   return rows.map(userFromRow);
 }
 
+/** Exactly one per company in every reachable flow today — createCompany
+ * is only ever called from POST /api/register and
+ * bootstrapFirstCompanyIfNeeded, each immediately followed by creating
+ * exactly one role: 'super_admin' user, and nothing else in this codebase
+ * creates a company or promotes a second super_admin. Used by
+ * tableData/db.ts's per-table-ownership migration/backfill and by
+ * instantlyReplySync.ts's system-created "Visi atsakymai" table — both
+ * contexts with no acting user of their own, where "this company's own
+ * admin" is the correct default owner. Returns null rather than throwing
+ * if that invariant were ever violated (e.g. a manual DB edit) — those
+ * callers all run in migration/webhook contexts where "skip it" beats
+ * "crash the whole request." */
+export function getCompanySuperAdmin(companyId: string): User | null {
+  const row = getDb().prepare(`SELECT * FROM users WHERE company_id = ? AND role = 'super_admin' LIMIT 1`).get(companyId) as
+    | UserRow
+    | undefined;
+  return row ? userFromRow(row) : null;
+}
+
 export interface UpdateWorkerInput {
+  /** Renaming a worker in place (e.g. a departing "Ivan" replaced by a new
+   * hire "Sergey" reusing the same login, on explicit request — so the
+   * per-worker Zadarma/API-key integration setup below doesn't need to be
+   * redone for every turnover) is safe by construction: `id` never
+   * changes, only these two columns do, so every existing row keyed by
+   * `id` (Zadarma/API overrides right below, and every note/comment
+   * already written) is completely unaffected. Note history in particular
+   * already stores the author's name as a permanent snapshot on each
+   * entry at write time (see app/src/utils/noteHistory.ts's
+   * NoteEntry.authorName) rather than re-resolving it live from this
+   * table — so past comments correctly keep showing "Ivan" after this
+   * rename, and only a *new* comment written after it picks up "Sergey".
+   * Omitted leaves the existing value unchanged; firstName specifically
+   * never accepts a blank result (a worker must always have some name),
+   * mirroring how it's already required, non-blank at creation. */
+  firstName?: string;
+  lastName?: string;
   visibleTabs?: string[];
   permissions?: Partial<UserPermissions>;
   /** Plain text, hashed here — omitted (not empty string) means "leave the
@@ -882,6 +1013,19 @@ export interface UpdateWorkerInput {
    * super-admin reprints the whole edit form on every save and shouldn't
    * accidentally wipe a password just by leaving that one field blank. */
   password?: string;
+  /** Same "omitted ≠ blank" convention as password above: omitted leaves
+   * the existing value unchanged; an explicit '' or null clears back to the
+   * company/env-wide fallback (see index.ts's GET /api/webrtc/key and
+   * POST /api/callback). */
+  zadarmaSip?: string | null;
+  zadarmaWidgetSip?: string | null;
+  zadarmaCallerNumber?: string | null;
+  instantlyApiKey?: string | null;
+  apolloApiKey?: string | null;
+  serperApiKey?: string | null;
+  openaiApiKey?: string | null;
+  anthropicApiKey?: string | null;
+  elevenlabsApiKey?: string | null;
 }
 
 /** Read-modify-write on the permission flags — same reasoning as
@@ -900,16 +1044,34 @@ export function updateWorker(userId: string, companyId: string, input: UpdateWor
     | undefined;
   if (!existing) return null;
   const current = userFromRow(existing);
+  const nextFirstName = input.firstName !== undefined && input.firstName.trim() ? input.firstName.trim() : current.firstName;
+  const nextLastName = input.lastName !== undefined ? input.lastName.trim() : current.lastName;
   const nextTabs = input.visibleTabs ?? current.visibleTabs ?? [];
   const nextPerms = { ...current.permissions, ...input.permissions };
   const nextPasswordHash = input.password ? hashPassword(input.password) : existing.password_hash;
+  const nextZadarmaSip = input.zadarmaSip !== undefined ? input.zadarmaSip || null : current.zadarmaSip;
+  const nextZadarmaWidgetSip =
+    input.zadarmaWidgetSip !== undefined ? input.zadarmaWidgetSip || null : current.zadarmaWidgetSip;
+  const nextZadarmaCallerNumber =
+    input.zadarmaCallerNumber !== undefined ? input.zadarmaCallerNumber || null : current.zadarmaCallerNumber;
+  const nextInstantlyApiKey = input.instantlyApiKey !== undefined ? input.instantlyApiKey || null : current.instantlyApiKey;
+  const nextApolloApiKey = input.apolloApiKey !== undefined ? input.apolloApiKey || null : current.apolloApiKey;
+  const nextSerperApiKey = input.serperApiKey !== undefined ? input.serperApiKey || null : current.serperApiKey;
+  const nextOpenaiApiKey = input.openaiApiKey !== undefined ? input.openaiApiKey || null : current.openaiApiKey;
+  const nextAnthropicApiKey = input.anthropicApiKey !== undefined ? input.anthropicApiKey || null : current.anthropicApiKey;
+  const nextElevenlabsApiKey =
+    input.elevenlabsApiKey !== undefined ? input.elevenlabsApiKey || null : current.elevenlabsApiKey;
   database
     .prepare(
-      `UPDATE users SET visible_tabs = ?, password_hash = ?, can_delete_rows = ?, can_delete_columns = ?, can_delete_notes = ?, can_edit_contacts = ?, can_delete_contacts = ?, can_export_import = ?,
-       can_insert_rows = ?, can_insert_columns = ?, can_hide_rows_columns = ?, can_clear_content = ?
+      `UPDATE users SET first_name = ?, last_name = ?, visible_tabs = ?, password_hash = ?, can_delete_rows = ?, can_delete_columns = ?, can_delete_notes = ?, can_edit_contacts = ?, can_delete_contacts = ?, can_export_import = ?,
+       can_insert_rows = ?, can_insert_columns = ?, can_hide_rows_columns = ?, can_clear_content = ?,
+       zadarma_sip = ?, zadarma_widget_sip = ?, zadarma_caller_number = ?,
+       instantly_api_key = ?, apollo_api_key = ?, serper_api_key = ?, openai_api_key = ?, anthropic_api_key = ?, elevenlabs_api_key = ?
        WHERE id = ? AND company_id = ?`,
     )
     .run(
+      nextFirstName,
+      nextLastName,
       JSON.stringify(nextTabs),
       nextPasswordHash,
       nextPerms.canDeleteRows ? 1 : 0,
@@ -922,6 +1084,15 @@ export function updateWorker(userId: string, companyId: string, input: UpdateWor
       nextPerms.canInsertColumns ? 1 : 0,
       nextPerms.canHideRowsColumns ? 1 : 0,
       nextPerms.canClearContent ? 1 : 0,
+      nextZadarmaSip,
+      nextZadarmaWidgetSip,
+      nextZadarmaCallerNumber,
+      nextInstantlyApiKey,
+      nextApolloApiKey,
+      nextSerperApiKey,
+      nextOpenaiApiKey,
+      nextAnthropicApiKey,
+      nextElevenlabsApiKey,
       userId,
       companyId,
     );
