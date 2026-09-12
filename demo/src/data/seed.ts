@@ -6,6 +6,7 @@
 import type { Column, DemoTable, Row } from '../types';
 import { randomUUID } from '../utils/uuid';
 import { serializeContacts } from '../utils/contacts';
+import { serializeNoteHistory, type NoteEntry } from '../utils/noteHistory';
 
 const COMPANY_PREFIXES = [
   'Baltic', 'Nordic', 'Vilnius', 'Kaunas', 'Amber', 'Pine', 'Summit', 'Bright',
@@ -87,8 +88,16 @@ function buildCompaniesTable(): { table: DemoTable; rows: Row[] } {
   const websiteCol = col('Website', 'link');
   const phoneCol = col('Phone', 'phone');
   const employeesCol = col('Employees', 'text');
+  const notesCol = col('Call Notes', 'note');
 
-  const columns = [nameCol, industryCol, icpCol, contactsCol, statusCol, websiteCol, phoneCol, employeesCol];
+  const columns = [nameCol, industryCol, icpCol, contactsCol, statusCol, websiteCol, phoneCol, employeesCol, notesCol];
+
+  const CALL_NOTE_TEMPLATES = [
+    'Initial call went well, interested in a demo',
+    'Left a voicemail, will try again next week',
+    'Requested pricing information by email',
+    'Not the right time — follow up next quarter',
+  ];
 
   const rows: Row[] = Array.from({ length: COMPANY_COUNT }, (_, i) => {
     const p1 = personName(i);
@@ -103,6 +112,11 @@ function buildCompaniesTable(): { table: DemoTable; rows: Row[] } {
         text: `${p2.first} ${p2.last}, ${pick(TITLES, i + 5)}, ${p2.first.toLowerCase()}.${p2.last.toLowerCase()}@${domain(i)}`,
       },
     ]);
+    const daysAgo = (n: number) => Date.now() - n * 24 * 60 * 60 * 1000;
+    const noteEntries: NoteEntry[] = [
+      { id: randomUUID(), text: pick(CALL_NOTE_TEMPLATES, i), createdAt: daysAgo(1 + (i % 10)) },
+      ...(i % 3 === 0 ? [{ id: randomUUID(), text: 'Email', createdAt: daysAgo(2 + (i % 14)) }] : []),
+    ];
     return {
       id: randomUUID(),
       tableId: nameCol.id, // placeholder, replaced below once tableId is known
@@ -115,6 +129,7 @@ function buildCompaniesTable(): { table: DemoTable; rows: Row[] } {
         [websiteCol.id]: domain(i),
         [phoneCol.id]: `+370 5${(2000000 + i * 91) % 8000000}`,
         [employeesCol.id]: `${10 + (i % 12) * 15}-${50 + (i % 12) * 20}`,
+        [notesCol.id]: serializeNoteHistory(noteEntries),
       },
       order: i,
     };

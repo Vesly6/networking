@@ -39,7 +39,12 @@ export function DemoTableView({ table }: DemoTableViewProps) {
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<SortState>(null);
   const [activeCell, setActiveCell] = useState<{ rowId: string; columnId: string } | null>(null);
-  const [openContactsRowId, setOpenContactsRowId] = useState<string | null>(null);
+  // Which cell's expanded editor (contact list / note history) is open —
+  // keyed by {rowId, columnId}, not just row, matching production's own
+  // expandedCell shape (a row with more than one contact/note column
+  // would otherwise show the same "open" popover under every one of
+  // them).
+  const [expandedCell, setExpandedCell] = useState<{ rowId: string; columnId: string } | null>(null);
   const [selectedRowIds, setSelectedRowIds] = useState<string[]>([]);
   const [columnMenu, setColumnMenu] = useState<{ x: number; y: number; columnId: string } | null>(null);
   const [colorPickerAnchor, setColorPickerAnchor] = useState<HTMLElement | null>(null);
@@ -213,9 +218,9 @@ export function DemoTableView({ table }: DemoTableViewProps) {
                       // than snapping back to "nothing selected" on every
                       // Enter/blur.
                     }}
-                    onOpenContacts={() => setOpenContactsRowId(row.id)}
-                    contactsOpen={openContactsRowId === row.id}
-                    onCloseContacts={() => setOpenContactsRowId(null)}
+                    onOpenEditor={() => setExpandedCell({ rowId: row.id, columnId: col.id })}
+                    editorOpen={expandedCell?.rowId === row.id && expandedCell?.columnId === col.id}
+                    onCloseEditor={() => setExpandedCell(null)}
                   />
                 ))}
               </tr>

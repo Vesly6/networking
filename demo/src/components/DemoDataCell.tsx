@@ -1,6 +1,7 @@
 import { useEffect, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react';
 import type { Column, Row } from '../types';
 import { parseContacts, addContact, removeContact, getContactsSummary } from '../utils/contacts';
+import { parseNoteHistory, addNoteEntry, updateNoteEntry, removeNoteEntry, getLatestNoteText, formatHistoryTimestamp } from '../utils/noteHistory';
 import { highlightMatches } from '../utils/highlight';
 import { ensureProtocol } from '../utils/link';
 import { contrastTextColor } from '../utils/color';
@@ -14,18 +15,31 @@ interface DemoDataCellProps {
   highlightQuery: string;
   onSelect: (e: ReactMouseEvent) => void;
   onCommit: (value: string) => void;
-  onOpenContacts: () => void;
-  contactsOpen: boolean;
-  onCloseContacts: () => void;
+  /** Opens this cell's expanded editor (contact list / note history) —
+   * shared by both the `contact` and `note` branches below, keyed by
+   * {rowId, columnId} in DemoTableView so a row with more than one of
+   * either column type doesn't show every one of them open at once. */
+  onOpenEditor: () => void;
+  editorOpen: boolean;
+  onCloseEditor: () => void;
 }
+
+const NOTE_TAGS: Array<{ label: string; color: string }> = [
+  { label: 'Email', color: '#e3ecf7' },
+  { label: 'Email follow-up', color: '#e1f0ef' },
+  { label: 'Meeting scheduled', color: '#eee3f3' },
+  { label: 'Meeting completed', color: '#f5e3ec' },
+  { label: 'Call', color: '#f6e9dd' },
+];
+const NOTE_TAG_COLORS: Record<string, string> = Object.fromEntries(NOTE_TAGS.map((t) => [t.label, t.color]));
 
 /** A right-sized rebuild of the real DataCell.tsx for the demo's own
  * feature scope — same click-to-edit convention (text/company/phone/link
  * become a live input; dropdown/date stay native always-interactive
- * controls; contact opens an inline expanding list), the same `link` 🔗
- * open-in-new-tab and `company` 🔍 Google-search second click-targets
- * shipped in production this session, and the same search-match
- * highlighting — but without the worker-permission/note-history/
+ * controls; contact/note open an inline expanding surface), the same
+ * `link` 🔗 open-in-new-tab and `company` 🔍 Google-search second
+ * click-targets shipped in production this session, and the same
+ * search-match highlighting — but without the worker-permission/
  * social-lookup machinery none of this demo needs. */
 export function DemoDataCell({
   row,
@@ -34,13 +48,16 @@ export function DemoDataCell({
   highlightQuery,
   onSelect,
   onCommit,
-  onOpenContacts,
-  contactsOpen,
-  onCloseContacts,
+  onOpenEditor,
+  editorOpen,
+  onCloseEditor,
 }: DemoDataCellProps) {
   const value = row.cells[column.id] ?? '';
   const [draft, setDraft] = useState(value);
   const [newContactText, setNewContactText] = useState('');
+  const [newNoteText, setNewNoteText] = useState('');
+  const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
+  const [noteEditDraft, setNoteEditDraft] = useState('');
 
   // Cell fill color (🎨 Color tool) — same "inline style wins over both
   // the :focus rule and the option's own badge color logic" approach as
@@ -107,14 +124,14 @@ export function DemoDataCell({
     };
     return (
       <td className="demo-cell demo-cell-contact" style={cellStyle} onMouseDown={onSelect}>
-        <button type="button" className="demo-cell-preview demo-cell-preview-hoverable" tabIndex={-1} onClick={onOpenContacts}>
+        <button type="button" className="demo-cell-preview demo-cell-preview-hoverable" tabIndex={-1} onClick={onOpenEditor}>
           {getContactsSummary(value) ? highlightMatches(getContactsSummary(value), highlightQuery) : <span className="demo-cell-empty">+ add contact</span>}
         </button>
-        {contactsOpen && (
+        {editorOpen && (
           <div className="demo-contact-popover" onClick={(e) => e.stopPropagation()}>
             <div className="demo-contact-popover-header">
               <span>Decision makers</span>
-              <button type="button" className="demo-contact-popover-close" onClick={onCloseContacts}>
+              <button type="button" className="demo-contact-popover-close" onClick={onCloseEditor}>
                 <X size={14} />
               </button>
             </div>
@@ -151,6 +168,105 @@ export function DemoDataCell({
                 Add
               </button>
             </div>
+          </div>
+        )}
+      </td>
+    );
+  }
+
+  // A note cell's stored value is a JSON array of dated entries (see
+  // utils/noteHistory.ts) — same click-to-expand pattern as `contact`
+  // above, just with a dated history list instead of a flat one, and a
+  // row of quick-tag buttons for the handful of things logged constantly
+  // in a real cold-calling workflow (matches production's own NOTE_TAGS
+  // idea, trimmed to a shorter English set).
+  if (column.type === 'note') {
+    const entries = parseNoteHistory(value);
+    const handleAddTag = (label: string) => onCommit(addNoteEntry(value, label));
+    const handleRemove = async (id: string, text: string) => {
+      const ok = await confirmDialog({ message: `Delete this note entry?\n"${text}"`, danger: true });
+      if (ok) onCommit(removeNoteEntry(value, id));
+    };
+    return (
+      <td className="demo-cell demo-cell-note" style={cellStyle} onMouseDown={onSelect}>
+        <button type="button" className="demo-cell-preview demo-cell-preview-hoverable" tabIndex={-1} onClick={onOpenEditor}>
+          {getLatestNoteText(value) ? highlightMatches(getLatestNoteText(value), highlightQuery) : <span className="demo-cell-empty">+ add note</span>}
+        </button>
+        {editorOpen && (
+          <div className="demo-contact-popover demo-note-popover" onClick={(e) => e.stopPropagation()}>
+            <div className="demo-contact-popover-header">
+              <span>Notes</span>
+              <button type="button" className="demo-contact-popover-close" onClick={onCloseEditor}>
+                <X size={14} />
+              </button>
+            </div>
+            <div className="demo-note-tags">
+              {NOTE_TAGS.map((tag) => (
+                <button key={tag.label} type="button" className="demo-note-tag" style={{ background: tag.color }} onClick={() => handleAddTag(tag.label)}>
+                  {tag.label}
+                </button>
+              ))}
+            </div>
+            <div className="demo-contact-add-row">
+              <input
+                placeholder="Add a note…"
+                value={newNoteText}
+                onChange={(e) => setNewNoteText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && newNoteText.trim()) {
+                    onCommit(addNoteEntry(value, newNoteText.trim()));
+                    setNewNoteText('');
+                  }
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  if (!newNoteText.trim()) return;
+                  onCommit(addNoteEntry(value, newNoteText.trim()));
+                  setNewNoteText('');
+                }}
+              >
+                Add
+              </button>
+            </div>
+            <ul className="demo-note-history">
+              {entries.map((entry) => (
+                <li key={entry.id} className="demo-note-entry">
+                  {editingNoteId === entry.id ? (
+                    <input
+                      autoFocus
+                      value={noteEditDraft}
+                      onChange={(e) => setNoteEditDraft(e.target.value)}
+                      onBlur={() => {
+                        if (noteEditDraft.trim()) onCommit(updateNoteEntry(value, entry.id, noteEditDraft));
+                        setEditingNoteId(null);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') e.currentTarget.blur();
+                        if (e.key === 'Escape') setEditingNoteId(null);
+                      }}
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      className="demo-note-entry-text"
+                      style={NOTE_TAG_COLORS[entry.text] ? { background: NOTE_TAG_COLORS[entry.text] } : undefined}
+                      onClick={() => {
+                        setEditingNoteId(entry.id);
+                        setNoteEditDraft(entry.text);
+                      }}
+                    >
+                      {entry.text}
+                    </button>
+                  )}
+                  <span className="demo-note-entry-time">{formatHistoryTimestamp(entry.createdAt)}</span>
+                  <button type="button" onClick={() => void handleRemove(entry.id, entry.text)}>
+                    <X size={12} />
+                  </button>
+                </li>
+              ))}
+            </ul>
           </div>
         )}
       </td>
