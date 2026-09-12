@@ -653,6 +653,50 @@ td.demo-cell select:focus {
   margin-top: 0;
   font-size: 1.05rem;
 }
+
+/* CSV import mapping modal — wider than the base .modal (which stays
+   narrow for the simple confirm dialogs), copied from production's own
+   sizing/layout for this one modal. */
+.modal.csv-import-mapping {
+  max-width: 560px;
+  max-height: calc(100dvh - 4rem);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.csv-import-mapping-hint {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+.csv-import-mapping-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  overflow-y: auto;
+  padding-right: 0.2rem;
+}
+.csv-import-mapping-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0.4rem;
+  align-items: center;
+}
+.csv-import-mapping-header {
+  font-size: 0.85rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.csv-import-mapping-row select {
+  width: 100%;
+  font-size: 0.8rem;
+}
+.csv-import-mapping-summary {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
 .confirm-dialog-message {
   margin: 0 0 1rem;
   font-size: 0.9rem;

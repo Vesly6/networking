@@ -1,7 +1,23 @@
 import { create } from 'zustand';
-import type { Column, DemoTable, Row } from '../types';
+import type { Column, ColumnType, DemoTable, Row } from '../types';
 import { buildSeedData } from '../data/seed';
 import { randomUUID } from '../utils/uuid';
+import { PRESET_COLORS } from '../constants';
+
+/** One decision per CSV header, resolved in the import-mapping modal
+ * before importCsvRows() runs — mirrors production's own
+ * ImportColumnMapping (useTableStore.ts) exactly. */
+export type ImportColumnMapping = { action: 'existing'; columnId: string } | { action: 'new'; columnType: ColumnType } | { action: 'skip' };
+
+export interface ImportResult {
+  createdRows: number;
+  createdColumns: number;
+}
+
+// A column mistakenly typed 'dropdown' against near-unique free text
+// shouldn't spray dozens of one-off "options" into the column — same cap
+// production's own importCsvRows uses.
+const MAX_AUTO_DROPDOWN_OPTIONS = 30;
 
 // Deliberately a *plain* Zustand store — no persist middleware, no
 // localStorage/sessionStorage/IndexedDB read or write anywhere in this
@@ -37,7 +53,7 @@ interface DemoTableState {
   removeRows: (tableId: string, rowIds: string[]) => void;
   updateCell: (tableId: string, rowId: string, columnId: string, value: string) => void;
   setDropdownOptions: (tableId: string, columnId: string, options: string[]) => void;
-  importRows: (tableId: string, columns: Column[], newRows: Array<Record<string, string>>) => void;
+  importCsvRows: (tableId: string, headers: string[], dataRows: string[][], mapping: Record<string, ImportColumnMapping>) => ImportResult;
   /** Inserts one blank text column before `beforeColumnId` (end of the
    * table when null) — mirrors production's insertColumns (useTableStore.ts). */
   insertColumns: (tableId: string, beforeColumnId: string | null, count: number) => void;
@@ -123,29 +139,66 @@ export const useDemoTableStore = create<DemoTableState>((set, get) => {
       set({ tables });
     },
 
-    /** Extends the current table's columns with any newly-discovered CSV
-     * headers (mirroring the production import's own "map to existing or
-     * create new" idea, simplified to auto-create-as-text) and appends the
-     * parsed rows — same "never leaves the tab" property as everything
-     * else here, since `columns`/`newRows` were already parsed client-side
-     * by DemoToolbar before this is called. */
-    importRows: (tableId, columns, newRows) => {
+    /** Executes a per-header mapping already resolved by
+     * DemoCsvImportMapping — mirrors production's own importCsvRows
+     * (useTableStore.ts) exactly, minus the batching/progress-bar
+     * machinery that exists there only because a real 14,000-row import
+     * needs it; demo tables are small enough to build and commit in one
+     * pass. A 'new' decision seeds a dropdown column's options/colors from
+     * the data's own distinct values, same as production. */
+    importCsvRows: (tableId, headers, dataRows, mapping) => {
       const table = get().tables.find((t) => t.id === tableId);
-      if (!table) return;
+      if (!table) return { createdRows: 0, createdColumns: 0 };
       snapshot(tableId);
+
+      const columns = [...table.columns];
+      let createdColumns = 0;
+      const headerToColumnId = new Map<string, string>();
+      headers.forEach((header, headerIndex) => {
+        const decision = mapping[header];
+        if (!decision || decision.action === 'skip') return;
+        if (decision.action === 'existing') {
+          headerToColumnId.set(header, decision.columnId);
+          return;
+        }
+        const column: Column = { id: randomUUID(), name: header.trim() || 'Column', type: decision.columnType };
+        if (decision.columnType === 'dropdown') {
+          const seen = new Set<string>();
+          const distinct: string[] = [];
+          for (const dataRow of dataRows) {
+            const raw = (dataRow[headerIndex] ?? '').trim();
+            if (!raw || seen.has(raw)) continue;
+            seen.add(raw);
+            distinct.push(raw);
+            if (distinct.length >= MAX_AUTO_DROPDOWN_OPTIONS) break;
+          }
+          if (distinct.length > 0) {
+            column.options = distinct;
+            column.optionColors = Object.fromEntries(distinct.map((opt, i) => [opt, PRESET_COLORS[i % PRESET_COLORS.length]]));
+          }
+        }
+        columns.push(column);
+        createdColumns++;
+        headerToColumnId.set(header, column.id);
+      });
+
       const existingRows = get().rowsByTable[tableId] ?? [];
-      const maxOrder = existingRows.reduce((m, r) => Math.max(m, r.order), -1);
-      const appended: Row[] = newRows.map((cells, i) => ({
-        id: randomUUID(),
-        tableId,
-        cells,
-        order: maxOrder + 1 + i,
-      }));
-      const tables = get().tables.map((t) => (t.id === tableId ? { ...t, columns } : t));
+      let nextOrder = existingRows.reduce((m, r) => Math.max(m, r.order), -1) + 1;
+      const nonEmptyDataRows = dataRows.filter((dataRow) => dataRow.some((cell) => cell && cell.trim() !== ''));
+      const appended: Row[] = nonEmptyDataRows.map((dataRow) => {
+        const cells: Record<string, string> = {};
+        headers.forEach((header, i) => {
+          const columnId = headerToColumnId.get(header);
+          if (columnId) cells[columnId] = dataRow[i] ?? '';
+        });
+        return { id: randomUUID(), tableId, cells, order: nextOrder++ };
+      });
+
       set({
-        tables,
+        tables: get().tables.map((t) => (t.id === tableId ? { ...t, columns } : t)),
         rowsByTable: { ...get().rowsByTable, [tableId]: [...existingRows, ...appended] },
       });
+      return { createdRows: appended.length, createdColumns };
     },
 
     insertColumns: (tableId, beforeColumnId, count) => {

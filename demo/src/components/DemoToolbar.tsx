@@ -1,10 +1,10 @@
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import type { Column } from '../types';
-import { parseCsvFile, sniffColumnType, exportRowsToCsv, downloadCsv, sanitizeFilename } from '../utils/csv';
-import { randomUUID } from '../utils/uuid';
-import { useDemoTableStore } from '../store/useDemoTableStore';
+import { parseCsvFile, exportRowsToCsv, downloadCsv, sanitizeFilename } from '../utils/csv';
+import { useDemoTableStore, type ImportColumnMapping } from '../store/useDemoTableStore';
 import { useToastStore } from '../store/useToastStore';
 import { confirmDialog } from '../store/useConfirmStore';
+import { DemoCsvImportMapping } from './DemoCsvImportMapping';
 import { Search, Plus, Trash2, Upload, Download, Undo2, Redo2 } from 'lucide-react';
 
 interface DemoToolbarProps {
@@ -29,15 +29,14 @@ interface DemoToolbarProps {
 }
 
 /** Search/add-row/delete-selected/import/export — all client-side, all
- * scoped to this one demo table's in-memory rows. Import maps a CSV
- * header to an existing column by case-insensitive name match, creating
- * a new text/note/contact-typed column (via the same sniffColumnType
- * heuristic the real import mapping defaults to) for anything unmatched
- * — a simplified, no-modal version of the production CsvImportMapping
- * flow, appropriate for a demo where there's no risk of silently
- * corrupting a real column's data. Every action now gives the same kind
- * of feedback production does — a toast, and (for the one destructive
- * action here) a confirm step first. */
+ * scoped to this one demo table's in-memory rows. CSV import now goes
+ * through the same explicit per-header mapping review production's
+ * CsvImportMapping.tsx requires, replacing this toolbar's old silent
+ * auto-mapping (which always matched by name and always created an
+ * unmatched header as plain text — the exact class of surprise the real
+ * modal exists to prevent, per the parity audit). Every action gives the
+ * same kind of feedback production does — a toast, and (for destructive
+ * actions) a confirm step first. */
 export function DemoToolbar({
   tableId,
   tableName,
@@ -61,8 +60,10 @@ export function DemoToolbar({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const addRow = useDemoTableStore((s) => s.addRow);
   const removeRows = useDemoTableStore((s) => s.removeRows);
-  const importRows = useDemoTableStore((s) => s.importRows);
+  const importCsvRows = useDemoTableStore((s) => s.importCsvRows);
   const showToast = useToastStore((s) => s.show);
+
+  const [pendingImport, setPendingImport] = useState<{ headers: string[]; dataRows: string[][] } | null>(null);
 
   const handleExport = () => {
     const csv = exportRowsToCsv(columns, rows);
@@ -73,27 +74,16 @@ export function DemoToolbar({
   const handleImportFile = async (file: File) => {
     const { headers, rows: dataRows } = await parseCsvFile(file);
     if (headers.length === 0) return;
+    setPendingImport({ headers, dataRows });
+  };
 
-    const nextColumns = [...columns];
-    const headerToColumnId = headers.map((header) => {
-      const existing = nextColumns.find((c) => c.name.trim().toLowerCase() === header.trim().toLowerCase());
-      if (existing) return existing.id;
-      const sampleValues = dataRows.slice(0, 8).map((r) => r[headers.indexOf(header)] ?? '');
-      const newColumn: Column = { id: randomUUID(), name: header, type: sniffColumnType(sampleValues) };
-      nextColumns.push(newColumn);
-      return newColumn.id;
-    });
-
-    const newRows = dataRows.map((values) => {
-      const cells: Record<string, string> = {};
-      headerToColumnId.forEach((colId, i) => {
-        cells[colId] = values[i] ?? '';
-      });
-      return cells;
-    });
-
-    importRows(tableId, nextColumns, newRows);
-    showToast(`Imported ${newRows.length} row${newRows.length === 1 ? '' : 's'}`);
+  const handleConfirmImport = (mapping: Record<string, ImportColumnMapping>) => {
+    if (!pendingImport) return;
+    const { createdRows, createdColumns } = importCsvRows(tableId, pendingImport.headers, pendingImport.dataRows, mapping);
+    setPendingImport(null);
+    showToast(
+      `Imported ${createdRows} row${createdRows === 1 ? '' : 's'}${createdColumns > 0 ? `, added ${createdColumns} column${createdColumns === 1 ? '' : 's'}` : ''}`,
+    );
   };
 
   const handleDeleteSelected = async () => {
@@ -174,6 +164,15 @@ export function DemoToolbar({
       <button type="button" onClick={handleExport}>
         <Download size={14} /> Export CSV
       </button>
+      {pendingImport && (
+        <DemoCsvImportMapping
+          headers={pendingImport.headers}
+          dataRows={pendingImport.dataRows}
+          columns={columns}
+          onConfirm={handleConfirmImport}
+          onCancel={() => setPendingImport(null)}
+        />
+      )}
     </div>
   );
 }

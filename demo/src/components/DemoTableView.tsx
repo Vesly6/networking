@@ -8,6 +8,7 @@ import { DemoColumnHeaderMenu } from './DemoColumnHeaderMenu';
 import { Popover } from './Popover';
 import { ColorInput } from './ColorInput';
 import { parseCellRef, formatCellRef } from '../utils/spreadsheet';
+import { PRESET_COLORS } from '../constants';
 import { ChevronUp, ChevronDown } from 'lucide-react';
 
 interface DemoTableViewProps {
@@ -15,8 +16,6 @@ interface DemoTableViewProps {
 }
 
 type SortState = { columnId: string; direction: 'asc' | 'desc' } | null;
-
-const PRESET_COLORS = ['#fecaca', '#fed7aa', '#fef08a', '#bbf7d0', '#bfdbfe', '#ddd6fe', '#fbcfe8', '#e5e7eb'];
 
 /** A right-sized rebuild of the real TableView.tsx's core spreadsheet
  * interactions (search, sort, single-cell edit, row select+delete,
