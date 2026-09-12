@@ -1266,9 +1266,28 @@ export function deleteBackup(id: string, companyId?: string): void {
 /** Called once per scheduler tick (index.ts) — deletes anything older
  * than `maxAgeDays`. Cheap enough to just run unconditionally every tick
  * rather than tracking a separate "last purged at" marker. */
-export function purgeOldBackups(maxAgeDays: number): void {
+/** Returns how many backup rows were actually deleted, so callers know
+ * whether it's worth following up with vacuumDatabase() below — deleting
+ * rows alone frees space *inside* the SQLite file for future reuse, but
+ * doesn't shrink the file's actual size on disk. */
+export function purgeOldBackups(maxAgeDays: number): number {
   const cutoff = Date.now() - maxAgeDays * 86_400_000;
-  getDb().prepare(`DELETE FROM backups WHERE created_at < ?`).run(cutoff);
+  return getDb().prepare(`DELETE FROM backups WHERE created_at < ?`).run(cutoff).changes;
+}
+
+/** Rebuilds the database file to reclaim space freed by deleted rows — a
+ * real, reported bug: purgeOldBackups() was already correctly deleting
+ * old backup rows on schedule, but a plain SQLite DELETE never shrinks
+ * the file on disk by itself (the freed pages just become internal free
+ * space, reused by future writes) — confirmed live: the Render disk
+ * usage metric stayed at ~800MB even right after deleting the backup
+ * rows that were supposedly the whole problem. VACUUM rebuilds the file
+ * into a compacted copy and swaps it in, which is what actually returns
+ * the space to the OS/disk. Needs roughly as much free space as the
+ * current file size to do this safely (a temporary second copy), so this
+ * should only run when there's known headroom — callers decide when. */
+export function vacuumDatabase(): void {
+  getDb().exec('VACUUM');
 }
 
 /** `companyId` optional — omitted for the owner's cross-company Admin

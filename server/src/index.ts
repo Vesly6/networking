@@ -100,6 +100,7 @@ import {
   listAllBackups,
   deleteBackup,
   purgeOldBackups,
+  vacuumDatabase,
   backupToCsvText,
   restoreBackupAsNewTable,
   type RowActionAttribution,
@@ -4004,8 +4005,24 @@ setInterval(() => {
 // correct (no missed or duplicate days) across server restarts/redeploys
 // without needing precise time-of-day scheduling. purgeOldBackups runs
 // every tick too — cheap enough not to need its own separate timer.
+//
+// A real, reported incident: two tables with genuinely huge row/column
+// counts ("TOP LT"/"TOP LT Potential", ~40MB per daily snapshot each)
+// filled a 1GB Render disk in about a week at the old 30-day retention —
+// backups only a few days old were already ~550MB combined, and nothing
+// had even reached 30 days yet to be purged. 30 days was sized for
+// ordinary tables, not ones this large; 7 days keeps meaningful recent
+// history while capping the worst case around 7 × 80MB ≈ 560MB instead
+// of ~2.4GB at steady state.
 const BACKUP_TICK_INTERVAL_MS = 60 * 60 * 1000;
-const BACKUP_RETENTION_DAYS = 30;
+const BACKUP_RETENTION_DAYS = 7;
+
+// Runs once at startup, unconditionally — reclaims whatever's already
+// sitting deleted-but-not-shrunk from before this fix existed, without
+// waiting for the next hourly tick to happen to purge something first.
+// See vacuumDatabase()'s own doc comment for why a DELETE alone was
+// never going to free this space on its own.
+vacuumDatabase();
 
 setInterval(() => {
   try {
@@ -4016,7 +4033,13 @@ setInterval(() => {
       if (createBackup(table.id, table.companyId)) created++;
     }
     if (created > 0) console.log('[backups] automatic daily tick: created', created, 'backup(s).');
-    purgeOldBackups(BACKUP_RETENTION_DAYS);
+    const purged = purgeOldBackups(BACKUP_RETENTION_DAYS);
+    // Only worth the I/O cost of rebuilding the whole file when something
+    // was actually freed this tick — most hours purge nothing at all.
+    if (purged > 0) {
+      console.log('[backups] purged', purged, 'old backup(s), reclaiming disk space...');
+      vacuumDatabase();
+    }
   } catch (err) {
     console.error('[backups] automatic daily tick failed:', err);
   }
