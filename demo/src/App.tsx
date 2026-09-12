@@ -4,6 +4,7 @@ import { DemoTableView } from './components/DemoTableView';
 import { DemoToast } from './components/DemoToast';
 import { DemoConfirmDialog } from './components/DemoConfirmDialog';
 import { DemoWorkspaceView } from './components/DemoWorkspaceView';
+import { DemoAppTabs } from './components/DemoAppTabs';
 import { ThemeToggle } from './components/ThemeToggle';
 import { BrandIcon } from './components/BrandIcon';
 import { ArrowLeft } from 'lucide-react';
@@ -87,6 +88,7 @@ export default function App() {
         )}
         <span className="demo-header-badge">Live Demo</span>
         <ThemeToggle />
+        <DemoAppTabs />
       </header>
       <main className="demo-main">
         <DemoTableView key={activeTable.id} table={activeTable} />

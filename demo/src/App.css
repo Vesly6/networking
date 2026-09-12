@@ -113,6 +113,38 @@
 
 /* Table screen header — copied from production's .app-header/
    .back-to-workspace/.table-title rules. */
+/* In-table nav tabs — copied from production's own .app-tabs rules. */
+.app-tabs {
+  display: flex;
+  gap: 0.4rem;
+}
+.app-tabs button {
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: 6px;
+  padding: 0.4em 0.8em;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+  color: var(--text-muted);
+}
+.app-tabs button.active {
+  background: var(--bg-alt);
+  color: var(--text);
+  border-color: var(--border);
+}
+/* Real production behavior: a tab whose integration isn't configured
+   for a company stays visible but dimmed, and clicking it shows a toast
+   instead of navigating — confirmed live via the parity audit (see
+   Paieška in the real app). Every non-Lentelė tab here is permanently in
+   this state, since none of these integrations can exist in a
+   credential-free demo by design (see the parity audit's
+   "correctly-excluded" list) — this shows the real product's full
+   8-tab shape without faking a working integration behind any of them. */
+.nav-tab-unconfigured {
+  opacity: 0.6;
+}
+
 .back-to-workspace {
   border: none;
   background: transparent;
