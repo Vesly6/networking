@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import { useDemoTableStore } from './store/useDemoTableStore';
 import { DemoTableView } from './components/DemoTableView';
+import { DemoCalendarView } from './components/DemoCalendarView';
 import { DemoToast } from './components/DemoToast';
 import { DemoConfirmDialog } from './components/DemoConfirmDialog';
 import { DemoWorkspaceView } from './components/DemoWorkspaceView';
-import { DemoAppTabs } from './components/DemoAppTabs';
+import { DemoAppTabs, type DemoTab } from './components/DemoAppTabs';
 import { ThemeToggle } from './components/ThemeToggle';
 import { BrandIcon } from './components/BrandIcon';
 import { ArrowLeft } from 'lucide-react';
@@ -34,10 +35,18 @@ export default function App() {
 
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
+  const [tab, setTab] = useState<DemoTab>('table');
+  const [focusRowId, setFocusRowId] = useState<string | null>(null);
 
   const openTable = (id: string) => {
     setActiveTable(id);
     setScreen('table');
+    setTab('table');
+  };
+
+  const jumpToRow = (rowId: string) => {
+    setTab('table');
+    setFocusRowId(rowId);
   };
 
   if (screen === 'workspace' || !activeTable) {
@@ -88,10 +97,14 @@ export default function App() {
         )}
         <span className="demo-header-badge">Live Demo</span>
         <ThemeToggle />
-        <DemoAppTabs />
+        <DemoAppTabs tab={tab} onSelectTab={setTab} />
       </header>
       <main className="demo-main">
-        <DemoTableView key={activeTable.id} table={activeTable} />
+        {tab === 'calendar' ? (
+          <DemoCalendarView table={activeTable} onJumpToRow={jumpToRow} />
+        ) : (
+          <DemoTableView key={activeTable.id} table={activeTable} focusRowId={focusRowId} onFocusHandled={() => setFocusRowId(null)} />
+        )}
       </main>
       <div className="demo-sheet-tabs-bar">
         <div className="demo-sheet-tabs">

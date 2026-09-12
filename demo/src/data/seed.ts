@@ -164,15 +164,26 @@ function buildPipelineTable(): { table: DemoTable; rows: Row[] } {
   });
   const ownerCol = col('Owner', 'text');
   const nextStepCol = col('Next Step', 'text');
-  const dateCol = col('Next Action', 'date');
+  const dateCol = col('Next Action', 'date', { isNextActionDate: true });
 
   const columns = [nameCol, dealCol, stageCol, ownerCol, nextStepCol, dateCol];
   const owners = ['Jonas K.', 'Rūta P.', 'Tomas B.', 'Ieva N.'];
   const nextSteps = ['Send follow-up email', 'Schedule demo call', 'Prepare proposal', 'Confirm contract terms', 'Check in after trial'];
 
+  // Spread relative to the *actual* current date (not a fixed year) so the
+  // Calendar tab's Overdue/Today/Upcoming grouping always has something
+  // real to show regardless of when the demo happens to be opened — a
+  // fixed-year date range would eventually drift entirely into the past.
+  // A few rows land exactly on today/tomorrow so those sections are never
+  // empty on a fresh load.
+  const relativeDate = (offsetDays: number): string => {
+    const d = new Date();
+    d.setDate(d.getDate() + offsetDays);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
+
   const rows: Row[] = Array.from({ length: 60 }, (_, i) => {
-    const day = 1 + (i % 27);
-    const month = 1 + (i % 12);
+    const offsetDays = i < 3 ? i : ((i * 7 + 3) % 45) - 20;
     return {
       id: randomUUID(),
       tableId: nameCol.id,
@@ -182,7 +193,7 @@ function buildPipelineTable(): { table: DemoTable; rows: Row[] } {
         [stageCol.id]: pick(['Prospecting', 'Qualified', 'Proposal Sent', 'Negotiation', 'Closed Won', 'Closed Lost'], i * 3 + 1),
         [ownerCol.id]: pick(owners, i),
         [nextStepCol.id]: pick(nextSteps, i * 2 + 1),
-        [dateCol.id]: `2026-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`,
+        [dateCol.id]: relativeDate(offsetDays),
       },
       order: i,
     };

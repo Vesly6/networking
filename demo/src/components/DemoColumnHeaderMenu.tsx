@@ -23,9 +23,12 @@ interface DemoColumnHeaderMenuProps {
 export function DemoColumnHeaderMenu({ tableId, x, y, columns, columnId, onSort, onClose }: DemoColumnHeaderMenuProps) {
   const insertColumns = useDemoTableStore((s) => s.insertColumns);
   const removeColumns = useDemoTableStore((s) => s.removeColumns);
+  const setNextActionDateColumn = useDemoTableStore((s) => s.setNextActionDateColumn);
+  const clearNextActionDateColumn = useDemoTableStore((s) => s.clearNextActionDateColumn);
 
   const index = columns.findIndex((c) => c.id === columnId);
   if (index === -1) return null;
+  const column = columns[index];
 
   const run = (fn: () => void) => {
     fn();
@@ -62,6 +65,20 @@ export function DemoColumnHeaderMenu({ tableId, x, y, columns, columnId, onSort,
       <button type="button" className="context-menu-item" onClick={() => run(() => onSort('desc'))}>
         Sort Z → A
       </button>
+      {column.type === 'date' && (
+        <>
+          <div className="context-menu-separator" />
+          <button
+            type="button"
+            className="context-menu-item"
+            onClick={() =>
+              run(() => (column.isNextActionDate ? clearNextActionDateColumn(tableId) : setNextActionDateColumn(tableId, columnId)))
+            }
+          >
+            {column.isNextActionDate ? '✓ Use in Calendar' : 'Use in Calendar'}
+          </button>
+        </>
+      )}
     </ContextMenu>
   );
 }

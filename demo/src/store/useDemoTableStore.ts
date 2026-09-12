@@ -59,6 +59,11 @@ interface DemoTableState {
   insertColumns: (tableId: string, beforeColumnId: string | null, count: number) => void;
   removeColumns: (tableId: string, columnIds: string[]) => void;
   setCellColor: (tableId: string, rowId: string, columnId: string, color: string | null) => void;
+  /** At most one per table, same rule as production's own
+   * isNextActionDate — setting a new one clears any previous one on the
+   * same table. */
+  setNextActionDateColumn: (tableId: string, columnId: string) => void;
+  clearNextActionDateColumn: (tableId: string) => void;
   undo: (tableId: string) => void;
   redo: (tableId: string) => void;
   /** Workspace-screen table management — mirrors production's
@@ -250,6 +255,22 @@ export const useDemoTableStore = create<DemoTableState>((set, get) => {
         return { ...r, colors };
       });
       set({ rowsByTable: { ...get().rowsByTable, [tableId]: rows } });
+    },
+
+    setNextActionDateColumn: (tableId, columnId) => {
+      const table = get().tables.find((t) => t.id === tableId);
+      if (!table) return;
+      snapshot(tableId);
+      const columns = table.columns.map((c) => ({ ...c, isNextActionDate: c.id === columnId }));
+      set({ tables: get().tables.map((t) => (t.id === tableId ? { ...t, columns } : t)) });
+    },
+
+    clearNextActionDateColumn: (tableId) => {
+      const table = get().tables.find((t) => t.id === tableId);
+      if (!table) return;
+      snapshot(tableId);
+      const columns = table.columns.map((c) => (c.isNextActionDate ? { ...c, isNextActionDate: false } : c));
+      set({ tables: get().tables.map((t) => (t.id === tableId ? { ...t, columns } : t)) });
     },
 
     undo: (tableId) => {

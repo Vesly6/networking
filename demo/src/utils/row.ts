@@ -1,6 +1,6 @@
-// Trimmed copy of app/src/utils/row.ts — only getPrimaryLabel/
-// getColumnByType, which is all the demo's grid/toolbar needs (no
-// next-action-date/website-column/linked-contact concepts here).
+// Trimmed copy of app/src/utils/row.ts — getPrimaryLabel/getColumnByType/
+// getNextActionColumn, which is what the demo's grid/toolbar/Calendar tab
+// need (no website-column/linked-contact concepts here).
 import type { Column, Row } from '../types';
 
 export function getPrimaryLabel(row: Row, columns: Column[]): string {
@@ -11,4 +11,8 @@ export function getPrimaryLabel(row: Row, columns: Column[]): string {
 
 export function getColumnByType(columns: Column[], type: Column['type']): Column | undefined {
   return columns.find((c) => c.type === type);
+}
+
+export function getNextActionColumn(columns: Column[]): Column | undefined {
+  return columns.find((c) => c.type === 'date' && c.isNextActionDate);
 }

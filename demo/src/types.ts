@@ -14,6 +14,9 @@ export interface Column {
   options?: string[];
   optionColors?: Record<string, string>;
   isStatusColumn?: boolean;
+  /** At most one per table — the date column the Calendar tab reads from
+   * (see utils/row.ts's getNextActionColumn). */
+  isNextActionDate?: boolean;
   width?: number;
 }
 

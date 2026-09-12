@@ -13,6 +13,12 @@ import { ChevronUp, ChevronDown } from 'lucide-react';
 
 interface DemoTableViewProps {
   table: DemoTable;
+  /** Set by App.tsx when the Calendar tab's "Open in table" jumps here —
+   * scrolls the target row into view and briefly flash-highlights it,
+   * same idea as production's own focusRowId/onFocusHandled plumbing
+   * between Calendar and TableView. */
+  focusRowId?: string | null;
+  onFocusHandled?: () => void;
 }
 
 type SortState = { columnId: string; direction: 'asc' | 'desc' } | null;
@@ -27,7 +33,7 @@ type SortState = { columnId: string; direction: 'asc' | 'desc' } | null;
  * doesn't apply here), multi-cell range selection/copy-paste, and
  * multi-column selection in the header menu (single-column
  * insert/delete/sort only) — see DemoColumnHeaderMenu's own doc comment. */
-export function DemoTableView({ table }: DemoTableViewProps) {
+export function DemoTableView({ table, focusRowId, onFocusHandled }: DemoTableViewProps) {
   const rows = useDemoTableStore((s) => s.rowsByTable[table.id] ?? []);
   const updateCell = useDemoTableStore((s) => s.updateCell);
   const undo = useDemoTableStore((s) => s.undo);
@@ -48,6 +54,8 @@ export function DemoTableView({ table }: DemoTableViewProps) {
   const [selectedRowIds, setSelectedRowIds] = useState<string[]>([]);
   const [columnMenu, setColumnMenu] = useState<{ x: number; y: number; columnId: string } | null>(null);
   const [colorPickerAnchor, setColorPickerAnchor] = useState<HTMLElement | null>(null);
+  const [flashRowId, setFlashRowId] = useState<string | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   const filteredSortedRows = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -117,6 +125,20 @@ export function DemoTableView({ table }: DemoTableViewProps) {
     setColorPickerAnchor(null);
   };
 
+  // Not virtualized (see this component's own doc comment), so a plain
+  // querySelector + scrollIntoView is enough — no need for a virtualizer
+  // API to scroll to an unmounted row the way production's TableView.tsx
+  // needs.
+  useEffect(() => {
+    if (!focusRowId) return;
+    const el = scrollRef.current?.querySelector(`tr[data-row-id="${focusRowId}"]`);
+    el?.scrollIntoView({ block: 'center' });
+    setFlashRowId(focusRowId);
+    onFocusHandled?.();
+    const timeout = setTimeout(() => setFlashRowId(null), 1500);
+    return () => clearTimeout(timeout);
+  }, [focusRowId, onFocusHandled]);
+
   return (
     <div className="demo-table-view">
       <DemoToolbar
@@ -160,7 +182,7 @@ export function DemoTableView({ table }: DemoTableViewProps) {
         </Popover>
       )}
       <DemoFormulaBar tableId={table.id} selection={activeCell} columns={table.columns} rows={rows} />
-      <div className="demo-table-scroll" onClick={() => setColumnMenu(null)}>
+      <div className="demo-table-scroll" ref={scrollRef} onClick={() => setColumnMenu(null)}>
         <table className="demo-sheet">
           <thead>
             <tr>
@@ -184,7 +206,11 @@ export function DemoTableView({ table }: DemoTableViewProps) {
           </thead>
           <tbody>
             {filteredSortedRows.map((row) => (
-              <tr key={row.id} className={selectedRowIds.includes(row.id) ? 'demo-row-selected' : ''}>
+              <tr
+                key={row.id}
+                data-row-id={row.id}
+                className={`${selectedRowIds.includes(row.id) ? 'demo-row-selected' : ''} ${flashRowId === row.id ? 'demo-row-flash' : ''}`}
+              >
                 <td className="demo-td-checkbox">
                   <input type="checkbox" checked={selectedRowIds.includes(row.id)} onChange={() => toggleRowSelected(row.id)} />
                 </td>

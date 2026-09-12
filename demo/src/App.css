@@ -496,6 +496,27 @@ table.demo-sheet {
   background: var(--today-bg, #eaf2ff) !important;
 }
 
+/* Flash-highlight on jump-to-row from Calendar's "Open in table" — same
+   idea as production's row-flash keyframe. A colored cell's own inline
+   background naturally wins over this (table cell backgrounds always
+   paint above the row's, by the CSS table spec), so a colored cell in a
+   flashed row correctly keeps its own color instead of the two fighting
+   over the same pixels — no extra selector scoping needed for that,
+   unlike production's own version, which still uses tr-level zebra/hover
+   the same way this demo does. */
+@keyframes demo-row-flash {
+  0%,
+  100% {
+    background: rgba(47, 111, 237, 0.35);
+  }
+  50% {
+    background: transparent;
+  }
+}
+tr.demo-row-flash {
+  animation: demo-row-flash 0.5s ease-in-out 3;
+}
+
 .demo-td-checkbox {
   text-align: center;
   border-bottom: 1px solid var(--border);
@@ -668,6 +689,169 @@ td.demo-cell select:focus {
   background: transparent;
   padding: 0.1em;
   flex: 0 0 auto;
+}
+
+/* Calendar tab — copied from production's own .calendar-… / .task-… rules. */
+.calendar-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 1rem 1.25rem;
+  overflow: auto;
+}
+.calendar-mode-switch {
+  display: flex;
+  gap: 0.4rem;
+  margin-bottom: 1rem;
+}
+.calendar-mode-switch button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+}
+.task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  max-width: 960px;
+}
+.task-section h3 {
+  font-size: 0.95rem;
+  margin: 0 0 0.5rem;
+}
+.task-section-overdue h3 {
+  color: var(--danger);
+}
+.task-section-empty {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  margin: 0;
+}
+.task-section ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.task-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  font-size: 0.82rem;
+  overflow: hidden;
+}
+.task-section-overdue .task-row {
+  background: var(--overdue-bg);
+  border-color: #f3c8c9;
+}
+.task-row-label {
+  flex: 1 1 auto;
+  min-width: 70px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-row-date {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.task-row-time {
+  flex: 0 0 auto;
+  font-weight: 700;
+  color: var(--accent);
+  white-space: nowrap;
+}
+.task-open {
+  flex: 0 0 auto;
+  font-size: 0.75rem;
+  padding: 0.25em 0.55em;
+  white-space: nowrap;
+}
+.calendar-grid-view {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.calendar-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+.calendar-month-label {
+  min-width: 10rem;
+}
+.calendar-today-btn {
+  margin-left: auto;
+}
+.calendar-weekdays,
+.calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+}
+.calendar-weekday {
+  text-align: center;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  padding: 0.3rem 0;
+}
+.calendar-day {
+  border: 1px solid var(--border);
+  min-height: 96px;
+  min-width: 0;
+  padding: 0.35rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.calendar-day-outside {
+  background: var(--bg-alt);
+  color: var(--text-muted);
+}
+.calendar-day-today {
+  background: var(--today-bg);
+}
+.calendar-day-number {
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+.calendar-day-tasks {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+.calendar-chip {
+  text-align: left;
+  font-size: 0.72rem;
+  padding: 0.15em 0.4em;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  border-radius: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.calendar-chip:hover {
+  background: var(--bg-hover);
+}
+.calendar-chip-time {
+  font-weight: 700;
+  color: var(--accent);
+  margin-right: 0.35em;
+}
+.calendar-chip-more {
+  font-size: 0.7rem;
+  color: var(--text-muted);
 }
 
 .demo-empty-state {
