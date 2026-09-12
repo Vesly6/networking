@@ -388,6 +388,7 @@ export function TableView({
   // entry point is simpler and safer than trying to lock down every field.
   const canOpenColumnMenu = currentUser?.role !== 'worker';
   const addRow = useTableStore((s) => s.addRow);
+  const insertRows = useTableStore((s) => s.insertRows);
   const removeRows = useTableStore((s) => s.removeRows);
   const setRowsHidden = useTableStore((s) => s.setRowsHidden);
   const importCsvRows = useTableStore((s) => s.importCsvRows);
@@ -1668,17 +1669,44 @@ export function TableView({
     const minR = Math.min(anchor.r, focus.r);
     const minC = Math.min(anchor.c, focus.c);
 
+    // How many rows past the end of the current (filtered) view this paste
+    // needs to exist at all — computed once, up front, instead of creating
+    // rows one at a time as the loops below discover they're missing. This
+    // is a real, reported bug fix: rowIdAt used to call addRow() per
+    // missing row, and addRow() fires its own unbatched network request
+    // (PUT /api/rows/:id) — pasting a large block copied from a bigger
+    // table into a smaller/empty one (the exact "copy from one table,
+    // paste into another" workflow) could need thousands of new rows,
+    // firing thousands of near-simultaneous requests at the local server
+    // in one synchronous burst and taking the whole app down with it.
+    // insertRows(null, n) is the same batched, single-PUT-/api/rows
+    // mechanism the row-header "Insert rows" menu item already uses for
+    // the identical reason (see useTableStore.ts's own doc comment on
+    // saveRows needing to be one bulk endpoint, not one row per request).
+    const maxRowIndexNeeded =
+      singleValue !== null && spansMultiple ? Math.max(anchor.r, focus.r) : minR + grid.length - 1;
+    const rowsNeeded = Math.max(0, maxRowIndexNeeded + 1 - filteredSortedRows.length);
+    let newRowIds: string[] = [];
+    if (rowsNeeded > 0) {
+      insertRows(null, rowsNeeded);
+      newRowIds = [...useTableStore.getState().rows]
+        .sort((a, b) => a.order - b.order)
+        .slice(-rowsNeeded)
+        .map((r) => r.id);
+    }
+    let nextNewRowIdx = 0;
     const rowIdAt = (r: number): string => {
       if (r < filteredSortedRows.length) return filteredSortedRows[r].id;
-      return addRow();
+      return newRowIds[nextNewRowIdx++];
     };
 
     const updates: CellUpdate[] = [];
     let skippedColumns = false;
     let skippedLocked = 0;
     // A row index beyond the current table doesn't exist yet — rowIdAt
-    // will create it via addRow(), and a brand-new row's cells are always
-    // empty, so there's nothing to lock there; only an *existing* row's
+    // resolves it to one of the batch-created rows above, and a brand-new
+    // row's cells are always empty, so there's nothing to lock there; only
+    // an *existing* row's
     // *existing* value can ever trigger isCellLockedForWorker. Same rule
     // (and the same real bypass this closes) as the Delete/Backspace
     // handler and clearCellRange above — pasting over a filled append-

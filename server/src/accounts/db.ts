@@ -269,8 +269,27 @@ interface CompanyRow {
   created_at: number;
 }
 
+/** Parses a JSON array column, tolerating a NULL/empty/corrupted value
+ * instead of throwing — a real, reported bug: an unguarded JSON.parse here
+ * (or on users.visible_tabs below) took down the ENTIRE login route with a
+ * generic 500 the moment either string wasn't valid JSON, since this whole
+ * chain runs synchronously inside checkCredentials → userToPublic, with
+ * nothing catching a parse error more specifically than the app-wide
+ * catch-all. Falling back to `[]` keeps a company usable (worst case: it
+ * shows as having no owner-granted features, same as immediately after
+ * registration) instead of locking every one of its users out entirely. */
+function parseJsonArray(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
 function companyFromRow(r: CompanyRow): Company {
-  return { id: r.id, name: r.name, enabledFeatures: JSON.parse(r.enabled_features), createdAt: r.created_at };
+  return { id: r.id, name: r.name, enabledFeatures: parseJsonArray(r.enabled_features), createdAt: r.created_at };
 }
 
 export function getCompany(id: string): Company | null {
@@ -840,7 +859,18 @@ function userFromRow(r: UserRow): User {
     firstName: r.first_name,
     lastName: r.last_name,
     role: r.role as Role,
-    visibleTabs: r.visible_tabs ? JSON.parse(r.visible_tabs) : null,
+    // Same reasoning as parseJsonArray above (see its own doc comment) —
+    // a malformed value here must not crash login, just fall back to null
+    // (== "no restriction beyond the role's own defaults" everywhere this
+    // field is read), same as it already does when the column is empty.
+    visibleTabs: (() => {
+      if (!r.visible_tabs) return null;
+      try {
+        return JSON.parse(r.visible_tabs);
+      } catch {
+        return null;
+      }
+    })(),
     permissions: {
       canDeleteRows: r.can_delete_rows === 1,
       canDeleteColumns: r.can_delete_columns === 1,

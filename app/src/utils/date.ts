@@ -63,11 +63,25 @@ export function isFuture(value: string): boolean {
 export function formatDisplayDate(value: string): string {
   if (!value) return '';
   const [y, m, d] = getDatePart(value).split('-').map(Number);
+  const date = new Date(y, m - 1, d);
+  // A date-type cell's stored value is still just a plain string (see
+  // types.ts's own note: "cell values are strings regardless of column
+  // type"), so nothing stops a paste/CSV-import from putting non-date text
+  // into a date column. That used to reach here as NaN y/m/d, producing an
+  // Invalid Date, and date-fns' format() throws RangeError on that — a
+  // real, reported bug: with no error boundary anywhere in this app, one
+  // bad cell in the "next action date" column crashed the ENTIRE app to a
+  // blank white screen, every single time it tried to render (Calendar's
+  // task list renders every row with a next-action date unconditionally),
+  // not just a broken calendar row. Falling back to the raw value instead
+  // keeps the crash from happening at all, and leaves the bad cell looking
+  // obviously wrong (easy to spot and fix) rather than silently blank.
+  if (Number.isNaN(date.getTime())) return value;
   // Lithuanian long-date order is year-month-day ("2026 m. rugpjūčio 15
   // d."), not English's month-day-year — bolting {locale: lt} onto an
   // English-ordered token string would produce a Lithuanian month name in
   // the wrong word order, so the token string itself changes too.
-  return format(new Date(y, m - 1, d), "yyyy 'm'. MMMM d 'd'.", { locale: lt });
+  return format(date, "yyyy 'm'. MMMM d 'd'.", { locale: lt });
 }
 
 export function nextMonth(date: Date): Date {
