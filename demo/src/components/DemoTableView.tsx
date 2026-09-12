@@ -1,8 +1,13 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { DemoTable } from '../types';
 import { useDemoTableStore } from '../store/useDemoTableStore';
 import { DemoDataCell } from './DemoDataCell';
 import { DemoToolbar } from './DemoToolbar';
+import { DemoFormulaBar } from './DemoFormulaBar';
+import { DemoColumnHeaderMenu } from './DemoColumnHeaderMenu';
+import { Popover } from './Popover';
+import { ColorInput } from './ColorInput';
+import { parseCellRef, formatCellRef } from '../utils/spreadsheet';
 import { ChevronUp, ChevronDown } from 'lucide-react';
 
 interface DemoTableViewProps {
@@ -11,22 +16,34 @@ interface DemoTableViewProps {
 
 type SortState = { columnId: string; direction: 'asc' | 'desc' } | null;
 
+const PRESET_COLORS = ['#fecaca', '#fed7aa', '#fef08a', '#bbf7d0', '#bfdbfe', '#ddd6fe', '#fbcfe8', '#e5e7eb'];
+
 /** A right-sized rebuild of the real TableView.tsx's core spreadsheet
  * interactions (search, sort, single-cell edit, row select+delete,
- * import/export) for the demo's own, much smaller feature scope — no
- * virtualization (row counts here are in the low hundreds, not tens of
- * thousands), no multi-cell range selection/copy-paste, no worker
- * permissions. Every column type click-to-edit follows the exact same
- * DataCell.tsx convention the real app uses (see DemoDataCell). */
+ * import/export, and — as of this pass — the Name Box, Formula Bar,
+ * Undo/Redo, cell color fill, and the right-click column header menu) for
+ * the demo's own, much smaller feature scope. Deliberately still not
+ * ported: virtualization (demo tables are in the low hundreds of rows,
+ * not tens of thousands — production's own reason for virtualizing
+ * doesn't apply here), multi-cell range selection/copy-paste, and
+ * multi-column selection in the header menu (single-column
+ * insert/delete/sort only) — see DemoColumnHeaderMenu's own doc comment. */
 export function DemoTableView({ table }: DemoTableViewProps) {
   const rows = useDemoTableStore((s) => s.rowsByTable[table.id] ?? []);
   const updateCell = useDemoTableStore((s) => s.updateCell);
+  const undo = useDemoTableStore((s) => s.undo);
+  const redo = useDemoTableStore((s) => s.redo);
+  const canUndo = useDemoTableStore((s) => (s.undoStackByTable[table.id]?.length ?? 0) > 0);
+  const canRedo = useDemoTableStore((s) => (s.redoStackByTable[table.id]?.length ?? 0) > 0);
+  const setCellColor = useDemoTableStore((s) => s.setCellColor);
 
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<SortState>(null);
   const [activeCell, setActiveCell] = useState<{ rowId: string; columnId: string } | null>(null);
   const [openContactsRowId, setOpenContactsRowId] = useState<string | null>(null);
   const [selectedRowIds, setSelectedRowIds] = useState<string[]>([]);
+  const [columnMenu, setColumnMenu] = useState<{ x: number; y: number; columnId: string } | null>(null);
+  const [colorPickerAnchor, setColorPickerAnchor] = useState<HTMLElement | null>(null);
 
   const filteredSortedRows = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -60,6 +77,42 @@ export function DemoTableView({ table }: DemoTableViewProps) {
     setSelectedRowIds((prev) => (prev.includes(rowId) ? prev.filter((id) => id !== rowId) : [...prev, rowId]));
   };
 
+  // --- Name Box (Excel's top-left "C13" reference box) — same idea as
+  // production's own (utils/spreadsheet.ts), simplified to a single-cell
+  // jump rather than a full A1:D10 range, since this demo has no
+  // multi-cell range-selection system to jump a *range* into. ---
+  const [nameBoxDraft, setNameBoxDraft] = useState('');
+  const nameBoxFocusedRef = useRef(false);
+  useEffect(() => {
+    if (nameBoxFocusedRef.current) return;
+    if (!activeCell) {
+      setNameBoxDraft('');
+      return;
+    }
+    const r = filteredSortedRows.findIndex((row) => row.id === activeCell.rowId);
+    const c = table.columns.findIndex((col) => col.id === activeCell.columnId);
+    setNameBoxDraft(r !== -1 && c !== -1 ? formatCellRef({ r, c }) : '');
+  }, [activeCell, filteredSortedRows, table.columns]);
+
+  const submitNameBox = () => {
+    const parsed = parseCellRef(nameBoxDraft);
+    if (!parsed || table.columns.length === 0) {
+      setNameBoxDraft(activeCell ? nameBoxDraft : '');
+      return;
+    }
+    const r = Math.min(Math.max(0, parsed.r), Math.max(0, filteredSortedRows.length - 1));
+    const c = Math.min(Math.max(0, parsed.c), Math.max(0, table.columns.length - 1));
+    const row = filteredSortedRows[r];
+    const col = table.columns[c];
+    if (row && col) setActiveCell({ rowId: row.id, columnId: col.id });
+  };
+
+  const applyColor = (color: string | null) => {
+    if (!activeCell) return;
+    setCellColor(table.id, activeCell.rowId, activeCell.columnId, color);
+    setColorPickerAnchor(null);
+  };
+
   return (
     <div className="demo-table-view">
       <DemoToolbar
@@ -71,14 +124,54 @@ export function DemoTableView({ table }: DemoTableViewProps) {
         onQueryChange={setQuery}
         selectedRowIds={selectedRowIds}
         onClearSelection={() => setSelectedRowIds([])}
+        nameBoxValue={nameBoxDraft}
+        onNameBoxChange={setNameBoxDraft}
+        onNameBoxFocus={() => (nameBoxFocusedRef.current = true)}
+        onNameBoxBlur={() => {
+          nameBoxFocusedRef.current = false;
+          submitNameBox();
+        }}
+        canUndo={canUndo}
+        canRedo={canRedo}
+        onUndo={() => undo(table.id)}
+        onRedo={() => redo(table.id)}
+        colorDisabled={!activeCell}
+        onOpenColorPicker={(anchor) => setColorPickerAnchor((prev) => (prev ? null : anchor))}
       />
-      <div className="demo-table-scroll">
+      {colorPickerAnchor && (
+        <Popover anchor={colorPickerAnchor} width={200}>
+          <div className="color-palette-label">Fill color</div>
+          <div className="color-palette">
+            {PRESET_COLORS.map((c) => (
+              <button key={c} type="button" className="color-swatch" style={{ background: c }} onClick={() => applyColor(c)} />
+            ))}
+            <label className="color-swatch color-swatch-custom" title="Custom color">
+              +
+              <ColorInput onCommit={applyColor} />
+            </label>
+          </div>
+          <button type="button" className="color-clear-btn" onClick={() => applyColor(null)}>
+            Clear color
+          </button>
+        </Popover>
+      )}
+      <DemoFormulaBar tableId={table.id} selection={activeCell} columns={table.columns} rows={rows} />
+      <div className="demo-table-scroll" onClick={() => setColumnMenu(null)}>
         <table className="demo-sheet">
           <thead>
             <tr>
               <th className="demo-th-checkbox" />
               {table.columns.map((col) => (
-                <th key={col.id} onClick={() => toggleSort(col.id)} className="demo-th-sortable">
+                <th
+                  key={col.id}
+                  onClick={() => toggleSort(col.id)}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setColumnMenu({ x: e.clientX, y: e.clientY, columnId: col.id });
+                  }}
+                  className="demo-th-sortable"
+                >
                   <span>{col.name}</span>
                   {sort?.columnId === col.id && (sort.direction === 'asc' ? <ChevronUp size={12} /> : <ChevronDown size={12} />)}
                 </th>
@@ -114,7 +207,12 @@ export function DemoTableView({ table }: DemoTableViewProps) {
                     }}
                     onCommit={(value) => {
                       updateCell(table.id, row.id, col.id, value);
-                      setActiveCell(null);
+                      // Deliberately does NOT clear activeCell — matches
+                      // production's own model (a cell stays the
+                      // selection, and the Formula Bar keeps reflecting
+                      // it, until a *different* cell is clicked), rather
+                      // than snapping back to "nothing selected" on every
+                      // Enter/blur.
                     }}
                     onOpenContacts={() => setOpenContactsRowId(row.id)}
                     contactsOpen={openContactsRowId === row.id}
@@ -133,6 +231,17 @@ export function DemoTableView({ table }: DemoTableViewProps) {
           </tbody>
         </table>
       </div>
+      {columnMenu && (
+        <DemoColumnHeaderMenu
+          tableId={table.id}
+          x={columnMenu.x}
+          y={columnMenu.y}
+          columns={table.columns}
+          columnId={columnMenu.columnId}
+          onSort={(direction) => setSort({ columnId: columnMenu.columnId, direction })}
+          onClose={() => setColumnMenu(null)}
+        />
+      )}
     </div>
   );
 }

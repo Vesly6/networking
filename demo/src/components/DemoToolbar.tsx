@@ -5,7 +5,7 @@ import { randomUUID } from '../utils/uuid';
 import { useDemoTableStore } from '../store/useDemoTableStore';
 import { useToastStore } from '../store/useToastStore';
 import { confirmDialog } from '../store/useConfirmStore';
-import { Search, Plus, Trash2, Upload, Download } from 'lucide-react';
+import { Search, Plus, Trash2, Upload, Download, Undo2, Redo2 } from 'lucide-react';
 
 interface DemoToolbarProps {
   tableId: string;
@@ -16,6 +16,16 @@ interface DemoToolbarProps {
   onQueryChange: (q: string) => void;
   selectedRowIds: string[];
   onClearSelection: () => void;
+  nameBoxValue: string;
+  onNameBoxChange: (v: string) => void;
+  onNameBoxFocus: () => void;
+  onNameBoxBlur: () => void;
+  canUndo: boolean;
+  canRedo: boolean;
+  onUndo: () => void;
+  onRedo: () => void;
+  colorDisabled: boolean;
+  onOpenColorPicker: (anchor: HTMLElement) => void;
 }
 
 /** Search/add-row/delete-selected/import/export — all client-side, all
@@ -28,7 +38,26 @@ interface DemoToolbarProps {
  * corrupting a real column's data. Every action now gives the same kind
  * of feedback production does — a toast, and (for the one destructive
  * action here) a confirm step first. */
-export function DemoToolbar({ tableId, tableName, columns, rows, query, onQueryChange, selectedRowIds, onClearSelection }: DemoToolbarProps) {
+export function DemoToolbar({
+  tableId,
+  tableName,
+  columns,
+  rows,
+  query,
+  onQueryChange,
+  selectedRowIds,
+  onClearSelection,
+  nameBoxValue,
+  onNameBoxChange,
+  onNameBoxFocus,
+  onNameBoxBlur,
+  canUndo,
+  canRedo,
+  onUndo,
+  onRedo,
+  colorDisabled,
+  onOpenColorPicker,
+}: DemoToolbarProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const addRow = useDemoTableStore((s) => s.addRow);
   const removeRows = useDemoTableStore((s) => s.removeRows);
@@ -81,10 +110,38 @@ export function DemoToolbar({ tableId, tableName, columns, rows, query, onQueryC
 
   return (
     <div className="demo-toolbar">
+      <input
+        className="name-box"
+        value={nameBoxValue}
+        onChange={(e) => onNameBoxChange(e.target.value)}
+        onFocus={onNameBoxFocus}
+        onBlur={onNameBoxBlur}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') e.currentTarget.blur();
+        }}
+        placeholder="A1"
+        title="Type a cell reference (e.g. C13) and press Enter"
+      />
       <div className="demo-toolbar-search">
         <Search size={14} />
         <input placeholder="Search…" value={query} onChange={(e) => onQueryChange(e.target.value)} />
       </div>
+      <button type="button" title="Undo" disabled={!canUndo} onClick={onUndo}>
+        <Undo2 size={14} />
+      </button>
+      <button type="button" title="Redo" disabled={!canRedo} onClick={onRedo}>
+        <Redo2 size={14} />
+      </button>
+      <button
+        type="button"
+        disabled={colorDisabled}
+        onClick={(e) => {
+          e.stopPropagation();
+          onOpenColorPicker(e.currentTarget);
+        }}
+      >
+        Color
+      </button>
       <button
         type="button"
         onClick={() => {

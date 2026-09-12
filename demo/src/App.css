@@ -273,6 +273,152 @@
   min-width: 160px;
 }
 
+/* Name Box — copied from production's own .name-box rule. */
+.name-box {
+  width: 5.5em;
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Formula Bar — copied from production's own .formula-bar* rules. */
+.formula-bar {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.4rem 1rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-alt);
+  font-size: 0.85rem;
+  min-height: 4.5rem;
+}
+.formula-bar-label {
+  flex: 0 0 auto;
+  font-weight: 600;
+  padding-top: 0.35em;
+  white-space: nowrap;
+}
+.formula-bar-row {
+  font-weight: 400;
+  color: var(--text-muted);
+}
+.formula-bar-hint {
+  color: var(--text-muted);
+  padding-top: 0.35em;
+}
+.formula-bar-input {
+  flex: 1;
+  resize: vertical;
+  min-height: 4.5em;
+  max-height: 8em;
+}
+.formula-bar-value {
+  flex: 1;
+  padding-top: 0.35em;
+  color: var(--text-muted);
+}
+
+/* Anchored popover (color picker) — copied from production's own
+   .popover rule, distinct from the centered .modal used for confirm
+   dialogs/CSV mapping. */
+.popover {
+  position: fixed;
+  z-index: 20;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  text-align: left;
+  font-weight: 400;
+  max-height: calc(100vh - 16px);
+  max-height: calc(100dvh - 16px);
+  overflow-y: auto;
+}
+
+/* Right-click column header menu — copied from production's own
+   .context-menu* rules. */
+.context-menu {
+  z-index: 20;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  padding: 0.3rem;
+  display: flex;
+  flex-direction: column;
+  min-width: 190px;
+}
+.context-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  padding: 0.4em 0.6em;
+  border-radius: 5px;
+  font-size: 0.85rem;
+  color: var(--text);
+}
+.context-menu-item:hover {
+  background: var(--bg-hover);
+}
+.context-menu-danger {
+  color: var(--danger);
+}
+.context-menu-separator {
+  height: 1px;
+  background: var(--border);
+  margin: 0.3rem 0.2rem;
+}
+
+/* Color-fill palette — copied from production's own .color-palette /
+   .color-swatch* rules. */
+.color-palette-label {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+.color-palette {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 0.35rem;
+}
+.color-swatch {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  border: 1px solid var(--border-strong);
+  padding: 0;
+  cursor: pointer;
+}
+.color-swatch:hover {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.color-swatch-custom {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-alt);
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  position: relative;
+  overflow: hidden;
+}
+.color-swatch-custom input[type='color'] {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+  width: 100%;
+  height: 100%;
+}
+.color-clear-btn {
+  font-size: 0.8rem;
+}
+
 .demo-table-scroll {
   flex: 1;
   min-height: 0;

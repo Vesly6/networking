@@ -1,8 +1,9 @@
-import { useEffect, useState, type MouseEvent as ReactMouseEvent } from 'react';
+import { useEffect, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react';
 import type { Column, Row } from '../types';
 import { parseContacts, addContact, removeContact, getContactsSummary } from '../utils/contacts';
 import { highlightMatches } from '../utils/highlight';
 import { ensureProtocol } from '../utils/link';
+import { contrastTextColor } from '../utils/color';
 import { confirmDialog } from '../store/useConfirmStore';
 import { X, ExternalLink, Search } from 'lucide-react';
 
@@ -41,31 +42,50 @@ export function DemoDataCell({
   const [draft, setDraft] = useState(value);
   const [newContactText, setNewContactText] = useState('');
 
-  // Re-sync the draft to the current stored value each time this cell
-  // becomes editable — the input is only mounted while `editable` is
-  // true, but the surrounding <td>/button stay mounted the rest of the
-  // time, so `draft`'s initial useState value would otherwise go stale
-  // after a first edit-and-cancel cycle.
+  // Cell fill color (🎨 Color tool) — same "inline style wins over both
+  // the :focus rule and the option's own badge color logic" approach as
+  // production's DataCell.tsx, including applying it to the <input> too
+  // (see this component's editable branch below), not just the <td> —
+  // production's own doc comment on this exact class of bug explains why
+  // that second application matters: a colored cell visibly loses its
+  // color the moment it's clicked into edit mode otherwise.
+  const color = row.colors?.[column.id];
+  const cellStyle: CSSProperties | undefined = color ? { backgroundColor: color, color: contrastTextColor(color) } : undefined;
+
+  // Re-sync the draft to the current stored value whenever it changes —
+  // matches production's own DataCell.tsx exactly (dependency on
+  // `value`, not `editable`). This has to fire on *any* external change,
+  // not just "the cell just became editable": since a selected cell now
+  // stays editable/mounted as an <input> even after committing (its
+  // activeCell doesn't get cleared on commit — see DemoTableView's own
+  // onCommit), an Undo/Redo affecting this exact cell while it's still
+  // selected has to visibly update the input's value too. Keying this off
+  // `editable` alone (the original version, before Undo/Redo existed)
+  // missed exactly that case: the effect only re-ran when editable
+  // flipped false→true, never while it stayed continuously true.
   useEffect(() => {
-    if (editable) setDraft(value);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editable]);
+    setDraft(value);
+  }, [value]);
 
   if (column.type === 'dropdown') {
-    const color = column.optionColors?.[value];
+    const optionColor = value ? column.optionColors?.[value] : undefined;
+    const selectColor = optionColor ?? color;
     return (
-      <td className={`demo-cell demo-cell-dropdown`}>
+      <td className="demo-cell demo-cell-dropdown" style={cellStyle}>
         <select
           value={value}
-          style={color ? { backgroundColor: color } : undefined}
+          style={selectColor ? { backgroundColor: selectColor, color: contrastTextColor(selectColor) } : undefined}
           onChange={(e) => onCommit(e.target.value)}
         >
           <option value="">—</option>
-          {(column.options ?? []).map((opt) => (
-            <option key={opt} value={opt}>
-              {opt}
-            </option>
-          ))}
+          {(column.options ?? []).map((opt) => {
+            const optColor = column.optionColors?.[opt];
+            return (
+              <option key={opt} value={opt} style={optColor ? { backgroundColor: optColor, color: contrastTextColor(optColor) } : undefined}>
+                {opt}
+              </option>
+            );
+          })}
         </select>
       </td>
     );
@@ -73,8 +93,8 @@ export function DemoDataCell({
 
   if (column.type === 'date') {
     return (
-      <td className="demo-cell">
-        <input type="date" value={value} onChange={(e) => onCommit(e.target.value)} />
+      <td className="demo-cell" style={cellStyle}>
+        <input type="date" value={value} onChange={(e) => onCommit(e.target.value)} style={cellStyle} />
       </td>
     );
   }
@@ -86,7 +106,7 @@ export function DemoDataCell({
       if (ok) onCommit(removeContact(value, id));
     };
     return (
-      <td className="demo-cell demo-cell-contact" onMouseDown={onSelect}>
+      <td className="demo-cell demo-cell-contact" style={cellStyle} onMouseDown={onSelect}>
         <button type="button" className="demo-cell-preview demo-cell-preview-hoverable" tabIndex={-1} onClick={onOpenContacts}>
           {getContactsSummary(value) ? highlightMatches(getContactsSummary(value), highlightQuery) : <span className="demo-cell-empty">+ add contact</span>}
         </button>
@@ -139,11 +159,12 @@ export function DemoDataCell({
 
   if (editable) {
     return (
-      <td className="demo-cell">
+      <td className="demo-cell" style={cellStyle}>
         <input
           autoFocus
           type={column.type === 'phone' ? 'tel' : column.type === 'link' ? 'url' : 'text'}
           value={draft}
+          style={cellStyle}
           onChange={(e) => setDraft(e.target.value)}
           onBlur={() => onCommit(draft)}
           onKeyDown={(e) => {
@@ -163,7 +184,7 @@ export function DemoDataCell({
   if (column.type === 'link') {
     const href = value ? ensureProtocol(value) : null;
     return (
-      <td className="demo-cell" onMouseDown={onSelect}>
+      <td className="demo-cell" style={cellStyle} onMouseDown={onSelect}>
         <div className="demo-cell-link-inner">
           <button type="button" className="demo-cell-preview demo-cell-preview-hoverable" tabIndex={-1}>
             {value ? highlightMatches(value, highlightQuery) : <span className="demo-cell-empty">—</span>}
@@ -193,7 +214,7 @@ export function DemoDataCell({
     const query = value.trim();
     const searchHref = query ? `https://www.google.com/search?q=${encodeURIComponent(query)}` : null;
     return (
-      <td className="demo-cell" onMouseDown={onSelect}>
+      <td className="demo-cell" style={cellStyle} onMouseDown={onSelect}>
         <div className="demo-cell-link-inner">
           <button type="button" className="demo-cell-preview demo-cell-preview-hoverable" tabIndex={-1}>
             {value ? highlightMatches(value, highlightQuery) : <span className="demo-cell-empty">—</span>}
@@ -217,7 +238,7 @@ export function DemoDataCell({
   }
 
   return (
-    <td className="demo-cell" onMouseDown={onSelect}>
+    <td className="demo-cell" style={cellStyle} onMouseDown={onSelect}>
       {/* tabIndex={-1} matters, not just for tab-order tidiness: without
           it, the browser's own default mousedown-focus behavior for a
           <button> races against React's synchronous re-render (this
