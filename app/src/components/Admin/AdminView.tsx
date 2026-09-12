@@ -1,15 +1,25 @@
 import { useEffect, useState } from 'react';
-import { fetchCompanies, fetchCompanyFeatures, saveCompanyFeatures, fetchLoginLog, type AdminCompany, type LoginLogEntry } from '../../utils/adminApi';
+import {
+  fetchCompanies,
+  fetchCompanyFeatures,
+  saveCompanyFeatures,
+  fetchLoginLog,
+  fetchCompanySuperAdmin,
+  updateCompanySuperAdmin,
+  type AdminCompany,
+  type LoginLogEntry,
+} from '../../utils/adminApi';
 import { fetchAllBackups, fetchBackupCsv, deleteBackup, restoreBackup, type BackupSummary } from '../../utils/backupsApi';
 import { downloadCsv } from '../../utils/csv';
 import { confirmDialog } from '../../store/useConfirmStore';
 import { useToastStore } from '../../store/useToastStore';
 import { useWorkspaceStore } from '../../store/useWorkspaceStore';
+import type { Worker } from '../../store/useWorkersStore';
 import { WorkersView } from '../Workers/WorkersView';
 import { IntegrationsView } from '../Integrations/IntegrationsView';
 import { formatHistoryTimestamp } from '../../utils/date';
 import { TAB_LABELS, ALL_TABS, workerGrantableTabs } from '../../utils/tabLabels';
-import { Building2, Users, Key, ToggleLeft, Archive, History as HistoryIcon, ArrowLeft, Download, Trash2, RotateCcw } from 'lucide-react';
+import { Building2, Users, Key, ToggleLeft, Archive, History as HistoryIcon, ArrowLeft, Download, Trash2, RotateCcw, UserCog } from 'lucide-react';
 
 // Mirrors server/src/accounts/db.ts's ALWAYS_ON_FEATURES exactly — these
 // two can never be turned off, so the Funkcijos checkbox list omits them
@@ -19,7 +29,7 @@ const CORE_FEATURES = new Set(['table', 'calendar']);
 const ROLE_LABELS: Record<string, string> = { super_admin: 'Administratorius', worker: 'Darbuotojas' };
 
 type TopSection = 'companies' | 'backups' | 'login-log';
-type CompanyPanel = 'workers' | 'integrations' | 'features';
+type CompanyPanel = 'super-admin' | 'workers' | 'integrations' | 'features';
 
 function FeaturesPanel({ companyId }: { companyId: string }) {
   const [features, setFeatures] = useState<string[] | null>(null);
@@ -63,6 +73,97 @@ function FeaturesPanel({ companyId }: { companyId: string }) {
           </label>
         ))}
       </div>
+      <button type="button" className="primary" disabled={saving} onClick={() => void handleSave()}>
+        {saving ? 'Saugoma…' : 'Išsaugoti'}
+      </button>
+    </div>
+  );
+}
+
+/** View/edit a company's own super_admin account — the one account
+ * WorkersView (Darbuotojai) never reaches, since its whole store/API
+ * surface is hardcoded to role='worker' (see
+ * server/src/accounts/db.ts's listWorkers/updateWorker doc comments).
+ * Added on explicit request: a company's super_admin had no recovery
+ * path of their own if a password was forgotten — a super_admin can
+ * already reset a *worker's* forgotten password, but nothing could reset
+ * a super_admin's own until this. Username/name are always-visible plain
+ * inputs (not a separate view/edit toggle) since there's only four fields
+ * total and nothing here is sensitive to display; password is the one
+ * field that's write-only (never fetched/shown), matching how every
+ * other password field in this app works. */
+function SuperAdminAccountPanel({ companyId }: { companyId: string }) {
+  const [account, setAccount] = useState<Worker | null>(null);
+  const [username, setUsername] = useState('');
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [saving, setSaving] = useState(false);
+  const showToast = useToastStore((s) => s.show);
+
+  useEffect(() => {
+    setAccount(null);
+    setNewPassword('');
+    void fetchCompanySuperAdmin(companyId).then((w) => {
+      setAccount(w);
+      setUsername(w.username);
+      setFirstName(w.firstName);
+      setLastName(w.lastName);
+    });
+  }, [companyId]);
+
+  const handleSave = async () => {
+    if (!username.trim() || !firstName.trim()) {
+      showToast('Užpildykite vartotojo vardą ir vardą');
+      return;
+    }
+    setSaving(true);
+    try {
+      const updated = await updateCompanySuperAdmin(companyId, {
+        username: username.trim(),
+        firstName: firstName.trim(),
+        lastName: lastName.trim(),
+        password: newPassword || undefined,
+      });
+      setAccount(updated);
+      setUsername(updated.username);
+      setFirstName(updated.firstName);
+      setLastName(updated.lastName);
+      setNewPassword('');
+      showToast('Išsaugota');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Nepavyko išsaugoti');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!account) return <p>Kraunama…</p>;
+
+  return (
+    <div className="admin-super-admin-panel">
+      <label className="popover-field">
+        <span>Vartotojo vardas</span>
+        <input value={username} onChange={(e) => setUsername(e.target.value)} />
+      </label>
+      <label className="popover-field">
+        <span>Vardas</span>
+        <input value={firstName} onChange={(e) => setFirstName(e.target.value)} />
+      </label>
+      <label className="popover-field">
+        <span>Pavardė</span>
+        <input value={lastName} onChange={(e) => setLastName(e.target.value)} />
+      </label>
+      <label className="popover-field">
+        <span>Naujas slaptažodis</span>
+        <input
+          type="password"
+          value={newPassword}
+          onChange={(e) => setNewPassword(e.target.value)}
+          autoComplete="new-password"
+          placeholder="Palikite tuščią, jei nekeičiate"
+        />
+      </label>
       <button type="button" className="primary" disabled={saving} onClick={() => void handleSave()}>
         {saving ? 'Saugoma…' : 'Išsaugoti'}
       </button>
@@ -218,6 +319,9 @@ export function AdminView() {
           <h2>{selectedCompany.name}</h2>
         </div>
         <nav className="linkedin-subnav">
+          <button type="button" className={companyPanel === 'super-admin' ? 'active' : ''} onClick={() => setCompanyPanel('super-admin')}>
+            <UserCog className="icon" size={16} /> Administratorius
+          </button>
           <button type="button" className={companyPanel === 'workers' ? 'active' : ''} onClick={() => setCompanyPanel('workers')}>
             <Users className="icon" size={16} /> Darbuotojai
           </button>
@@ -228,6 +332,7 @@ export function AdminView() {
             <ToggleLeft className="icon" size={16} /> Funkcijos
           </button>
         </nav>
+        {companyPanel === 'super-admin' && <SuperAdminAccountPanel companyId={selectedCompany.id} />}
         {companyPanel === 'workers' && (
           <WorkersView companyId={selectedCompany.id} companyTabs={workerGrantableTabs(selectedCompany.enabledFeatures)} />
         )}

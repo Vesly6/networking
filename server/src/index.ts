@@ -17,6 +17,8 @@ import {
   listWorkers,
   updateWorker,
   deleteWorker,
+  getCompanySuperAdmin,
+  updateCompanySuperAdmin,
   getCompanyIntegrations,
   upsertCompanyIntegrations,
   clearCompanyIntegrationField,
@@ -906,6 +908,67 @@ app.delete(
   asyncHandler(async (req, res) => {
     deleteWorker(req.params.userId, req.params.id);
     res.json({ ok: true });
+  }),
+);
+
+// The one account listWorkers/updateWorker/deleteWorker above deliberately
+// never touch (all hardcoded to role = 'worker') — see
+// getCompanySuperAdmin/updateCompanySuperAdmin's own doc comments for why
+// this needed its own pair of routes: a company's super_admin had no
+// password-recovery path of their own until now.
+app.get(
+  '/api/admin/companies/:id/super-admin',
+  requireSuperAdmin,
+  asyncHandler(async (req, res) => {
+    const owner = getCompanySuperAdmin(req.params.id);
+    if (!owner) {
+      res.status(404).json({ error: 'Super admin not found' });
+      return;
+    }
+    res.json(workerToPublic(owner));
+  }),
+);
+
+app.patch(
+  '/api/admin/companies/:id/super-admin',
+  requireSuperAdmin,
+  asyncHandler(async (req, res) => {
+    const { username, password, firstName, lastName } = req.body ?? {};
+    if (username !== undefined && (typeof username !== 'string' || !username.trim())) {
+      res.status(400).json({ error: 'Vartotojo vardas negali būti tuščias' });
+      return;
+    }
+    if (password !== undefined && (typeof password !== 'string' || !password)) {
+      res.status(400).json({ error: 'Slaptažodis negali būti tuščias' });
+      return;
+    }
+    if (firstName !== undefined && (typeof firstName !== 'string' || !firstName.trim())) {
+      res.status(400).json({ error: 'Vardas negali būti tuščias' });
+      return;
+    }
+    // Uniqueness check mirrors POST /api/admin/companies/:id/workers'
+    // own — usernames are unique across the whole platform, not just
+    // within a company, so this has to check globally.
+    if (typeof username === 'string') {
+      const trimmed = username.trim();
+      const existing = getUserByUsername(trimmed);
+      const current = getCompanySuperAdmin(req.params.id);
+      if (existing && existing.id !== current?.id) {
+        res.status(400).json({ error: 'Toks vartotojo vardas jau užimtas' });
+        return;
+      }
+    }
+    const owner = updateCompanySuperAdmin(req.params.id, {
+      username: typeof username === 'string' ? username : undefined,
+      password: typeof password === 'string' ? password : undefined,
+      firstName: typeof firstName === 'string' ? firstName : undefined,
+      lastName: typeof lastName === 'string' ? lastName : undefined,
+    });
+    if (!owner) {
+      res.status(404).json({ error: 'Super admin not found' });
+      return;
+    }
+    res.json(workerToPublic(owner));
   }),
 );
 

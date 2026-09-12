@@ -1133,6 +1133,38 @@ export function deleteWorker(userId: string, companyId: string): void {
   getDb().prepare(`DELETE FROM users WHERE id = ? AND company_id = ? AND role = 'worker'`).run(userId, companyId);
 }
 
+export interface UpdateSuperAdminInput {
+  username?: string;
+  password?: string;
+  firstName?: string;
+  lastName?: string;
+}
+
+/** Platform-admin-only counterpart to updateWorker above, for the account
+ * that function's own role='worker' scoping deliberately excludes. A
+ * company's super_admin had no recovery path of their own until this: a
+ * super_admin can already reset a forgotten *worker* password (see
+ * updateWorker's doc comment), but nothing could reset a super_admin's
+ * own — same "no email on file, no recovery question" gap, one level up.
+ * Only username/password/name are editable here — never role or
+ * companyId, and never more than the one super_admin row a company
+ * actually has. */
+export function updateCompanySuperAdmin(companyId: string, input: UpdateSuperAdminInput): User | null {
+  const database = getDb();
+  const existing = database.prepare(`SELECT * FROM users WHERE company_id = ? AND role = 'super_admin' LIMIT 1`).get(companyId) as
+    | UserRow
+    | undefined;
+  if (!existing) return null;
+  const nextUsername = input.username !== undefined && input.username.trim() ? input.username.trim() : existing.username;
+  const nextFirstName = input.firstName !== undefined && input.firstName.trim() ? input.firstName.trim() : existing.first_name;
+  const nextLastName = input.lastName !== undefined ? input.lastName.trim() : existing.last_name;
+  const nextPasswordHash = input.password ? hashPassword(input.password) : existing.password_hash;
+  database
+    .prepare(`UPDATE users SET username = ?, first_name = ?, last_name = ?, password_hash = ? WHERE id = ? AND company_id = ?`)
+    .run(nextUsername, nextFirstName, nextLastName, nextPasswordHash, existing.id, companyId);
+  return getUserById(existing.id);
+}
+
 // --- Login history (owner's Admin dashboard) --------------------------
 
 export interface LoginLogEntry {

@@ -4020,6 +4020,13 @@ tr.row-drop-end td {
   gap: 0.8rem;
 }
 
+.admin-super-admin-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+  max-width: 24rem;
+}
+
 .admin-backups-table {
   width: 100%;
   border-collapse: collapse;
