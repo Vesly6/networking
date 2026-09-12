@@ -1,39 +1,96 @@
+import { useState } from 'react';
 import { useDemoTableStore } from './store/useDemoTableStore';
 import { DemoTableView } from './components/DemoTableView';
 import { DemoToast } from './components/DemoToast';
 import { DemoConfirmDialog } from './components/DemoConfirmDialog';
-import { DemoLogo } from './components/DemoLogo';
+import { DemoWorkspaceView } from './components/DemoWorkspaceView';
 import { ThemeToggle } from './components/ThemeToggle';
+import { BrandIcon } from './components/BrandIcon';
+import { ArrowLeft } from 'lucide-react';
 import './App.css';
+
+type Screen = 'workspace' | 'table';
 
 /** The demo's entire shell — no login screen, no route guard, no
  * workspace-load spinner: useDemoTableStore's seed data is already
  * synchronously available the instant this module runs (see that
- * store's own doc comment), so there is nothing to wait for. A visitor
- * gets a fully interactive table the moment the page paints.
+ * store's own doc comment), so there is nothing to wait for.
  *
- * Layout deliberately mirrors production's own chrome — a header with
- * the real IRMS logo, and an Excel-style tab strip along the *bottom*
- * (production's SheetTabs) rather than a generic top nav — since the
- * whole point of this demo is that it should look like the real product
- * on first glance, not a bespoke mini-app. */
+ * Two screens, mirroring production's own App.tsx/WorkspaceView.tsx
+ * split: a Workspace home screen (table list, create/rename/delete) a
+ * visitor lands on first — matching the real "I open the app and see my
+ * tables" flow the parity audit flagged as entirely missing — and the
+ * table screen itself, reached by opening a card. `screen` starts at
+ * 'workspace' rather than dropping straight into a table, for the same
+ * reason. */
 export default function App() {
+  const [screen, setScreen] = useState<Screen>('workspace');
   const tables = useDemoTableStore((s) => s.tables);
   const activeTableId = useDemoTableStore((s) => s.activeTableId);
   const setActiveTable = useDemoTableStore((s) => s.setActiveTable);
-  const activeTable = tables.find((t) => t.id === activeTableId) ?? tables[0];
+  const renameTable = useDemoTableStore((s) => s.renameTable);
+  const activeTable = tables.find((t) => t.id === activeTableId);
+
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState('');
+
+  const openTable = (id: string) => {
+    setActiveTable(id);
+    setScreen('table');
+  };
+
+  if (screen === 'workspace' || !activeTable) {
+    return (
+      <div className="demo-app">
+        <DemoWorkspaceView onOpenTable={openTable} />
+        <DemoToast />
+        <DemoConfirmDialog />
+      </div>
+    );
+  }
 
   return (
     <div className="demo-app">
       <header className="demo-header">
         <div className="demo-brand">
-          <DemoLogo />
+          <BrandIcon />
         </div>
-        <ThemeToggle />
+        <button type="button" className="back-to-workspace" onClick={() => setScreen('workspace')}>
+          <ArrowLeft size={16} /> Workspace
+        </button>
+        {editingTitle ? (
+          <input
+            autoFocus
+            className="table-title-input"
+            value={titleDraft}
+            onChange={(e) => setTitleDraft(e.target.value)}
+            onBlur={() => {
+              renameTable(activeTable.id, titleDraft);
+              setEditingTitle(false);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') e.currentTarget.blur();
+              if (e.key === 'Escape') setEditingTitle(false);
+            }}
+          />
+        ) : (
+          <h1
+            className="table-title"
+            title="Click to rename"
+            onClick={() => {
+              setTitleDraft(activeTable.name);
+              setEditingTitle(true);
+            }}
+          >
+            {activeTable.name}
+          </h1>
+        )}
         <span className="demo-header-badge">Live Demo</span>
-        {activeTable && <h1 className="demo-table-title">{activeTable.name}</h1>}
+        <ThemeToggle />
       </header>
-      <main className="demo-main">{activeTable && <DemoTableView key={activeTable.id} table={activeTable} />}</main>
+      <main className="demo-main">
+        <DemoTableView key={activeTable.id} table={activeTable} />
+      </main>
       <div className="demo-sheet-tabs-bar">
         <div className="demo-sheet-tabs">
           {tables.map((t) => (

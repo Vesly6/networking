@@ -11,6 +11,140 @@
   height: 100%;
 }
 
+/* Workspace home screen — copied from production's own .workspace-view/
+   .workspace-header/.table-cards/.table-card* rules in app/src/App.css,
+   values unchanged. */
+.workspace-view {
+  flex: 1;
+  overflow: auto;
+  padding: 1.5rem 2rem;
+  max-width: 960px;
+  margin: 0 auto;
+  width: 100%;
+}
+.workspace-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1.5rem;
+}
+.workspace-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+@media (max-width: 640px) {
+  .workspace-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.75rem;
+  }
+  .workspace-header-actions {
+    flex-wrap: wrap;
+  }
+  .workspace-header-actions button {
+    flex: 1 1 auto;
+    min-width: 8em;
+  }
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+.brand-logo {
+  width: 40px;
+  height: 40px;
+  object-fit: contain;
+}
+.table-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 1rem;
+}
+.table-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1rem;
+  background: var(--bg);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.table-card:hover {
+  border-color: var(--accent);
+  box-shadow: var(--shadow);
+}
+.table-card-name {
+  font-weight: 700;
+  font-size: 1rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.table-card-name-input {
+  font-weight: 700;
+  font-size: 1rem;
+  width: 100%;
+}
+.table-card-meta {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+.table-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: auto;
+  padding-top: 0.4rem;
+}
+.table-card-actions button {
+  font-size: 0.78rem;
+  padding: 0.3em 0.6em;
+}
+.empty-state {
+  padding: 2.5rem 1rem;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+/* Table screen header — copied from production's .app-header/
+   .back-to-workspace/.table-title rules. */
+.back-to-workspace {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  white-space: nowrap;
+  padding: 0.4em 0.5em;
+}
+.back-to-workspace:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.table-title {
+  font-size: 1.05rem;
+  font-weight: 700;
+  margin: 0;
+  white-space: nowrap;
+  cursor: pointer;
+  padding: 0.25em 0.4em;
+  border-radius: 6px;
+  max-width: 30vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.table-title:hover {
+  background: var(--bg-hover);
+}
+.table-title-input {
+  font-size: 1.05rem;
+  font-weight: 700;
+  max-width: 30vw;
+}
+
 .demo-header {
   display: flex;
   align-items: center;
@@ -52,15 +186,6 @@
   padding: 0.15em 0.6em;
   flex-shrink: 0;
 }
-.demo-table-title {
-  font-size: 1.05rem;
-  font-weight: 700;
-  margin: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 .demo-main {
   flex: 1;
   min-height: 0;

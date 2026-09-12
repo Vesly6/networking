@@ -25,6 +25,13 @@ interface DemoTableState {
   updateCell: (tableId: string, rowId: string, columnId: string, value: string) => void;
   setDropdownOptions: (tableId: string, columnId: string, options: string[]) => void;
   importRows: (tableId: string, columns: Column[], newRows: Array<Record<string, string>>) => void;
+  /** Workspace-screen table management — mirrors production's
+   * createTable/renameTable/deleteTable (useWorkspaceStore.ts), minus the
+   * server round-trip: a new table is plain, zero-column, matching
+   * production's own "new tables start with zero columns" rule. */
+  createTable: (name: string) => string;
+  renameTable: (tableId: string, name: string) => void;
+  deleteTable: (tableId: string) => void;
   /** Not exposed in the UI — kept only so a future "start over" affordance
    * has something to call. A page refresh already achieves the same
    * result via the module-reload behavior described above. */
@@ -87,6 +94,27 @@ export const useDemoTableStore = create<DemoTableState>((set, get) => ({
       tables,
       rowsByTable: { ...get().rowsByTable, [tableId]: [...existingRows, ...appended] },
     });
+  },
+
+  createTable: (name) => {
+    const id = randomUUID();
+    const table: DemoTable = { id, name, columns: [] };
+    set({ tables: [...get().tables, table], rowsByTable: { ...get().rowsByTable, [id]: [] }, activeTableId: id });
+    return id;
+  },
+
+  renameTable: (tableId, name) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    set({ tables: get().tables.map((t) => (t.id === tableId ? { ...t, name: trimmed } : t)) });
+  },
+
+  deleteTable: (tableId) => {
+    const remaining = get().tables.filter((t) => t.id !== tableId);
+    const rowsByTable = { ...get().rowsByTable };
+    delete rowsByTable[tableId];
+    const nextActive = get().activeTableId === tableId ? (remaining[0]?.id ?? '') : get().activeTableId;
+    set({ tables: remaining, rowsByTable, activeTableId: nextActive });
   },
 
   resetAll: () => {
