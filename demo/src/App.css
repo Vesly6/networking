@@ -28,6 +28,21 @@
   height: 40px;
   width: auto;
 }
+.theme-toggle {
+  border: 1px solid var(--border);
+  background: transparent;
+  border-radius: 6px;
+  padding: 0.4em;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.theme-toggle:hover {
+  color: var(--text);
+}
+
 .demo-header-badge {
   font-size: 0.72rem;
   font-weight: 600;

@@ -35,6 +35,34 @@
   text-size-adjust: 100%;
 }
 
+/* Copied verbatim from app/src/index.css's own dark-mode override block —
+   same "gray family + blue accent, deliberately not true black" palette,
+   toggled the identical way (a data-theme attribute on <html>, driven by
+   a sun/moon button, never a prefers-color-scheme auto-switch). Every
+   demo component already reads these same custom properties (App.css
+   was written against the same token names as production's, per its own
+   header comment), so overriding just this block is what makes the rest
+   of the demo's CSS follow along automatically. */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --bg: #2e2e2c;
+  --bg-alt: #383835;
+  --bg-hover: #454542;
+  --border: #4c4c49;
+  --border-strong: #5c5c59;
+  --text: #ececea;
+  --text-muted: #a3a29d;
+  --accent: #97b7f2;
+  --accent-contrast: #1c2128;
+  --danger: #f28b82;
+  --danger-bg: rgba(242, 139, 130, 0.16);
+  --success: #6bcf8e;
+  --success-bg: rgba(107, 207, 142, 0.16);
+  --today-bg: rgba(151, 183, 242, 0.22);
+  --shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
 * {
   box-sizing: border-box;
 }

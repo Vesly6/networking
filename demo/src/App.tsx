@@ -2,6 +2,8 @@ import { useDemoTableStore } from './store/useDemoTableStore';
 import { DemoTableView } from './components/DemoTableView';
 import { DemoToast } from './components/DemoToast';
 import { DemoConfirmDialog } from './components/DemoConfirmDialog';
+import { DemoLogo } from './components/DemoLogo';
+import { ThemeToggle } from './components/ThemeToggle';
 import './App.css';
 
 /** The demo's entire shell — no login screen, no route guard, no
@@ -25,13 +27,9 @@ export default function App() {
     <div className="demo-app">
       <header className="demo-header">
         <div className="demo-brand">
-          {/* Assets in public/ are served at whatever base path this
-              project is deployed under (see vite.config.ts's base:
-              '/demo/') — import.meta.env.BASE_URL resolves to that,
-              unlike a hardcoded "/irms-logo-light.svg" which would 404
-              once this isn't served from the site root. */}
-          <img src={`${import.meta.env.BASE_URL}irms-logo-light.svg`} alt="IRMS" className="demo-logo" />
+          <DemoLogo />
         </div>
+        <ThemeToggle />
         <span className="demo-header-badge">Live Demo</span>
         {activeTable && <h1 className="demo-table-title">{activeTable.name}</h1>}
       </header>
