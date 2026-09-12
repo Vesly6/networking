@@ -1138,6 +1138,25 @@ export function deleteRow(id: string, companyId: string): void {
   getDb().prepare(`DELETE FROM rows WHERE id = ? AND company_id = ?`).run(id, companyId);
 }
 
+/** Bulk counterpart to deleteRow — one SQLite transaction for the whole
+ * batch, same "single round trip, not one request per row" reasoning as
+ * saveRows() above. A real, reported bug: bulk-deleting many selected
+ * rows used to call the frontend's one-row-at-a-time DELETE endpoint
+ * once per row via Promise.all, so selecting a large chunk of a table
+ * (confirmed with 10,000 rows) fired that many simultaneous HTTP
+ * requests at once — exactly the same class of flood as the large-paste
+ * bug this codebase already fixed for row creation, just on the delete
+ * side instead. */
+export function deleteRows(ids: string[], companyId: string): void {
+  if (ids.length === 0) return;
+  const database = getDb();
+  const stmt = database.prepare(`DELETE FROM rows WHERE id = ? AND company_id = ?`);
+  const tx = database.transaction((batch: string[]) => {
+    for (const id of batch) stmt.run(id, companyId);
+  });
+  tx(ids);
+}
+
 // --- Daily backups (super-admin's Package-icon toggle + the owner Admin
 // dashboard's Duomenys panel) -------------------------------------------
 // Snapshots the SAME structural JSON the live table already stores

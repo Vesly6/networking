@@ -84,6 +84,7 @@ import {
   saveRow,
   saveRows,
   deleteRow,
+  deleteRows,
   getRowById,
   getTablesByIds,
   setTableOwner,
@@ -3688,6 +3689,40 @@ app.put(
     }
     saveRow(row, companyId, rowActionAttribution(req));
     res.json({ ok: true });
+  }),
+);
+
+// Bulk counterpart to DELETE /api/rows/:id below — a real, reported bug:
+// bulk-deleting a large selection (confirmed with 10,000 rows) used to go
+// through that single-row route once per row via Promise.all on the
+// frontend, flooding the server with that many simultaneous requests at
+// once. Same "one request, one transaction, whatever's actually valid
+// gets deleted" shape as PUT /api/rows' own bulk save. A DELETE request
+// carrying a JSON body is unusual but valid HTTP/Express — express.json()
+// already parses it the same as any other method.
+app.delete(
+  '/api/rows',
+  requirePermission('canDeleteRows'),
+  asyncHandler(async (req, res) => {
+    const ids = req.body?.ids;
+    if (!Array.isArray(ids) || ids.some((id) => typeof id !== 'string')) {
+      res.status(400).json({ error: 'Invalid "ids"' });
+      return;
+    }
+    const companyId = req.auth!.companyId;
+    // Same per-row ownership check the single-row route does, just
+    // batched — a row that doesn't exist or belongs to a table this
+    // request can't access is silently skipped rather than failing the
+    // whole batch, since a stale/already-deleted id in the selection
+    // (e.g. a double-click) shouldn't block deleting the rest.
+    const validIds = (ids as string[]).filter((id) => {
+      const row = getRowById(id, companyId);
+      if (!row) return false;
+      const table = getTable(row.tableId, companyId);
+      return !!table && tableAccessibleToRequest(req, table);
+    });
+    deleteRows(validIds, companyId);
+    res.json({ ok: true, deleted: validIds.length });
   }),
 );
 

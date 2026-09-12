@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { Column, ColumnType, Row } from '../types';
 import { clampToLimit } from '../utils/cellLimit';
-import { deleteRowDB, getTable, importRows, loadRowsForTable, saveRow, saveRows, updateTableColumns } from '../db/db';
+import { deleteRowsDB, getTable, importRows, loadRowsForTable, saveRow, saveRows, updateTableColumns } from '../db/db';
 import { randomUUID } from '../utils/uuid';
 import { addNoteEntry } from '../utils/noteHistory';
 import { useAuthStore } from './useAuthStore';
@@ -295,7 +295,7 @@ export const useTableStore = create<TableState>((set, get) => {
   };
   const persistDeletes = (ids: string[]) => {
     if (ids.length === 0) return;
-    Promise.all(ids.map((id) => deleteRowDB(id)))
+    deleteRowsDB(ids)
       .then(() => set({ lastCellSaveError: null }))
       .catch(reportSaveError);
   };

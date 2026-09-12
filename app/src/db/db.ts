@@ -259,8 +259,18 @@ export async function importRows(rows: Row[]): Promise<void> {
   });
 }
 
-export async function deleteRowDB(id: string): Promise<void> {
-  await localApiRequest(`/api/rows/${encodeURIComponent(id)}`, { method: 'DELETE' });
+/** One request for the whole batch — same reasoning as saveRows above,
+ * on the delete side: a real, reported bug had persistDeletes (below)
+ * call a single-row DELETE endpoint once per row via Promise.all, so
+ * deleting a large selection (confirmed with 10,000 rows) fired that
+ * many simultaneous DELETE requests at once. */
+export async function deleteRowsDB(ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  await localApiRequest('/api/rows', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ids }),
+  });
 }
 
 export async function getTranscription(callId: string): Promise<TranscriptionRecord | null> {
