@@ -1,0 +1,261 @@
+/* A small, curated stylesheet for the demo grid — inspired by (same
+   design tokens, same overall spreadsheet look) but not copied from
+   app/src/App.css, which is ~4700 lines covering Calls/LinkedIn/Zadarma/
+   worker-permission UI this demo has no use for. Everything here is
+   self-contained and only depends on the CSS custom properties defined
+   in index.css. */
+
+.demo-app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.demo-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+.demo-header-title {
+  font-weight: 700;
+  font-size: 1.05rem;
+}
+.demo-header-badge {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--accent);
+  background: var(--today-bg, #eaf2ff);
+  border-radius: 999px;
+  padding: 0.15em 0.6em;
+}
+.demo-tabs {
+  display: flex;
+  gap: 0.3rem;
+  margin-left: 1rem;
+}
+.demo-tabs button {
+  border: 1px solid transparent;
+  background: transparent;
+  padding: 0.35em 0.8em;
+  border-radius: 6px;
+  color: var(--text-muted);
+}
+.demo-tabs button:hover {
+  background: var(--bg-hover);
+}
+.demo-tabs button.active {
+  background: var(--bg-alt);
+  color: var(--text);
+  border-color: var(--border);
+  font-weight: 600;
+}
+
+.demo-main {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.demo-table-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.demo-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.demo-toolbar button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  font-size: 0.85em;
+}
+.demo-toolbar-spacer {
+  flex: 1;
+}
+.demo-toolbar-search {
+  display: flex;
+  align-items: center;
+  gap: 0.4em;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.3em 0.6em;
+  color: var(--text-muted);
+}
+.demo-toolbar-search input {
+  border: none;
+  padding: 0;
+  outline: none;
+  min-width: 160px;
+}
+
+.demo-table-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+table.demo-sheet {
+  border-collapse: collapse;
+  width: 100%;
+  table-layout: fixed;
+  font-size: 0.85rem;
+}
+
+.demo-sheet thead th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-alt);
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  padding: 0.5em 0.6em;
+  font-weight: 600;
+  white-space: nowrap;
+  z-index: 1;
+}
+.demo-th-sortable {
+  cursor: pointer;
+  display: table-cell;
+}
+.demo-th-sortable span {
+  margin-right: 0.3em;
+}
+.demo-th-checkbox {
+  width: 2.2em;
+}
+
+.demo-sheet tbody tr:nth-child(even) {
+  background: var(--bg-alt);
+}
+.demo-sheet tbody tr:hover {
+  background: var(--bg-hover);
+}
+.demo-row-selected {
+  background: var(--today-bg, #eaf2ff) !important;
+}
+
+.demo-td-checkbox {
+  text-align: center;
+  border-bottom: 1px solid var(--border);
+}
+
+td.demo-cell {
+  border-bottom: 1px solid var(--border);
+  padding: 0;
+  position: relative;
+  max-width: 220px;
+}
+td.demo-cell input,
+td.demo-cell select {
+  width: 100%;
+  height: 100%;
+  border: none;
+  border-radius: 0;
+  padding: 0.5em 0.6em;
+  background: transparent;
+}
+td.demo-cell input:focus,
+td.demo-cell select:focus {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--accent);
+  background: var(--bg);
+}
+
+.demo-cell-preview {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  padding: 0.5em 0.6em;
+  border-radius: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.demo-cell-preview-hoverable:hover {
+  background: var(--bg-hover);
+}
+.demo-cell-empty {
+  color: var(--text-muted);
+}
+
+.demo-cell-contact {
+  position: static;
+}
+.demo-contact-popover {
+  position: absolute;
+  z-index: 5;
+  top: 100%;
+  left: 0;
+  min-width: 320px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  padding: 0.6rem;
+}
+.demo-contact-popover-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 600;
+  font-size: 0.85rem;
+  margin-bottom: 0.4rem;
+}
+.demo-contact-popover-close {
+  border: none;
+  background: transparent;
+  padding: 0.2em;
+}
+.demo-contact-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.demo-contact-entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.82rem;
+  background: var(--bg-alt);
+  border-radius: 6px;
+  padding: 0.35em 0.5em;
+}
+.demo-contact-entry button {
+  border: none;
+  background: transparent;
+  padding: 0.1em;
+  flex: 0 0 auto;
+}
+.demo-contact-add-row {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.5rem;
+}
+.demo-contact-add-row input {
+  flex: 1;
+}
+
+.demo-empty-state {
+  text-align: center;
+  color: var(--text-muted);
+  padding: 2rem 1rem;
+}

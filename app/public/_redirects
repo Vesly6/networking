@@ -1,1 +1,9 @@
+# The fully isolated demo app (demo/ at the repo root, a completely
+# separate Vite project — see app/build-with-demo.sh) is merged into this
+# same static site's own dist/demo/ at build time. These two rules have to
+# come before the catch-all SPA-fallback rule below (rules are matched
+# top-to-bottom, first match wins), or every /demo/* request would
+# already be swallowed by the app's own index.html instead.
+/demo /demo/index.html 200
+/demo/* /demo/index.html 200
 /* /index.html 200
