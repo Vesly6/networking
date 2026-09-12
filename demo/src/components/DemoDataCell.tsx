@@ -1,12 +1,16 @@
 import { useEffect, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import type { Column, Row } from '../types';
 import { parseContacts, addContact, removeContact, getContactsSummary } from '../utils/contacts';
-import { X } from 'lucide-react';
+import { highlightMatches } from '../utils/highlight';
+import { ensureProtocol } from '../utils/link';
+import { confirmDialog } from '../store/useConfirmStore';
+import { X, ExternalLink, Search } from 'lucide-react';
 
 interface DemoDataCellProps {
   row: Row;
   column: Column;
   editable: boolean;
+  highlightQuery: string;
   onSelect: (e: ReactMouseEvent) => void;
   onCommit: (value: string) => void;
   onOpenContacts: () => void;
@@ -17,10 +21,22 @@ interface DemoDataCellProps {
 /** A right-sized rebuild of the real DataCell.tsx for the demo's own
  * feature scope — same click-to-edit convention (text/company/phone/link
  * become a live input; dropdown/date stay native always-interactive
- * controls; contact opens an inline expanding list) but without the
- * worker-permission/note-history/social-lookup machinery none of this
- * demo needs. */
-export function DemoDataCell({ row, column, editable, onSelect, onCommit, onOpenContacts, contactsOpen, onCloseContacts }: DemoDataCellProps) {
+ * controls; contact opens an inline expanding list), the same `link` 🔗
+ * open-in-new-tab and `company` 🔍 Google-search second click-targets
+ * shipped in production this session, and the same search-match
+ * highlighting — but without the worker-permission/note-history/
+ * social-lookup machinery none of this demo needs. */
+export function DemoDataCell({
+  row,
+  column,
+  editable,
+  highlightQuery,
+  onSelect,
+  onCommit,
+  onOpenContacts,
+  contactsOpen,
+  onCloseContacts,
+}: DemoDataCellProps) {
   const value = row.cells[column.id] ?? '';
   const [draft, setDraft] = useState(value);
   const [newContactText, setNewContactText] = useState('');
@@ -65,10 +81,14 @@ export function DemoDataCell({ row, column, editable, onSelect, onCommit, onOpen
 
   if (column.type === 'contact') {
     const entries = parseContacts(value);
+    const handleRemove = async (id: string, text: string) => {
+      const ok = await confirmDialog({ message: `Remove "${text}"?`, danger: true });
+      if (ok) onCommit(removeContact(value, id));
+    };
     return (
       <td className="demo-cell demo-cell-contact" onMouseDown={onSelect}>
         <button type="button" className="demo-cell-preview demo-cell-preview-hoverable" tabIndex={-1} onClick={onOpenContacts}>
-          {getContactsSummary(value) || <span className="demo-cell-empty">+ add contact</span>}
+          {getContactsSummary(value) ? highlightMatches(getContactsSummary(value), highlightQuery) : <span className="demo-cell-empty">+ add contact</span>}
         </button>
         {contactsOpen && (
           <div className="demo-contact-popover" onClick={(e) => e.stopPropagation()}>
@@ -82,7 +102,7 @@ export function DemoDataCell({ row, column, editable, onSelect, onCommit, onOpen
               {entries.map((entry) => (
                 <li key={entry.id} className="demo-contact-entry">
                   <span>{entry.text}</span>
-                  <button type="button" onClick={() => onCommit(removeContact(value, entry.id))}>
+                  <button type="button" onClick={() => void handleRemove(entry.id, entry.text)}>
                     <X size={12} />
                   </button>
                 </li>
@@ -138,6 +158,64 @@ export function DemoDataCell({ row, column, editable, onSelect, onCommit, onOpen
     );
   }
 
+  // link's non-editable preview gets a second click-target — the 🔗 opens
+  // the URL in a new tab, same as production's DataCell.tsx.
+  if (column.type === 'link') {
+    const href = value ? ensureProtocol(value) : null;
+    return (
+      <td className="demo-cell" onMouseDown={onSelect}>
+        <div className="demo-cell-link-inner">
+          <button type="button" className="demo-cell-preview demo-cell-preview-hoverable" tabIndex={-1}>
+            {value ? highlightMatches(value, highlightQuery) : <span className="demo-cell-empty">—</span>}
+          </button>
+          {href && (
+            <a
+              href={href}
+              target="_blank"
+              rel="noreferrer"
+              className="demo-cell-link-open"
+              title={href}
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <ExternalLink size={13} />
+            </a>
+          )}
+        </div>
+      </td>
+    );
+  }
+
+  // company's non-editable preview gets the same second-click-target
+  // treatment — 🔍 searches the exact company name on Google in a new
+  // tab, same pattern shipped in production this session.
+  if (column.type === 'company') {
+    const query = value.trim();
+    const searchHref = query ? `https://www.google.com/search?q=${encodeURIComponent(query)}` : null;
+    return (
+      <td className="demo-cell" onMouseDown={onSelect}>
+        <div className="demo-cell-link-inner">
+          <button type="button" className="demo-cell-preview demo-cell-preview-hoverable" tabIndex={-1}>
+            {value ? highlightMatches(value, highlightQuery) : <span className="demo-cell-empty">—</span>}
+          </button>
+          {searchHref && (
+            <a
+              href={searchHref}
+              target="_blank"
+              rel="noreferrer"
+              className="demo-cell-link-open"
+              title={`Search "${query}" on Google`}
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <Search size={13} />
+            </a>
+          )}
+        </div>
+      </td>
+    );
+  }
+
   return (
     <td className="demo-cell" onMouseDown={onSelect}>
       {/* tabIndex={-1} matters, not just for tab-order tidiness: without
@@ -151,7 +229,7 @@ export function DemoDataCell({ row, column, editable, onSelect, onCommit, onOpen
           mousedown+mouseup sequence opened and then instantly closed
           edit mode in the same gesture. */}
       <button type="button" className="demo-cell-preview demo-cell-preview-hoverable" tabIndex={-1}>
-        {value || <span className="demo-cell-empty">—</span>}
+        {value ? highlightMatches(value, highlightQuery) : <span className="demo-cell-empty">—</span>}
       </button>
     </td>
   );

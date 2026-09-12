@@ -3,6 +3,8 @@ import type { Column } from '../types';
 import { parseCsvFile, sniffColumnType, exportRowsToCsv, downloadCsv, sanitizeFilename } from '../utils/csv';
 import { randomUUID } from '../utils/uuid';
 import { useDemoTableStore } from '../store/useDemoTableStore';
+import { useToastStore } from '../store/useToastStore';
+import { confirmDialog } from '../store/useConfirmStore';
 import { Search, Plus, Trash2, Upload, Download } from 'lucide-react';
 
 interface DemoToolbarProps {
@@ -23,16 +25,20 @@ interface DemoToolbarProps {
  * heuristic the real import mapping defaults to) for anything unmatched
  * — a simplified, no-modal version of the production CsvImportMapping
  * flow, appropriate for a demo where there's no risk of silently
- * corrupting a real column's data. */
+ * corrupting a real column's data. Every action now gives the same kind
+ * of feedback production does — a toast, and (for the one destructive
+ * action here) a confirm step first. */
 export function DemoToolbar({ tableId, tableName, columns, rows, query, onQueryChange, selectedRowIds, onClearSelection }: DemoToolbarProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const addRow = useDemoTableStore((s) => s.addRow);
   const removeRows = useDemoTableStore((s) => s.removeRows);
   const importRows = useDemoTableStore((s) => s.importRows);
+  const showToast = useToastStore((s) => s.show);
 
   const handleExport = () => {
     const csv = exportRowsToCsv(columns, rows);
     downloadCsv(`${sanitizeFilename(tableName)}.csv`, csv);
+    showToast('Exported to CSV');
   };
 
   const handleImportFile = async (file: File) => {
@@ -58,6 +64,19 @@ export function DemoToolbar({ tableId, tableName, columns, rows, query, onQueryC
     });
 
     importRows(tableId, nextColumns, newRows);
+    showToast(`Imported ${newRows.length} row${newRows.length === 1 ? '' : 's'}`);
+  };
+
+  const handleDeleteSelected = async () => {
+    const ok = await confirmDialog({
+      message: `Delete ${selectedRowIds.length} selected row${selectedRowIds.length === 1 ? '' : 's'}? This can't be undone.`,
+      danger: true,
+    });
+    if (!ok) return;
+    const count = selectedRowIds.length;
+    removeRows(tableId, selectedRowIds);
+    onClearSelection();
+    showToast(`Deleted ${count} row${count === 1 ? '' : 's'}`);
   };
 
   return (
@@ -66,18 +85,17 @@ export function DemoToolbar({ tableId, tableName, columns, rows, query, onQueryC
         <Search size={14} />
         <input placeholder="Search…" value={query} onChange={(e) => onQueryChange(e.target.value)} />
       </div>
-      <button type="button" onClick={() => addRow(tableId)}>
+      <button
+        type="button"
+        onClick={() => {
+          addRow(tableId);
+          showToast('Row added');
+        }}
+      >
         <Plus size={14} /> Add row
       </button>
       {selectedRowIds.length > 0 && (
-        <button
-          type="button"
-          className="danger"
-          onClick={() => {
-            removeRows(tableId, selectedRowIds);
-            onClearSelection();
-          }}
-        >
+        <button type="button" className="danger" onClick={() => void handleDeleteSelected()}>
           <Trash2 size={14} /> Delete ({selectedRowIds.length})
         </button>
       )}

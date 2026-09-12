@@ -97,6 +97,7 @@ export function DemoTableView({ table }: DemoTableViewProps) {
                     row={row}
                     column={col}
                     editable={activeCell?.rowId === row.id && activeCell.columnId === col.id}
+                    highlightQuery={query}
                     onSelect={(e) => {
                       // preventDefault matters here, not just convention:
                       // this mousedown swaps the clicked <button> for a
