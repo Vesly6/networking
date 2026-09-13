@@ -6,9 +6,11 @@ import {
   removeContact,
   updateContact,
   getContactsSummary,
-  extractPhoneNumber,
-  extractEmail,
+  splitContactDisplayFields,
   contactTextToFields,
+  joinContactFields,
+  emptyContactFields,
+  type ContactFormFields,
 } from '../utils/contacts';
 import {
   parseNoteHistory,
@@ -31,7 +33,7 @@ import { contrastTextColor } from '../utils/color';
 import { confirmDialog } from '../store/useConfirmStore';
 import { useToastStore } from '../store/useToastStore';
 import { Popover } from './Popover';
-import { X, ExternalLink, Search, Clock, FileText, User, Copy, PenLine, Check, Mic, Bot } from 'lucide-react';
+import { X, ExternalLink, Search, Clock, FileText, User, Copy, PenLine, Check, Mic, Bot, ChevronDown, Mail, Save } from 'lucide-react';
 
 const NOT_CONFIGURED_MESSAGE = 'This integration isn’t configured — available in the full product';
 
@@ -63,6 +65,11 @@ interface DemoDataCellProps {
   contactsRaw?: string;
   onSetLinkedContact: (contactId: string | null) => void;
   onSetNextActionNote: (note: string | null) => void;
+  /** The row's own `company`-type column value, computed once per row in
+   * DemoTableView — only used to enable/disable the contact popover's
+   * "Search" (Apollo) stub button, matching production's own
+   * disabled={!companyName?.trim()}. */
+  companyName?: string;
 }
 
 /** A right-sized rebuild of the real DataCell.tsx for the demo's own
@@ -86,12 +93,15 @@ export function DemoDataCell({
   contactsRaw,
   onSetLinkedContact,
   onSetNextActionNote,
+  companyName,
 }: DemoDataCellProps) {
   const value = row.cells[column.id] ?? '';
   const [draft, setDraft] = useState(value);
   const [newContactText, setNewContactText] = useState('');
   const [editingContactId, setEditingContactId] = useState<string | null>(null);
-  const [contactEditDraft, setContactEditDraft] = useState('');
+  const [editFields, setEditFields] = useState<ContactFormFields>(emptyContactFields());
+  const [manualFormOpen, setManualFormOpen] = useState(false);
+  const [addFields, setAddFields] = useState<ContactFormFields>(emptyContactFields());
   const showToast = useToastStore((s) => s.show);
   const [newNoteText, setNewNoteText] = useState('');
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
@@ -350,6 +360,40 @@ export function DemoDataCell({
       void navigator.clipboard.writeText(fieldValue);
       showToast(`${label} copied`);
     };
+    const startEditing = (entry: { id: string; text: string }) => {
+      setEditingContactId(entry.id);
+      setEditFields(contactTextToFields(entry.text));
+    };
+    const saveEdit = (id: string) => {
+      const composed = joinContactFields(editFields);
+      if (composed.trim()) onCommit(updateContact(value, id, composed));
+      setEditingContactId(null);
+    };
+    const submitStructuredAdd = () => {
+      const composed = joinContactFields(addFields);
+      if (!composed.trim()) return;
+      onCommit(addContact(value, composed));
+      setAddFields(emptyContactFields());
+    };
+    const commitFreeform = () => {
+      if (!newContactText.trim()) return;
+      onCommit(addContact(value, newContactText.trim()));
+      setNewContactText('');
+    };
+    // Shared by both the add form and the edit form — same 7 fields,
+    // same order, matching production's identical structured grid for
+    // both (CellHoverEditor.tsx's addFields/editFields forms).
+    const renderStructuredInputs = (fields: ContactFormFields, setFields: (f: ContactFormFields) => void) => (
+      <>
+        <input placeholder="First name" value={fields.firstName} onChange={(e) => setFields({ ...fields, firstName: e.target.value })} />
+        <input placeholder="Last name" value={fields.lastName} onChange={(e) => setFields({ ...fields, lastName: e.target.value })} />
+        <input placeholder="Position" value={fields.position} onChange={(e) => setFields({ ...fields, position: e.target.value })} />
+        <input placeholder="Company" value={fields.company} onChange={(e) => setFields({ ...fields, company: e.target.value })} />
+        <input placeholder="Email" value={fields.email} onChange={(e) => setFields({ ...fields, email: e.target.value })} />
+        <input placeholder="Phone" value={fields.phone} onChange={(e) => setFields({ ...fields, phone: e.target.value })} />
+        <input placeholder="LinkedIn URL" value={fields.linkedinUrl} onChange={(e) => setFields({ ...fields, linkedinUrl: e.target.value })} />
+      </>
+    );
     return (
       <td className="demo-cell demo-cell-contact" style={cellStyle} onMouseDown={onSelect}>
         <button type="button" className="demo-cell-preview demo-cell-preview-hoverable" tabIndex={-1} onClick={onOpenEditor}>
@@ -363,88 +407,138 @@ export function DemoDataCell({
                 <X size={14} />
               </button>
             </div>
-            <ul className="demo-contact-list">
-              {entries.map((entry) => {
-                const entryPhone = extractPhoneNumber(entry.text);
-                const entryEmail = extractEmail(entry.text);
-                return (
-                  <li key={entry.id} className="demo-contact-entry">
-                    {editingContactId === entry.id ? (
-                      <input
-                        autoFocus
-                        className="demo-contact-edit-input"
-                        value={contactEditDraft}
-                        onChange={(e) => setContactEditDraft(e.target.value)}
-                        onBlur={() => {
-                          if (contactEditDraft.trim()) onCommit(updateContact(value, entry.id, contactEditDraft));
-                          setEditingContactId(null);
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') e.currentTarget.blur();
-                          if (e.key === 'Escape') setEditingContactId(null);
-                        }}
-                      />
-                    ) : (
-                      <span className="demo-contact-entry-text">{entry.text}</span>
-                    )}
-                    <div className="demo-contact-entry-actions">
-                      {entryPhone && (
-                        <button type="button" title="Copy phone" onClick={() => handleCopy(entryPhone, 'Phone')}>
-                          <Copy size={12} />
-                        </button>
-                      )}
-                      {entryEmail && (
-                        <button type="button" title="Copy email" onClick={() => handleCopy(entryEmail, 'Email')}>
-                          <Copy size={12} />
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        title="Find on Instagram / Facebook"
-                        onClick={() => showToast('This integration isn’t configured — available in the full product')}
-                      >
-                        <Search size={12} />
-                      </button>
-                      <button
-                        type="button"
-                        title="Edit contact"
-                        onClick={() => {
-                          setEditingContactId(entry.id);
-                          setContactEditDraft(entry.text);
-                        }}
-                      >
-                        <PenLine size={12} />
-                      </button>
-                      <button type="button" title="Remove contact" onClick={() => void handleRemove(entry.id, entry.text)}>
-                        <X size={12} />
-                      </button>
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
-            <div className="demo-contact-add-row">
-              <input
-                placeholder="Name, title, email, phone…"
-                value={newContactText}
-                onChange={(e) => setNewContactText(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && newContactText.trim()) {
-                    onCommit(addContact(value, newContactText.trim()));
-                    setNewContactText('');
-                  }
-                }}
-              />
+            <div className="demo-contact-header-row">
+              <button type="button" className="demo-filter-accordion-header demo-contact-manual-toggle" onClick={() => setManualFormOpen((v) => !v)}>
+                <span className="demo-filter-accordion-title">+ Add contact manually</span>
+                <ChevronDown size={14} className={`demo-filter-accordion-chevron ${manualFormOpen ? 'demo-filter-accordion-chevron-open' : ''}`} />
+              </button>
               <button
                 type="button"
-                onClick={() => {
-                  if (!newContactText.trim()) return;
-                  onCommit(addContact(value, newContactText.trim()));
-                  setNewContactText('');
-                }}
+                className="demo-contact-search-btn"
+                disabled={!companyName?.trim()}
+                title={companyName ? `Search for people at "${companyName}"` : 'No company name set for this row'}
+                onClick={() => showToast(NOT_CONFIGURED_MESSAGE)}
               >
-                Add
+                <Search size={16} /> Search
               </button>
+            </div>
+            {manualFormOpen && (
+              <div className="demo-contact-manual-body">
+                <form
+                  className="demo-contact-structured-grid"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    submitStructuredAdd();
+                  }}
+                >
+                  {renderStructuredInputs(addFields, setAddFields)}
+                  <button type="submit" className="primary demo-contact-add">
+                    + Add contact
+                  </button>
+                </form>
+                <div className="demo-contact-divider">or paste freeform text</div>
+                <div className="demo-contact-form">
+                  <input
+                    placeholder="Name, phone, email…"
+                    value={newContactText}
+                    onChange={(e) => setNewContactText(e.target.value)}
+                    onBlur={commitFreeform}
+                    onKeyDown={(e) => e.key === 'Enter' && commitFreeform()}
+                  />
+                  <button type="button" className="primary demo-contact-add" onClick={commitFreeform}>
+                    + Add contact
+                  </button>
+                </div>
+              </div>
+            )}
+            <div className="demo-contact-list">
+              {entries.map((entry) => {
+                const isEditing = editingContactId === entry.id;
+                const fields = splitContactDisplayFields(entry.text);
+                return (
+                  <div key={entry.id} className="demo-contact-entry">
+                    {isEditing ? (
+                      <form
+                        className="demo-contact-structured-grid demo-contact-edit-grid"
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          saveEdit(entry.id);
+                        }}
+                      >
+                        {renderStructuredInputs(editFields, setEditFields)}
+                        <div className="demo-contact-edit-actions">
+                          <button type="submit" className="primary">
+                            <Save size={14} /> Save
+                          </button>
+                          <button type="button" onClick={() => setEditingContactId(null)}>
+                            <X size={14} /> Cancel
+                          </button>
+                        </div>
+                      </form>
+                    ) : (
+                      <div className="demo-contact-main-row">
+                        <div className="demo-contact-info">
+                          {fields
+                            .filter((f) => f.kind !== 'linkedin' && f.kind !== 'instagram' && f.kind !== 'facebook')
+                            .map((field, i) => (
+                              <div key={i} className={`demo-contact-field demo-contact-field-${field.kind}`}>
+                                {field.kind === 'phone' ? (
+                                  <button type="button" className="demo-contact-phone-value" title="Call" onClick={() => showToast(NOT_CONFIGURED_MESSAGE)}>
+                                    {field.value}
+                                  </button>
+                                ) : (
+                                  field.value
+                                )}
+                                {field.kind === 'name' && (
+                                  <button type="button" className="demo-contact-copy" title="Copy name" onClick={() => handleCopy(field.value, 'Name')}>
+                                    <Copy size={14} />
+                                  </button>
+                                )}
+                                {field.kind === 'phone' && (
+                                  <>
+                                    <button type="button" className="demo-contact-copy" title="Copy phone" onClick={() => handleCopy(field.value, 'Phone')}>
+                                      <Copy size={14} />
+                                    </button>
+                                    <button type="button" className="demo-contact-copy" title="Send SMS" onClick={() => showToast(NOT_CONFIGURED_MESSAGE)}>
+                                      <Mail size={14} />
+                                    </button>
+                                  </>
+                                )}
+                                {field.kind === 'email' && (
+                                  <button type="button" className="demo-contact-copy" title="Copy email" onClick={() => handleCopy(field.value, 'Email')}>
+                                    <Copy size={14} />
+                                  </button>
+                                )}
+                              </div>
+                            ))}
+                          {fields.some((f) => f.kind === 'linkedin' || f.kind === 'instagram' || f.kind === 'facebook') && (
+                            <div className="demo-contact-social-row">
+                              {fields
+                                .filter((f) => f.kind === 'linkedin' || f.kind === 'instagram' || f.kind === 'facebook')
+                                .map((f, i) => (
+                                  <a key={i} href={f.value} target="_blank" rel="noreferrer" className="demo-cell-link-open" title={f.value}>
+                                    <ExternalLink size={12} /> {f.kind}
+                                  </a>
+                                ))}
+                            </div>
+                          )}
+                        </div>
+                        <div className="demo-contact-actions">
+                          <button type="button" title="Find on Instagram / Facebook" onClick={() => showToast(NOT_CONFIGURED_MESSAGE)}>
+                            <Search size={14} />
+                          </button>
+                          <button type="button" title="Edit contact" onClick={() => startEditing(entry)}>
+                            <PenLine size={14} />
+                          </button>
+                          <button type="button" title="Remove contact" onClick={() => void handleRemove(entry.id, entry.text)}>
+                            <X size={14} />
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}

@@ -47,6 +47,7 @@ export function DemoTableView({ table, focusRowId, onFocusHandled }: DemoTableVi
   const setNextActionNote = useDemoTableStore((s) => s.setNextActionNote);
 
   const contactColumn = useMemo(() => getColumnByType(table.columns, 'contact'), [table.columns]);
+  const companyColumn = useMemo(() => getColumnByType(table.columns, 'company'), [table.columns]);
 
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<SortState>(null);
@@ -291,6 +292,7 @@ export function DemoTableView({ table, focusRowId, onFocusHandled }: DemoTableVi
                     editorOpen={expandedCell?.rowId === row.id && expandedCell?.columnId === col.id}
                     onCloseEditor={() => setExpandedCell(null)}
                     contactsRaw={contactColumn ? row.cells[contactColumn.id] : undefined}
+                    companyName={companyColumn ? row.cells[companyColumn.id] : undefined}
                     onSetLinkedContact={(contactId) => setLinkedContact(table.id, row.id, contactId)}
                     onSetNextActionNote={(note) => setNextActionNote(table.id, row.id, note)}
                   />

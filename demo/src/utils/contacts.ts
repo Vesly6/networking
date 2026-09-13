@@ -55,30 +55,142 @@ export interface ContactFormFields {
   company: string;
   email: string;
   phone: string;
+  linkedinUrl: string;
+  // No input in this demo's add/edit form ever sets these two — production's
+  // only writes them via a real Instagram/Facebook lookup (SocialLookupModal),
+  // which needs a real API key and doesn't exist here. Kept in the type
+  // purely so joinContactFields/contactTextToFields round-trip a manually-
+  // typed social URL (pasted into the freeform field) without losing it.
+  instagramUrl: string;
+  facebookUrl: string;
 }
 
-/** Same "Name, Position, company, email, phone" comma-joined shape the
- * real app's joinContactFields produces — empty fields omitted. */
+const EMPTY_CONTACT_FIELDS: ContactFormFields = {
+  firstName: '',
+  lastName: '',
+  position: '',
+  company: '',
+  email: '',
+  phone: '',
+  linkedinUrl: '',
+  instagramUrl: '',
+  facebookUrl: '',
+};
+
+export function emptyContactFields(): ContactFormFields {
+  return { ...EMPTY_CONTACT_FIELDS };
+}
+
+/** Same "Name, Position, company, email, phone, linkedin, instagram,
+ * facebook" comma-joined shape the real app's joinContactFields produces
+ * — empty fields omitted. */
 export function joinContactFields(fields: ContactFormFields): string {
-  const name = `${fields.firstName} ${fields.lastName}`.trim();
-  return [name, fields.position, fields.company, fields.email, fields.phone].filter((v) => v.trim()).join(', ');
+  const name = `${fields.firstName.trim()} ${fields.lastName.trim()}`.trim();
+  return [
+    name,
+    fields.position.trim(),
+    fields.company.trim(),
+    fields.email.trim(),
+    fields.phone.trim(),
+    fields.linkedinUrl.trim(),
+    fields.instagramUrl.trim(),
+    fields.facebookUrl.trim(),
+  ]
+    .filter(Boolean)
+    .join(', ');
 }
 
-/** Best-effort reverse of joinContactFields — same "not a lossless parse"
- * caveat as the production version. */
-export function contactTextToFields(text: string): ContactFormFields {
-  const parts = text.split(',').map((p) => p.trim());
-  const [name = '', position = '', company = '', email = '', phone = ''] = parts;
-  const spaceIdx = name.indexOf(' ');
-  const firstName = spaceIdx === -1 ? name : name.slice(0, spaceIdx);
-  const lastName = spaceIdx === -1 ? '' : name.slice(spaceIdx + 1);
-  return { firstName, lastName, position, company, email, phone };
+export interface ContactDisplayField {
+  kind: 'name' | 'text' | 'email' | 'phone' | 'linkedin' | 'instagram' | 'facebook';
+  value: string;
 }
 
-// Copied verbatim from app/src/utils/contacts.ts — requires 7+ digits so
-// a short junk value (a bare "+1" placeholder, an extension) doesn't get
-// mistaken for a real number.
+// Copied verbatim from app/src/utils/contacts.ts.
+const EMAIL_SEARCH_PATTERN = /[^\s,"{}[\]]+@[^\s,"{}[\]]+\.[^\s,"{}[\]]+/;
 const PHONE_PATTERN = /\+?\d[\d\s().-]{6,}\d/;
+const LINKEDIN_PATTERN = /https?:\/\/(?:[a-z]{2,3}\.)?linkedin\.com\/[^\s,"{}[\]]*/i;
+const INSTAGRAM_PATTERN = /https?:\/\/(?:www\.)?instagram\.com\/[^\s,"{}[\]]*/i;
+const FACEBOOK_PATTERN = /https?:\/\/(?:www\.)?facebook\.com\/[^\s,"{}[\]]*/i;
+
+/** Ported from production's splitContactDisplayFields (utils/contacts.ts)
+ * — pattern-extracts email/phone/linkedin/instagram/facebook out of the
+ * raw text via regex (not positional comma-splitting, which breaks the
+ * moment a real entry omits a field production's own fixed order
+ * assumes — see extractEmail's own doc comment for the exact bug this
+ * caused), then splits *whatever's left* by comma into a name field (the
+ * first segment) plus any number of plain text lines (title, company,
+ * ...). Used both for the per-entry display (one styled line per field)
+ * and, via contactTextToFields below, for the edit-form pre-fill. */
+export function splitContactDisplayFields(text: string): ContactDisplayField[] {
+  let remaining = text;
+  let linkedin: string | null = null;
+  let instagram: string | null = null;
+  let facebook: string | null = null;
+  let email: string | null = null;
+  let phone: string | null = null;
+
+  const linkedinMatch = LINKEDIN_PATTERN.exec(remaining);
+  if (linkedinMatch) {
+    linkedin = linkedinMatch[0];
+    remaining = remaining.slice(0, linkedinMatch.index) + remaining.slice(linkedinMatch.index + linkedin.length);
+  }
+  const instagramMatch = INSTAGRAM_PATTERN.exec(remaining);
+  if (instagramMatch) {
+    instagram = instagramMatch[0];
+    remaining = remaining.slice(0, instagramMatch.index) + remaining.slice(instagramMatch.index + instagram.length);
+  }
+  const facebookMatch = FACEBOOK_PATTERN.exec(remaining);
+  if (facebookMatch) {
+    facebook = facebookMatch[0];
+    remaining = remaining.slice(0, facebookMatch.index) + remaining.slice(facebookMatch.index + facebook.length);
+  }
+  const emailMatch = EMAIL_SEARCH_PATTERN.exec(remaining);
+  if (emailMatch) {
+    email = emailMatch[0];
+    remaining = remaining.slice(0, emailMatch.index) + remaining.slice(emailMatch.index + email.length);
+  }
+  const phoneMatch = PHONE_PATTERN.exec(remaining);
+  if (phoneMatch) {
+    phone = phoneMatch[0].trim();
+    remaining = remaining.slice(0, phoneMatch.index) + remaining.slice(phoneMatch.index + phoneMatch[0].length);
+  }
+
+  const fields: ContactDisplayField[] = remaining
+    .split(',')
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .map((value, i) => ({ kind: i === 0 ? 'name' : 'text', value }) as ContactDisplayField);
+
+  if (email) fields.push({ kind: 'email', value: email });
+  if (phone) fields.push({ kind: 'phone', value: phone });
+  if (linkedin) fields.push({ kind: 'linkedin', value: linkedin });
+  if (instagram) fields.push({ kind: 'instagram', value: instagram });
+  if (facebook) fields.push({ kind: 'facebook', value: facebook });
+
+  return fields;
+}
+
+/** Best-effort reverse of joinContactFields, built on splitContactDisplayFields
+ * — matches production exactly, replacing this demo's earlier positional
+ * comma-split version (which mis-parsed any real entry that omitted a
+ * field, e.g. no company segment). */
+export function contactTextToFields(text: string): ContactFormFields {
+  const parsed = splitContactDisplayFields(text);
+  const nameField = parsed.find((f) => f.kind === 'name');
+  const [firstName = '', ...rest] = (nameField?.value ?? '').split(' ').filter(Boolean);
+  const textFields = parsed.filter((f) => f.kind === 'text').map((f) => f.value);
+  return {
+    firstName,
+    lastName: rest.join(' '),
+    position: textFields[0] ?? '',
+    company: textFields[1] ?? '',
+    email: parsed.find((f) => f.kind === 'email')?.value ?? '',
+    phone: parsed.find((f) => f.kind === 'phone')?.value ?? '',
+    linkedinUrl: parsed.find((f) => f.kind === 'linkedin')?.value ?? '',
+    instagramUrl: parsed.find((f) => f.kind === 'instagram')?.value ?? '',
+    facebookUrl: parsed.find((f) => f.kind === 'facebook')?.value ?? '',
+  };
+}
 
 /** Pulls a callable number out of a contact entry's freeform text, or
  * null if nothing phone-shaped is in there — used by the next-action-date
@@ -88,16 +200,9 @@ export function extractPhoneNumber(text: string): string | null {
   return match ? match[0].trim() : null;
 }
 
-const EMAIL_PATTERN = /[\w.+-]+@[\w-]+\.[a-zA-Z.]+/;
-
 /** Pulls an email out of a contact entry's freeform text via pattern
- * match, not positional comma-splitting — contactTextToFields's own
- * "5th field is company" assumption doesn't hold for a real entry that
- * never included a company segment in the first place (e.g. "Name,
- * Title, email, phone" — only 4 fields), which would otherwise shift
- * email into the company slot and phone into the email slot. Used for
- * the contact popover's copy-email button. */
+ * match — used for the contact popover's copy-email button. */
 export function extractEmail(text: string): string | null {
-  const match = EMAIL_PATTERN.exec(text);
+  const match = EMAIL_SEARCH_PATTERN.exec(text);
   return match ? match[0].trim() : null;
 }
