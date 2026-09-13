@@ -9,7 +9,7 @@ import { Popover } from './Popover';
 import { ColorInput } from './ColorInput';
 import { parseCellRef, formatCellRef } from '../utils/spreadsheet';
 import { PRESET_COLORS } from '../constants';
-import { ChevronUp, ChevronDown } from 'lucide-react';
+import { ChevronUp, ChevronDown, MoreVertical } from 'lucide-react';
 
 interface DemoTableViewProps {
   table: DemoTable;
@@ -186,11 +186,10 @@ export function DemoTableView({ table, focusRowId, onFocusHandled }: DemoTableVi
         <table className="demo-sheet">
           <thead>
             <tr>
-              <th className="demo-th-checkbox" />
+              <th className="demo-row-gutter" />
               {table.columns.map((col) => (
                 <th
                   key={col.id}
-                  onClick={() => toggleSort(col.id)}
                   onContextMenu={(e) => {
                     e.preventDefault();
                     e.stopPropagation();
@@ -198,21 +197,38 @@ export function DemoTableView({ table, focusRowId, onFocusHandled }: DemoTableVi
                   }}
                   className="demo-th-sortable"
                 >
-                  <span>{col.name}</span>
-                  {sort?.columnId === col.id && (sort.direction === 'asc' ? <ChevronUp size={12} /> : <ChevronDown size={12} />)}
+                  <div className="demo-th-content">
+                    <button type="button" className="demo-th-name" onClick={() => toggleSort(col.id)}>
+                      {col.name}
+                      {sort?.columnId === col.id && (sort.direction === 'asc' ? <ChevronUp size={12} /> : <ChevronDown size={12} />)}
+                    </button>
+                    <button
+                      type="button"
+                      className="demo-th-menu-btn"
+                      title="Column options"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setColumnMenu({ x: e.clientX, y: e.clientY, columnId: col.id });
+                      }}
+                    >
+                      <MoreVertical size={14} />
+                    </button>
+                  </div>
                 </th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {filteredSortedRows.map((row) => (
+            {filteredSortedRows.map((row, rowIndex) => (
               <tr
                 key={row.id}
                 data-row-id={row.id}
                 className={`${selectedRowIds.includes(row.id) ? 'demo-row-selected' : ''} ${flashRowId === row.id ? 'demo-row-flash' : ''}`}
               >
-                <td className="demo-td-checkbox">
-                  <input type="checkbox" checked={selectedRowIds.includes(row.id)} onChange={() => toggleRowSelected(row.id)} />
+                <td className="demo-row-gutter">
+                  <button type="button" className="demo-row-number" onClick={() => toggleRowSelected(row.id)}>
+                    {rowIndex + 1}
+                  </button>
                 </td>
                 {table.columns.map((col) => (
                   <DemoDataCell

@@ -468,22 +468,58 @@ table.demo-sheet {
   position: sticky;
   top: 0;
   background: var(--bg-alt);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--border-strong);
+  border-right: 1px solid var(--border);
   text-align: left;
-  padding: 0.5em 0.6em;
+  padding: 0;
   font-weight: 600;
   white-space: nowrap;
   z-index: 1;
 }
+/* Column header — copied from production's own .th-content/.th-name
+   structure and styling (App.css), minus the separate letters-row/
+   drag-handle (.col-grip) production also has above this: on explicit
+   request, this demo skips that specific visual (a second bare-letter
+   header row + drag-handle dots) even though production has it, since
+   column drag-reorder isn't part of this demo's scope and the account
+   owner found the exposed handles/letters read as clutter rather than
+   polish. The ⋮ menu button opens the same DemoColumnHeaderMenu the
+   header's own right-click already does — just a second, more
+   discoverable entry point, matching production's left-click trigger. */
 .demo-th-sortable {
   cursor: pointer;
-  display: table-cell;
 }
-.demo-th-sortable span {
-  margin-right: 0.3em;
+.demo-th-content {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.3rem 0.15rem 0.3rem 0.6rem;
+  gap: 0.25rem;
 }
-.demo-th-checkbox {
-  width: 2.2em;
+.demo-th-name {
+  border: none;
+  background: transparent;
+  padding: 0.2em 0.2em;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 0.3em;
+}
+.demo-th-name:hover {
+  background: var(--bg-hover);
+}
+.demo-th-menu-btn {
+  border: none;
+  background: transparent;
+  padding: 0.2em;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.demo-th-menu-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text);
 }
 
 .demo-sheet tbody tr:nth-child(even) {
@@ -494,6 +530,43 @@ table.demo-sheet {
 }
 .demo-row-selected {
   background: var(--today-bg, #eaf2ff) !important;
+}
+
+/* Row-number gutter — copied from production's own .row-gutter/
+   .row-number styling, minus the .row-grip drag-handle (same "hide
+   these little lines" reasoning as the column header above — row
+   drag-reorder isn't in this demo's scope). Clicking the number itself
+   toggles that row's selection (used by the toolbar's bulk delete) —
+   simpler than production's own click/shift-click range system, but the
+   same underlying idea of "the number is itself the selection control,"
+   rather than a separate checkbox column production doesn't have at all. */
+.demo-row-gutter {
+  width: 3.5rem;
+  padding: 0 !important;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  border-bottom: 1px solid var(--border);
+}
+.demo-row-number {
+  display: block;
+  width: 100%;
+  height: 100%;
+  text-align: right;
+  padding: 0.35em 0.6em;
+  border: none;
+  background: transparent;
+  border-radius: 0;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+}
+.demo-row-number:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.demo-row-selected .demo-row-number {
+  color: var(--accent);
+  font-weight: 600;
 }
 
 /* Flash-highlight on jump-to-row from Calendar's "Open in table" — same
@@ -517,11 +590,6 @@ tr.demo-row-flash {
   animation: demo-row-flash 0.5s ease-in-out 3;
 }
 
-.demo-td-checkbox {
-  text-align: center;
-  border-bottom: 1px solid var(--border);
-}
-
 td.demo-cell {
   border-bottom: 1px solid var(--border);
   padding: 0;
@@ -542,6 +610,45 @@ td.demo-cell select:focus {
   outline: none;
   box-shadow: inset 0 0 0 2px var(--accent);
   background: var(--bg);
+}
+
+/* Status dropdown — copied from production's own .cell-dropdown select
+   rule: a real rounded pill/badge via appearance:none + a hand-drawn
+   chevron, not the browser's native <select> box. */
+.demo-cell-dropdown {
+  text-align: center;
+}
+/* td.demo-cell.demo-cell-dropdown (not just .demo-cell-dropdown) to
+   outrank the generic "td.demo-cell input, td.demo-cell select { width:
+   100% }" rule above on specificity — a bare single-class selector here
+   would tie on specificity with that rule and lose on source order. */
+td.demo-cell.demo-cell-dropdown select {
+  appearance: none;
+  -webkit-appearance: none;
+  width: auto;
+  max-width: calc(100% - 0.4em);
+  margin: 0 auto;
+  display: inline-block;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.28em 1.8em 0.28em 0.9em;
+  font-weight: 600;
+  font-size: 0.8em;
+  text-align: center;
+  text-align-last: center;
+  cursor: pointer;
+  background-color: transparent;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' fill='none' stroke='%236b7280' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 0.6em center;
+  background-size: 0.6em;
+  color: var(--text);
+}
+td.demo-cell.demo-cell-dropdown select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(47, 111, 237, 0.15);
+  background-color: var(--bg);
 }
 
 .demo-cell-preview {
