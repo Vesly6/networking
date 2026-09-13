@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react';
 import type { Column, Row } from '../types';
 import { parseContacts, addContact, removeContact, getContactsSummary } from '../utils/contacts';
 import { parseNoteHistory, addNoteEntry, updateNoteEntry, removeNoteEntry, getLatestNoteText, formatHistoryTimestamp } from '../utils/noteHistory';
@@ -83,6 +83,41 @@ export function DemoDataCell({
   useEffect(() => {
     setDraft(value);
   }, [value]);
+
+  // A plain onBlur is NOT reliable on its own — this was a real, reported
+  // bug ("текст не сохраняется"): clicking a *different* cell fires that
+  // cell's onSelect, which calls e.preventDefault() on its own mousedown
+  // (necessary so the newly-clicked cell's default button-focus behavior
+  // doesn't race with React swapping it to an <input> — see the plain
+  // preview button's own comment below). preventDefault() on a mousedown
+  // also suppresses the *previously* focused element's blur — a real,
+  // spec'd browser behavior — so clicking directly from one editable cell
+  // to another (no Enter first, the single most natural way to use a
+  // spreadsheet) let `editable` flip to false and unmount this <input>
+  // *without ever firing blur*, silently discarding whatever was typed.
+  // Exactly production's own DataCell.tsx fix: commitRef holds the latest
+  // commit closure (reassigned every render, so it's never stale), and a
+  // cleanup effect keyed on `editable` commits when it flips to false,
+  // regardless of whether a native blur happened first. onBlur stays too,
+  // for the cases where `editable` doesn't change at all (Enter key,
+  // clicking the search box).
+  const skipCommitRef = useRef(false);
+  const commitRef = useRef<() => void>(() => {});
+  const commit = () => {
+    if (skipCommitRef.current) {
+      skipCommitRef.current = false;
+      return;
+    }
+    if (draft === value) return;
+    onCommit(draft);
+  };
+  commitRef.current = commit;
+  useEffect(() => {
+    if (!editable) return;
+    return () => {
+      commitRef.current();
+    };
+  }, [editable]);
 
   if (column.type === 'dropdown') {
     const optionColor = value ? column.optionColors?.[value] : undefined;
@@ -282,10 +317,11 @@ export function DemoDataCell({
           value={draft}
           style={cellStyle}
           onChange={(e) => setDraft(e.target.value)}
-          onBlur={() => onCommit(draft)}
+          onBlur={commit}
           onKeyDown={(e) => {
             if (e.key === 'Enter') e.currentTarget.blur();
             if (e.key === 'Escape') {
+              skipCommitRef.current = true;
               setDraft(value);
               e.currentTarget.blur();
             }
