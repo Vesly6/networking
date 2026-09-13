@@ -22,6 +22,16 @@ import {
   getCompanyIntegrations,
   upsertCompanyIntegrations,
   clearCompanyIntegrationField,
+  type CompanyIntegrationsPatch,
+  type IntegrationMode,
+  blockCompany,
+  unblockCompany,
+  listGrantedKeys,
+  setGrantedKeys,
+  clearGrantedKeys,
+  appendAuditLog,
+  listAuditLog,
+  migratePermissionsIfNeeded,
   recordLogin,
   listLoginLog,
   listNewsTopics,
@@ -115,11 +125,15 @@ import {
   issueToken,
   requireAuth,
   requirePermission,
+  requirePermission2,
   checkSuperAdminPassword,
   issueSuperAdminToken,
   requireSuperAdmin,
   issueImpersonationToken,
+  issuePlatformImpersonationToken,
 } from './auth.js';
+import { can, effectivePermissions } from './permissions/effective.js';
+import { ALL_PERMISSION_KEYS, isPermissionKey, PERMISSIONS, type PermissionKey } from './permissions/registry.js';
 import { ApolloApiError, searchPeople, searchCompanies, enrichPerson, pollWebhookResult, getCreditUsageStats } from './apollo.js';
 import {
   InstantlyApiError,
@@ -334,66 +348,149 @@ function tableAccessContext(req: Request): TableAccessContext {
   };
 }
 
+// Whether the effective (real-or-impersonated) user is even allowed to use
+// this integration at all — the actual fix for the account owner's
+// original report (a Worker with zero configured keys could still search
+// Apollo/see the Zadarma widget/use Serper, because the old helpers below
+// only ever asked "is there a key," never "is this person allowed to use
+// this integration"). Fails safe (false) if effectiveUser(req) can't be
+// resolved at all (e.g. a worker deleted mid-session) rather than letting
+// a null user reach can(), which expects a real User.
+function integrationPermissionGranted(req: Request, permission: PermissionKey): boolean {
+  const user = effectiveUser(req);
+  return !!user && can(user, permission);
+}
+
+// Shared by every requireXKey() helper below: 'shared' mode (the default,
+// preserving every existing company's behavior exactly) prefers the
+// effective user's own per-worker key, falling back to the company-wide
+// company_integrations key; 'individual' mode (accounts/db.ts's new
+// apolloMode/serperMode/etc. columns, set via api_keys.set_mode) removes
+// that company-wide fallback entirely — a worker with no key of their own
+// gets nothing, regardless of whether the company has one configured. The
+// permission gate runs first and independently of both modes: no key of
+// any kind is even considered unless the integration's own .use permission
+// is in the effective user's live permission set.
+function resolveIntegrationCredential(
+  req: Request,
+  permission: PermissionKey,
+  workerKey: string | null | undefined,
+  companyKey: string | null | undefined,
+  mode: IntegrationMode,
+): string | undefined {
+  if (!integrationPermissionGranted(req, permission)) return undefined;
+  return mode === 'individual' ? (workerKey ?? undefined) : workerKey || companyKey || undefined;
+}
+
 // Zadarma's API key/secret deliberately stay company-scoped, unlike every
 // other requireXKey() below — they authenticate to the Zadarma ACCOUNT
 // itself (one per company), a different concept from the per-worker SIP
 // extension/caller number (accounts/db.ts's zadarma_sip etc., resolved via
 // effectiveUser in GET /api/webrtc/key and POST /api/callback), which is a
 // property of one specific line within that account. See the per-worker
-// migration's own doc comment for the same reasoning.
-function requireZadarmaCreds(companyId: string): { key: string; secret: string } {
-  const integrations = getCompanyIntegrations(companyId);
+// migration's own doc comment for the same reasoning. Still gated by
+// integrations.zadarma.use like every other integration below — covers
+// calls/SMS/click-to-call, not just the webrtc widget (see GET
+// /api/webrtc/key's own, separate gate further down).
+function requireZadarmaCreds(req: Request): { key: string; secret: string } {
+  if (!integrationPermissionGranted(req, 'integrations.zadarma.use')) throw new IntegrationNotConfiguredError();
+  const integrations = getCompanyIntegrations(req.auth!.companyId);
   if (!integrations?.zadarmaApiKey || !integrations?.zadarmaApiSecret) {
     throw new IntegrationNotConfiguredError();
   }
   return { key: integrations.zadarmaApiKey, secret: integrations.zadarmaApiSecret };
 }
 
-// Every helper below follows the same shape: prefer the effective user's
-// (real or impersonated) own per-worker key (accounts/db.ts's per-worker
-// migration), falling back to this company's shared company_integrations
-// key — so a company that never sets up per-worker keys keeps working
-// exactly as before, and a worker with their own key transparently uses it
-// instead, on every route that already called this helper.
 function requireInstantlyKey(req: Request): string {
-  const key = effectiveUser(req)?.instantlyApiKey || getCompanyIntegrations(req.auth!.companyId)?.instantlyApiKey;
+  const integrations = getCompanyIntegrations(req.auth!.companyId);
+  const key = resolveIntegrationCredential(
+    req,
+    'integrations.instantly.use',
+    effectiveUser(req)?.instantlyApiKey,
+    integrations?.instantlyApiKey,
+    integrations?.instantlyMode ?? 'shared',
+  );
   if (!key) throw new IntegrationNotConfiguredError();
   return key;
 }
 
 function requireApolloKey(req: Request): string {
-  const key = effectiveUser(req)?.apolloApiKey || getCompanyIntegrations(req.auth!.companyId)?.apolloApiKey;
+  const integrations = getCompanyIntegrations(req.auth!.companyId);
+  const key = resolveIntegrationCredential(
+    req,
+    'integrations.apollo.use',
+    effectiveUser(req)?.apolloApiKey,
+    integrations?.apolloApiKey,
+    integrations?.apolloMode ?? 'shared',
+  );
   if (!key) throw new IntegrationNotConfiguredError();
   return key;
 }
 
 function requireSerperKey(req: Request): string {
-  const key = effectiveUser(req)?.serperApiKey || getCompanyIntegrations(req.auth!.companyId)?.serperApiKey;
+  const integrations = getCompanyIntegrations(req.auth!.companyId);
+  const key = resolveIntegrationCredential(
+    req,
+    'integrations.serper.use',
+    effectiveUser(req)?.serperApiKey,
+    integrations?.serperApiKey,
+    integrations?.serperMode ?? 'shared',
+  );
   if (!key) throw new IntegrationNotConfiguredError();
   return key;
 }
 
 function requireOpenaiKey(req: Request): string {
-  const key = effectiveUser(req)?.openaiApiKey || getCompanyIntegrations(req.auth!.companyId)?.openaiApiKey;
+  const integrations = getCompanyIntegrations(req.auth!.companyId);
+  const key = resolveIntegrationCredential(
+    req,
+    'integrations.openai.use',
+    effectiveUser(req)?.openaiApiKey,
+    integrations?.openaiApiKey,
+    integrations?.openaiMode ?? 'shared',
+  );
   if (!key) throw new IntegrationNotConfiguredError();
   return key;
 }
 
 /** Returns undefined instead of throwing — the diacritic-guess step inside
  * serper.ts's searchSocialProfiles is a best-effort enhancement, not a
- * hard requirement, see that function's own doc comment. */
+ * hard requirement, see that function's own doc comment. Gated the same
+ * way as every required key above (no permission → no key, silently), not
+ * just "no key configured." */
 function optionalOpenaiKey(req: Request): string | undefined {
-  return effectiveUser(req)?.openaiApiKey || getCompanyIntegrations(req.auth!.companyId)?.openaiApiKey || undefined;
+  const integrations = getCompanyIntegrations(req.auth!.companyId);
+  return resolveIntegrationCredential(
+    req,
+    'integrations.openai.use',
+    effectiveUser(req)?.openaiApiKey,
+    integrations?.openaiApiKey,
+    integrations?.openaiMode ?? 'shared',
+  );
 }
 
 function requireAnthropicKey(req: Request): string {
-  const key = effectiveUser(req)?.anthropicApiKey || getCompanyIntegrations(req.auth!.companyId)?.anthropicApiKey;
+  const integrations = getCompanyIntegrations(req.auth!.companyId);
+  const key = resolveIntegrationCredential(
+    req,
+    'integrations.anthropic.use',
+    effectiveUser(req)?.anthropicApiKey,
+    integrations?.anthropicApiKey,
+    integrations?.anthropicMode ?? 'shared',
+  );
   if (!key) throw new IntegrationNotConfiguredError();
   return key;
 }
 
 function requireElevenlabsKey(req: Request): string {
-  const key = effectiveUser(req)?.elevenlabsApiKey || getCompanyIntegrations(req.auth!.companyId)?.elevenlabsApiKey;
+  const integrations = getCompanyIntegrations(req.auth!.companyId);
+  const key = resolveIntegrationCredential(
+    req,
+    'integrations.elevenlabs.use',
+    effectiveUser(req)?.elevenlabsApiKey,
+    integrations?.elevenlabsApiKey,
+    integrations?.elevenlabsMode ?? 'shared',
+  );
   if (!key) throw new IntegrationNotConfiguredError();
   return key;
 }
@@ -432,7 +529,16 @@ function userToPublic(user: NonNullable<ReturnType<typeof checkCredentials>>) {
     lastName: user.lastName,
     role: user.role,
     visibleTabs: user.visibleTabs,
+    // Legacy fixed boolean flags — kept for one release alongside
+    // permissionKeys below while every call site migrates (see the plan's
+    // migration notes); not read by any new check added in this pass.
     permissions: user.permissions,
+    // The live, registry-driven effective set (permissions/effective.ts) —
+    // already the intersection with the company's own ceiling for a
+    // worker, or the ceiling itself for a super_admin. Computed fresh on
+    // every login/me call, never cached — the same reasoning as every
+    // other permission check in this codebase.
+    permissionKeys: [...effectivePermissions(user)],
     company: companyWithFeatures(user.companyId),
   };
 }
@@ -445,6 +551,17 @@ app.post(
     const user = checkCredentials(username, password);
     if (!user) {
       res.status(401).json({ error: 'Neteisingas vartotojo vardas arba slaptažodis' });
+      return;
+    }
+    // This route sits before app.use(requireAuth) (it has to — there's no
+    // token yet), so requireAuth's own blocked-company check never runs
+    // for it. Without this, a blocked company's users could still "log
+    // in" successfully and only discover anything was wrong on their very
+    // next request — correct in effect (that next request is still
+    // rejected) but a confusing dead end instead of a clear message right
+    // at the login screen.
+    if (getCompany(user.companyId)?.blockedAt) {
+      res.status(403).json({ error: 'Ši įmonė yra užblokuota' });
       return;
     }
     recordLogin(user);
@@ -831,6 +948,179 @@ app.get(
   }),
 );
 
+// Platform-wide suspension — see accounts/db.ts's blockCompany/unblockCompany
+// and auth.ts's requireAuth, which rejects every one of this company's
+// requests (including one already mid-session with a still-unexpired
+// token) the instant blocked_at is set. actorRole is the literal
+// 'super_super_admin' — this credential has no users row/role field of its
+// own to read (see auth.ts's requireSuperAdmin doc comment), so this is
+// the one hardcoded sentinel that identifies it in the audit log.
+app.post(
+  '/api/admin/companies/:id/block',
+  requireSuperAdmin,
+  asyncHandler(async (req, res) => {
+    blockCompany(req.params.id);
+    appendAuditLog({
+      actorUserId: null,
+      actorRole: 'super_super_admin',
+      companyId: req.params.id,
+      action: 'company.block',
+      targetType: 'company',
+      targetId: req.params.id,
+    });
+    res.json({ ok: true });
+  }),
+);
+
+app.post(
+  '/api/admin/companies/:id/unblock',
+  requireSuperAdmin,
+  asyncHandler(async (req, res) => {
+    unblockCompany(req.params.id);
+    appendAuditLog({
+      actorUserId: null,
+      actorRole: 'super_super_admin',
+      companyId: req.params.id,
+      action: 'company.unblock',
+      targetType: 'company',
+      targetId: req.params.id,
+    });
+    res.json({ ok: true });
+  }),
+);
+
+// A company's ceiling — see permissions/effective.ts's companyCeiling; this
+// IS that company's own super_admin's effective set, so the platform panel
+// reads/writes it directly rather than through any per-user indirection.
+app.get(
+  '/api/admin/companies/:id/permissions',
+  requireSuperAdmin,
+  asyncHandler(async (req, res) => {
+    res.json({ permissionKeys: listGrantedKeys('company', req.params.id) });
+  }),
+);
+
+// Blind overwrite of the company's whole ceiling — the panel always
+// submits the complete checked set (see setGrantedKeys' own doc comment).
+// No escalation check needed here (the platform IS the ceiling's own
+// author), but every actual change IS diffed and logged as distinct
+// grant/revoke audit entries, not one opaque "permissions changed" blob —
+// this is what makes "who revoked X from company Y, and when" answerable
+// later. A revoke here takes effect for that company's super_admin AND
+// cascades to every worker who'd been granted it, immediately, with zero
+// additional writes — see effectivePermissions' own doc comment for why.
+app.put(
+  '/api/admin/companies/:id/permissions',
+  requireSuperAdmin,
+  asyncHandler(async (req, res) => {
+    const { permissionKeys } = req.body ?? {};
+    if (!Array.isArray(permissionKeys) || permissionKeys.some((k) => !isPermissionKey(k))) {
+      res.status(400).json({ error: 'Invalid "permissionKeys"' });
+      return;
+    }
+    const before = new Set(listGrantedKeys('company', req.params.id));
+    const after = new Set(permissionKeys as PermissionKey[]);
+    setGrantedKeys('company', req.params.id, permissionKeys as PermissionKey[], 'platform');
+    for (const key of after) {
+      if (!before.has(key)) {
+        appendAuditLog({
+          actorUserId: null,
+          actorRole: 'super_super_admin',
+          companyId: req.params.id,
+          action: 'permission.grant',
+          targetType: 'permission',
+          targetId: key,
+        });
+      }
+    }
+    for (const key of before) {
+      if (!after.has(key)) {
+        appendAuditLog({
+          actorUserId: null,
+          actorRole: 'super_super_admin',
+          companyId: req.params.id,
+          action: 'permission.revoke',
+          targetType: 'permission',
+          targetId: key,
+        });
+      }
+    }
+    res.json({ permissionKeys: [...after] });
+  }),
+);
+
+// Diagnostic "log in as this company's super_admin," one level up from a
+// company's own worker-impersonation just below (see
+// issuePlatformImpersonationToken's own doc comment in auth.ts for why
+// this is a genuinely distinct token type, not a reuse of
+// issueImpersonationToken). Once issued, requests carrying it get full
+// company-ceiling rights (req.auth!.role is that company's real
+// super_admin, so effectivePermissions() resolves exactly as it would for
+// that admin's own login) plus req.auth!.platformActing = true, which is
+// what GET /api/auth/me reads to tell the frontend to show the persistent
+// "acting as Company X — Exit" banner. Distinctly logged
+// (actorRole: 'super_super_admin') so it's never confused with a
+// company's own worker-impersonation log entries.
+app.post(
+  '/api/admin/companies/:id/impersonate',
+  requireSuperAdmin,
+  asyncHandler(async (req, res) => {
+    const admin = getCompanySuperAdmin(req.params.id);
+    if (!admin) {
+      res.status(404).json({ error: 'Super admin not found' });
+      return;
+    }
+    const token = issuePlatformImpersonationToken(admin);
+    appendAuditLog({
+      actorUserId: null,
+      actorRole: 'super_super_admin',
+      companyId: req.params.id,
+      action: 'impersonation.start',
+      targetType: 'user',
+      targetId: admin.id,
+    });
+    res.json({ token });
+  }),
+);
+
+// Purely a logging hook — there's no server-side session to actually tear
+// down (the platform-impersonation token is stateless and short-lived, see
+// auth.ts; "exiting" on the frontend just means switching back to the
+// platform's own already-held superadmin token, discarding this one). The
+// frontend's Exit button calls this first so "impersonation.start" always
+// has a matching "impersonation.stop" in the log, same pair the account
+// owner's own spec asked for.
+app.post(
+  '/api/admin/companies/:id/impersonate/stop',
+  requireSuperAdmin,
+  asyncHandler(async (req, res) => {
+    appendAuditLog({
+      actorUserId: null,
+      actorRole: 'super_super_admin',
+      companyId: req.params.id,
+      action: 'impersonation.stop',
+      targetType: 'company',
+      targetId: req.params.id,
+    });
+    res.json({ ok: true });
+  }),
+);
+
+// Platform-wide audit log — every company's grants/revokes/blocks/
+// impersonations/rejected-access-attempts, one flat feed (companyId
+// omitted = every company, same optional-filter shape as GET
+// /api/admin/login-log below).
+app.get(
+  '/api/admin/audit-log',
+  requireSuperAdmin,
+  asyncHandler(async (req, res) => {
+    const { companyId, limit } = req.query;
+    const parsedLimit = typeof limit === 'string' ? Number(limit) : NaN;
+    const effectiveLimit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? Math.min(parsedLimit, 1000) : 300;
+    res.json({ entries: listAuditLog(typeof companyId === 'string' ? companyId : undefined, effectiveLimit) });
+  }),
+);
+
 app.get(
   '/api/admin/companies/:id/workers',
   requireSuperAdmin,
@@ -838,6 +1128,28 @@ app.get(
     res.json({ workers: listWorkers(req.params.id).map(workerToPublic) });
   }),
 );
+
+// Shared by both the platform admin's and a company's own worker
+// create/update routes: pulls a validated PermissionKey[] out of the
+// request body, or null if the field wasn't sent at all (leave existing
+// grants unchanged, same "omitted means unchanged" convention every other
+// optional field in this section already follows) — throws a plain Error
+// (caught by the route's own explicit try, not asyncHandler's generic
+// mapping) carrying the exact invalid keys so the caller can 400 with a
+// specific, actionable message instead of silently dropping them.
+class InvalidPermissionKeysError extends Error {
+  constructor(public keys: string[]) {
+    super(`Nežinomi teisių raktai: ${keys.join(', ')}`);
+  }
+}
+function pickPermissionKeys(body: Record<string, unknown>): PermissionKey[] | null {
+  const value = body.permissionKeys;
+  if (value === undefined) return null;
+  if (!Array.isArray(value)) throw new InvalidPermissionKeysError(['(ne masyvas)']);
+  const invalid = value.filter((k) => !isPermissionKey(k));
+  if (invalid.length > 0) throw new InvalidPermissionKeysError(invalid.map(String));
+  return value as PermissionKey[];
+}
 
 app.post(
   '/api/admin/companies/:id/workers',
@@ -860,6 +1172,16 @@ app.post(
       res.status(400).json({ error: 'Toks vartotojo vardas jau užimtas' });
       return;
     }
+    let permissionKeys: PermissionKey[] | null;
+    try {
+      permissionKeys = pickPermissionKeys(req.body ?? {});
+    } catch (err) {
+      if (err instanceof InvalidPermissionKeysError) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
     const worker = createUser({
       companyId: req.params.id,
       username: username.trim(),
@@ -870,6 +1192,23 @@ app.post(
       visibleTabs: Array.isArray(visibleTabs) ? visibleTabs : [],
       permissions: permissions && typeof permissions === 'object' ? permissions : undefined,
     });
+    if (permissionKeys) {
+      // Platform admin acting directly — no escalation check needed (see
+      // rejectedEscalatingKeys' own doc comment): the platform IS the
+      // ceiling's own author, and effectivePermissions() intersects live
+      // regardless of what's stored here, so there's nothing to escalate
+      // into even if this granted more than the company's own ceiling.
+      setGrantedKeys('user', worker.id, permissionKeys, 'platform');
+      appendAuditLog({
+        actorUserId: null,
+        actorRole: 'platform',
+        companyId: req.params.id,
+        action: 'permission.grant',
+        targetType: 'user',
+        targetId: worker.id,
+        detail: { keys: permissionKeys },
+      });
+    }
     res.json(workerToPublic(worker));
   }),
 );
@@ -887,6 +1226,16 @@ app.patch(
       res.status(400).json({ error: 'Vardas negali būti tuščias' });
       return;
     }
+    let permissionKeys: PermissionKey[] | null;
+    try {
+      permissionKeys = pickPermissionKeys(req.body ?? {});
+    } catch (err) {
+      if (err instanceof InvalidPermissionKeysError) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
     const worker = updateWorker(req.params.userId, req.params.id, {
       firstName: typeof firstName === 'string' ? firstName : undefined,
       lastName: typeof lastName === 'string' ? lastName : undefined,
@@ -898,6 +1247,18 @@ app.patch(
       res.status(404).json({ error: 'Worker not found' });
       return;
     }
+    if (permissionKeys) {
+      setGrantedKeys('user', worker.id, permissionKeys, 'platform');
+      appendAuditLog({
+        actorUserId: null,
+        actorRole: 'platform',
+        companyId: req.params.id,
+        action: 'permission.grant',
+        targetType: 'user',
+        targetId: worker.id,
+        detail: { keys: permissionKeys },
+      });
+    }
     res.json(workerToPublic(worker));
   }),
 );
@@ -907,6 +1268,7 @@ app.delete(
   requireSuperAdmin,
   asyncHandler(async (req, res) => {
     deleteWorker(req.params.userId, req.params.id);
+    clearGrantedKeys('user', req.params.userId);
     res.json({ ok: true });
   }),
 );
@@ -1177,9 +1539,37 @@ app.get(
       role: user.role,
       visibleTabs: displayUser.visibleTabs,
       permissions: user.permissions,
+      // Same "REAL admin's own, not the impersonated worker's" rule as
+      // role/permissions above — full admin rights throughout an
+      // impersonation session is the whole point. This only affects what
+      // the frontend chooses to SHOW; every actual credential/data
+      // resolution on the backend (requireXKey() helpers, GET
+      // /api/webrtc/key) already resolves through effectiveUser(), which
+      // correctly reflects the impersonated worker there — the two are
+      // deliberately different questions (see auth.ts's requirePermission2
+      // doc comment).
+      permissionKeys: [...effectivePermissions(user)],
       company: companyWithFeatures(user.companyId),
       impersonating,
+      // True only for a platform Super Super Admin diagnosing inside this
+      // company (see auth.ts's issuePlatformImpersonationToken) — the
+      // frontend's persistent "acting as {company.name} — Exit" banner
+      // reads this, distinct from `impersonating` above (a company's own
+      // worker-impersonation).
+      platformActing: !!req.auth!.platformActing,
     });
+  }),
+);
+
+// The permission-registry catalog itself (server/src/permissions/registry.ts)
+// — every authenticated session can read it (it's a list of labels, not a
+// secret) so the frontend has one canonical source for every checkbox
+// label in the Workers/permission-grant panels instead of hand-duplicating
+// PERMISSIONS in a second, client-side file that could drift out of sync.
+app.get(
+  '/api/permissions/registry',
+  asyncHandler(async (_req, res) => {
+    res.json({ keys: ALL_PERMISSION_KEYS, labels: PERMISSIONS });
   }),
 );
 
@@ -1198,6 +1588,7 @@ function requireNotWorker(req: Request, res: Response, next: NextFunction) {
 app.get(
   '/api/workers',
   requireNotWorker,
+  requirePermission2('workers.manage'),
   asyncHandler(async (req, res) => {
     res.json({ workers: listWorkers(req.auth!.companyId).map(workerToPublic) });
   }),
@@ -1256,12 +1647,23 @@ function workerToPublic(worker: User): Record<string, unknown> {
     openaiApiKeySet: !!worker.openaiApiKey,
     anthropicApiKeySet: !!worker.anthropicApiKey,
     elevenlabsApiKeySet: !!worker.elevenlabsApiKey,
+    // grantedPermissionKeys is this worker's OWN raw grant (what their
+    // super_admin actually checked for them), independent of whether their
+    // company's current ceiling still allows it — shown as-is so the
+    // permission panel can explain a greyed-out effective checkbox ("you
+    // granted this, but your own company doesn't currently have it") rather
+    // than silently hiding the grant. effectivePermissionKeys is the live
+    // intersection (permissions/effective.ts) — what's actually active for
+    // this worker right now.
+    grantedPermissionKeys: listGrantedKeys('user', worker.id),
+    effectivePermissionKeys: [...effectivePermissions(worker)],
   };
 }
 
 app.post(
   '/api/workers',
   requireNotWorker,
+  requirePermission2('workers.manage'),
   asyncHandler(async (req, res) => {
     const body = req.body ?? {};
     const { username, password, firstName, lastName, visibleTabs, permissions } = body;
@@ -1299,6 +1701,7 @@ app.post(
 app.patch(
   '/api/workers/:id',
   requireNotWorker,
+  requirePermission2('workers.manage'),
   asyncHandler(async (req, res) => {
     const body = req.body ?? {};
     const { visibleTabs, permissions, password, firstName, lastName } = body;
@@ -1309,6 +1712,42 @@ app.patch(
     if (firstName !== undefined && (typeof firstName !== 'string' || !firstName.trim())) {
       res.status(400).json({ error: 'Vardas negali būti tuščias' });
       return;
+    }
+    // Escalation guard: a company's own super_admin may only grant a
+    // worker a SUBSET of what they themselves currently hold (the account
+    // owner's own explicit requirement) — checked here, not just in the
+    // UI, since a direct API call bypassing the checkbox form must be
+    // rejected the same way. Not needed on the platform admin's parallel
+    // route (PATCH /api/admin/companies/:id/workers/:userId) — see
+    // pickPermissionKeys' own doc comment for why over-granting there is
+    // structurally inert rather than a real escalation.
+    let permissionKeys: PermissionKey[] | null;
+    try {
+      permissionKeys = pickPermissionKeys(body);
+    } catch (err) {
+      if (err instanceof InvalidPermissionKeysError) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+    if (permissionKeys) {
+      const actingAdmin = getUserById(req.auth!.userId)!;
+      const actingEffective = effectivePermissions(actingAdmin);
+      const escalating = permissionKeys.filter((key) => !actingEffective.has(key));
+      if (escalating.length > 0) {
+        appendAuditLog({
+          actorUserId: req.auth!.userId,
+          actorRole: req.auth!.role,
+          companyId: req.auth!.companyId,
+          action: 'access.denied',
+          targetType: 'user',
+          targetId: req.params.id,
+          detail: { attemptedKeys: escalating },
+        });
+        res.status(403).json({ error: 'Negalite suteikti teisių, kurių patys neturite', keys: escalating });
+        return;
+      }
     }
     const worker = updateWorker(req.params.id, req.auth!.companyId, {
       firstName: typeof firstName === 'string' ? firstName : undefined,
@@ -1322,6 +1761,18 @@ app.patch(
       res.status(404).json({ error: 'Worker not found' });
       return;
     }
+    if (permissionKeys) {
+      setGrantedKeys('user', worker.id, permissionKeys, req.auth!.userId);
+      appendAuditLog({
+        actorUserId: req.auth!.userId,
+        actorRole: req.auth!.role,
+        companyId: req.auth!.companyId,
+        action: 'permission.grant',
+        targetType: 'user',
+        targetId: worker.id,
+        detail: { keys: permissionKeys },
+      });
+    }
     res.json(workerToPublic(worker));
   }),
 );
@@ -1329,8 +1780,10 @@ app.patch(
 app.delete(
   '/api/workers/:id',
   requireNotWorker,
+  requirePermission2('workers.manage'),
   asyncHandler(async (req, res) => {
     deleteWorker(req.params.id, req.auth!.companyId);
+    clearGrantedKeys('user', req.params.id);
     res.json({ ok: true });
   }),
 );
@@ -1350,6 +1803,7 @@ app.delete(
 app.post(
   '/api/workers/:id/impersonate',
   requireNotWorker,
+  requirePermission2('workers.manage'),
   asyncHandler(async (req, res) => {
     if (req.auth!.actingAs) {
       res.status(403).json({ error: 'Jau veikiate kaip kitas darbuotojas — pirmiausia grįžkite į savo paskyrą.' });
@@ -1382,6 +1836,7 @@ app.post(
 app.get(
   '/api/worker-actions',
   requireNotWorker,
+  requirePermission2('workers.manage'),
   asyncHandler(async (req, res) => {
     const { userId, limit } = req.query;
     const parsedLimit = typeof limit === 'string' ? Number(limit) : NaN;
@@ -1406,6 +1861,8 @@ const INTEGRATION_FIELDS = [
   'zadarmaApiKey',
   'zadarmaApiSecret',
   'zadarmaCallerNumber',
+  'zadarmaSip',
+  'zadarmaWidgetSip',
   'instantlyApiKey',
   'apolloApiKey',
   'serperApiKey',
@@ -1416,18 +1873,31 @@ const INTEGRATION_FIELDS = [
 ] as const;
 // Real secrets are never sent back to the browser after saving — only
 // whether one is set. The handful of fields here aren't actually secret
-// (a phone number, a local CDP URL) so those are returned in plain text,
-// pre-filled, same as any other settings form field.
-const NON_SECRET_INTEGRATION_FIELDS = new Set(['zadarmaCallerNumber', 'linkedinCdpUrl']);
+// (a phone number, a local CDP URL, a SIP extension) so those are returned
+// in plain text, pre-filled, same as any other settings form field.
+const NON_SECRET_INTEGRATION_FIELDS = new Set(['zadarmaCallerNumber', 'zadarmaSip', 'zadarmaWidgetSip', 'linkedinCdpUrl']);
+
+// Per-provider Shared/Individual mode fields (accounts/db.ts's new
+// company_integrations columns) — a small enum, not a secret, so these are
+// handled separately from the free-text INTEGRATION_FIELDS above (see
+// patchIntegrations, which validates against the IntegrationMode union
+// instead of accepting any non-empty string).
+const INTEGRATION_MODE_FIELDS = ['apolloMode', 'serperMode', 'instantlyMode', 'openaiMode', 'anthropicMode', 'elevenlabsMode'] as const;
 
 // Shared by the /api/admin/companies/:id/integrations routes (registered
-// above app.use(requireAuth), see their own doc comment) for every company.
+// above app.use(requireAuth), see their own doc comment) for every company —
+// the COMPANY's own configured state, not any one user's, since the admin
+// editing this needs to see what's actually saved regardless of who's
+// asking. Contrast with effectiveIntegrationsStatus below.
 function integrationsStatus(companyId: string): Record<string, boolean | string | null> {
   const integrations = getCompanyIntegrations(companyId);
   const status: Record<string, boolean | string | null> = {};
   for (const field of INTEGRATION_FIELDS) {
     const value = integrations?.[field] ?? null;
     status[field] = NON_SECRET_INTEGRATION_FIELDS.has(field) ? value : !!value;
+  }
+  for (const field of INTEGRATION_MODE_FIELDS) {
+    status[field] = integrations?.[field] ?? 'shared';
   }
   return status;
 }
@@ -1438,21 +1908,95 @@ function patchIntegrations(companyId: string, body: Record<string, unknown>): vo
     const value = body[field];
     if (typeof value === 'string' && value.trim()) patch[field] = value.trim();
   }
-  upsertCompanyIntegrations(companyId, patch);
+  const modePatch: Partial<Record<(typeof INTEGRATION_MODE_FIELDS)[number], IntegrationMode>> = {};
+  for (const field of INTEGRATION_MODE_FIELDS) {
+    const value = body[field];
+    if (value === 'shared' || value === 'individual') modePatch[field] = value;
+  }
+  upsertCompanyIntegrations(companyId, { ...patch, ...modePatch } as CompanyIntegrationsPatch);
+}
+
+// Same field-presence SHAPE as integrationsStatus() above, but resolved
+// for the REQUESTING (effective) user specifically, through the exact same
+// permission+mode logic the requireXKey() helpers use — reused by GET
+// /api/integrations/status below (a regular company session, including a
+// worker, deciding whether its OWN nav tabs should dim). Before this pass
+// that route just asked "does the COMPANY have a key," ignoring both
+// permission and per-worker mode entirely, so a worker with no permission
+// (or in individual mode, no key of their own) saw every tab as available
+// right up until they actually clicked in and hit a 409 — this makes the
+// two agree.
+function effectiveIntegrationsStatus(req: Request): Record<string, boolean | string | null> {
+  const integrations = getCompanyIntegrations(req.auth!.companyId);
+  const user = effectiveUser(req);
+  const zadarmaGranted = integrationPermissionGranted(req, 'integrations.zadarma.use');
+  return {
+    zadarmaApiKey: zadarmaGranted && !!integrations?.zadarmaApiKey,
+    zadarmaApiSecret: zadarmaGranted && !!integrations?.zadarmaApiSecret,
+    // Not secrets in themselves (a phone number, a SIP extension — see
+    // NON_SECRET_INTEGRATION_FIELDS), but still gated the same as the keys
+    // above: no reason for a worker with no Zadarma permission at all to
+    // see the company's configured caller number/SIP identity either.
+    zadarmaCallerNumber: zadarmaGranted ? user?.zadarmaCallerNumber || integrations?.zadarmaCallerNumber || null : null,
+    zadarmaSip: zadarmaGranted ? user?.zadarmaSip || integrations?.zadarmaSip || null : null,
+    zadarmaWidgetSip: zadarmaGranted ? user?.zadarmaWidgetSip || integrations?.zadarmaWidgetSip || null : null,
+    instantlyApiKey: !!resolveIntegrationCredential(
+      req,
+      'integrations.instantly.use',
+      user?.instantlyApiKey,
+      integrations?.instantlyApiKey,
+      integrations?.instantlyMode ?? 'shared',
+    ),
+    apolloApiKey: !!resolveIntegrationCredential(
+      req,
+      'integrations.apollo.use',
+      user?.apolloApiKey,
+      integrations?.apolloApiKey,
+      integrations?.apolloMode ?? 'shared',
+    ),
+    serperApiKey: !!resolveIntegrationCredential(
+      req,
+      'integrations.serper.use',
+      user?.serperApiKey,
+      integrations?.serperApiKey,
+      integrations?.serperMode ?? 'shared',
+    ),
+    openaiApiKey: !!resolveIntegrationCredential(
+      req,
+      'integrations.openai.use',
+      user?.openaiApiKey,
+      integrations?.openaiApiKey,
+      integrations?.openaiMode ?? 'shared',
+    ),
+    anthropicApiKey: !!resolveIntegrationCredential(
+      req,
+      'integrations.anthropic.use',
+      user?.anthropicApiKey,
+      integrations?.anthropicApiKey,
+      integrations?.anthropicMode ?? 'shared',
+    ),
+    elevenlabsApiKey: !!resolveIntegrationCredential(
+      req,
+      'integrations.elevenlabs.use',
+      user?.elevenlabsApiKey,
+      integrations?.elevenlabsApiKey,
+      integrations?.elevenlabsMode ?? 'shared',
+    ),
+    linkedinCdpUrl: integrations?.linkedinCdpUrl ?? null,
+  };
 }
 
 // A regular company session (including a worker) never sees the
 // admin-managed Integracijos panel, but the frontend still needs to know
 // *whether* a given integration is configured — e.g. to dim the Paieška
 // nav tab instead of letting the user click into it and hit an
-// IntegrationNotConfiguredError. Reuses the same field-presence data
-// integrationsStatus() already computes for the admin dashboard; booleans
-// only, no secret ever reaches this response, so a plain requireAuth
-// session (not requireNotWorker/requireSuperAdmin) is enough to read it.
+// IntegrationNotConfiguredError. booleans only, no secret ever reaches
+// this response, so a plain requireAuth session (not requireNotWorker/
+// requireSuperAdmin) is enough to read it.
 app.get(
   '/api/integrations/status',
   asyncHandler(async (req, res) => {
-    res.json(integrationsStatus(req.auth!.companyId));
+    res.json(effectiveIntegrationsStatus(req));
   }),
 );
 
@@ -1480,7 +2024,7 @@ app.get(
         skip: typeof skip === 'string' ? Number(skip) : undefined,
         limit: typeof limit === 'string' ? Number(limit) : undefined,
       },
-      requireZadarmaCreds(req.auth!.companyId),
+      requireZadarmaCreds(req),
     );
     res.json(result);
   }),
@@ -1491,7 +2035,7 @@ app.get(
 app.get(
   '/api/zadarma/balance',
   asyncHandler(async (req, res) => {
-    const result = await getBalance(requireZadarmaCreds(req.auth!.companyId));
+    const result = await getBalance(requireZadarmaCreds(req));
     res.json(result);
   }),
 );
@@ -1525,7 +2069,7 @@ app.post(
           .filter((c): c is { call_id: unknown; callstart: unknown } => c && typeof c === 'object')
           .map((c) => ({ callId: String(c.call_id), callstart: String(c.callstart) })),
       },
-      requireZadarmaCreds(req.auth!.companyId),
+      requireZadarmaCreds(req),
     );
     res.json(result);
   }),
@@ -1534,7 +2078,7 @@ app.post(
 app.get(
   '/api/calls/:callId/recording',
   asyncHandler(async (req, res) => {
-    const result = await requestRecording({ callId: req.params.callId }, requireZadarmaCreds(req.auth!.companyId));
+    const result = await requestRecording({ callId: req.params.callId }, requireZadarmaCreds(req));
     res.json(result);
   }),
 );
@@ -1548,7 +2092,7 @@ app.post(
   '/api/calls/:callId/transcribe',
   asyncHandler(async (req, res) => {
     const lang = typeof req.body?.lang === 'string' ? req.body.lang : 'lt';
-    const recording = await requestRecording({ callId: req.params.callId }, requireZadarmaCreds(req.auth!.companyId));
+    const recording = await requestRecording({ callId: req.params.callId }, requireZadarmaCreds(req));
     const link = recording.link ?? recording.links?.[0];
     if (!link) {
       res.status(502).json({ error: 'Šiam skambučiui įrašo nėra' });
@@ -1629,7 +2173,7 @@ app.post(
       res.status(400).json({ error: 'Missing "to" phone number' });
       return;
     }
-    const creds = requireZadarmaCreds(req.auth!.companyId);
+    const creds = requireZadarmaCreds(req);
     const from = effectiveUser(req)?.zadarmaCallerNumber || getCompanyIntegrations(req.auth!.companyId)?.zadarmaCallerNumber;
     if (!from) {
       res.status(409).json({ error: 'Skambinančio numerio dar nesukonfigūruota — susisiekite su administratoriumi, kad jį sukonfigūruotų.' });
@@ -1656,7 +2200,7 @@ app.post(
       return;
     }
     const callerId = process.env.ZADARMA_SMS_CALLER_ID;
-    const result = await sendSms({ number, message, ...(callerId ? { callerId } : {}) }, requireZadarmaCreds(req.auth!.companyId));
+    const result = await sendSms({ number, message, ...(callerId ? { callerId } : {}) }, requireZadarmaCreds(req));
     res.json(result);
   }),
 );
@@ -1677,7 +2221,7 @@ app.post(
       res.status(500).json({ error: 'PUBLIC_BASE_URL is not set — check server/.env (needed to register the SMS webhook)' });
       return;
     }
-    const creds = requireZadarmaCreds(req.auth!.companyId);
+    const creds = requireZadarmaCreds(req);
     await setWebhookUrl(`${base}/api/zadarma/sms-webhook`, creds);
     await setWebhookHooks({ sms: true }, creds);
     res.json({ ok: true, url: `${base}/api/zadarma/sms-webhook` });
@@ -1703,6 +2247,20 @@ app.get(
 app.get(
   '/api/webrtc/key',
   asyncHandler(async (req, res) => {
+    // A real, reported cross-COMPANY leak, not just cross-role: this used
+    // to fall back straight to process.env.ZADARMA_WEBRTC_SIP/
+    // _WIDGET_SIP — one pair of values for the entire deployment, so the
+    // widget mounted successfully for literally any authenticated user of
+    // ANY company, configured or not. Those env vars are now a one-time
+    // startup seed only (see the boot sequence near the bottom of this
+    // file) — the live fallback chain is worker override → this COMPANY's
+    // own zadarmaSip/zadarmaWidgetSip (accounts/db.ts), never the global
+    // process.env pair, and gated by integrations.zadarma.use first so a
+    // worker with no permission at all never even reaches the fallback
+    // chain regardless of what's configured above them.
+    if (!integrationPermissionGranted(req, 'integrations.zadarma.use')) {
+      throw new IntegrationNotConfiguredError();
+    }
     // Two different SIP formats for two different Zadarma calls — per
     // Zadarma support: /v1/webrtc/get_key/ itself wants the bare extension
     // ("100"), but the value actually handed to the WIDGET's own init
@@ -1712,25 +2270,19 @@ app.get(
     // integrationDisabled/"Sip not found" error, not anything about the
     // domain or the key itself.
     //
-    // Prefers this specific user's own configured SIP/widget SIP (see
-    // accounts/db.ts's per-worker migration and effectiveUser above),
-    // falling back to the existing process.env values so a deployment that
-    // hasn't set up per-worker numbers keeps working exactly as before.
     // effectiveUser() is also what makes this resolve the impersonated
     // worker's own SIP (not the admin's) while impersonating, for free.
     const user = effectiveUser(req);
-    const sip = user?.zadarmaSip || process.env.ZADARMA_WEBRTC_SIP;
-    const widgetSip = user?.zadarmaWidgetSip || process.env.ZADARMA_WEBRTC_WIDGET_SIP;
+    const integrations = getCompanyIntegrations(req.auth!.companyId);
+    const sip = user?.zadarmaSip || integrations?.zadarmaSip;
+    const widgetSip = user?.zadarmaWidgetSip || integrations?.zadarmaWidgetSip;
     if (!sip || !widgetSip) {
-      res
-        .status(500)
-        .json({
-          error:
-            'ZADARMA_WEBRTC_SIP / ZADARMA_WEBRTC_WIDGET_SIP are not set — check server/.env, or configure this worker\'s own SIP under Darbuotojai',
-        });
+      res.status(500).json({
+        error: 'Zadarma SIP / widget SIP nesukonfigūruota — susisiekite su administratoriumi, kad juos sukonfigūruotų.',
+      });
       return;
     }
-    const result = await getWebrtcKey(sip, requireZadarmaCreds(req.auth!.companyId));
+    const result = await getWebrtcKey(sip, requireZadarmaCreds(req));
     res.json({ key: result.key, sip: widgetSip });
   }),
 );
@@ -2193,6 +2745,7 @@ app.get(
 app.post(
   '/api/import-history/:id/rollback',
   requireNotWorker,
+  requirePermission2('tables.manage'),
   asyncHandler(async (req, res) => {
     const companyId = req.auth!.companyId;
     const operation = getImportOperation(req.params.id, companyId);
@@ -3228,6 +3781,7 @@ app.get(
 app.post(
   '/api/tables',
   requireNotWorker,
+  requirePermission2('tables.manage'),
   asyncHandler(async (req, res) => {
     const table = req.body;
     if (!table?.id || typeof table.name !== 'string' || !Array.isArray(table.columns)) {
@@ -3335,6 +3889,7 @@ app.patch(
 app.patch(
   '/api/tables/:id/name',
   requireNotWorker,
+  requirePermission2('tables.manage'),
   asyncHandler(async (req, res) => {
     if (typeof req.body?.name !== 'string') {
       res.status(400).json({ error: 'Invalid "name"' });
@@ -3359,6 +3914,7 @@ app.patch(
 app.post(
   '/api/tables/:id/backup-flag',
   requireNotWorker,
+  requirePermission2('tables.manage'),
   asyncHandler(async (req, res) => {
     if (typeof req.body?.enabled !== 'boolean') {
       res.status(400).json({ error: 'Invalid "enabled"' });
@@ -3381,6 +3937,7 @@ app.post(
 app.patch(
   '/api/tables/:id/folder',
   requireNotWorker,
+  requirePermission2('tables.manage'),
   asyncHandler(async (req, res) => {
     const companyId = req.auth!.companyId;
     const existing = getTable(req.params.id, companyId);
@@ -3405,6 +3962,7 @@ app.patch(
 app.patch(
   '/api/tables/:id/owner',
   requireNotWorker,
+  requirePermission2('tables.manage'),
   asyncHandler(async (req, res) => {
     const companyId = req.auth!.companyId;
     const existing = getTable(req.params.id, companyId);
@@ -3432,6 +3990,7 @@ app.patch(
 app.put(
   '/api/tables/reorder',
   requireNotWorker,
+  requirePermission2('tables.manage'),
   asyncHandler(async (req, res) => {
     if (!Array.isArray(req.body?.tables)) {
       res.status(400).json({ error: 'Invalid "tables"' });
@@ -3460,6 +4019,7 @@ app.get(
 app.post(
   '/api/table-folders',
   requireNotWorker,
+  requirePermission2('tables.manage'),
   asyncHandler(async (req, res) => {
     const folder = req.body as Partial<TableFolder>;
     if (!folder?.id || typeof folder.name !== 'string' || typeof folder.order !== 'number') {
@@ -3474,6 +4034,7 @@ app.post(
 app.patch(
   '/api/table-folders/:id',
   requireNotWorker,
+  requirePermission2('tables.manage'),
   asyncHandler(async (req, res) => {
     if (typeof req.body?.name !== 'string') {
       res.status(400).json({ error: 'Invalid "name"' });
@@ -3487,6 +4048,7 @@ app.patch(
 app.delete(
   '/api/table-folders/:id',
   requireNotWorker,
+  requirePermission2('tables.manage'),
   asyncHandler(async (req, res) => {
     deleteTableFolder(req.params.id, req.auth!.companyId);
     res.json({ ok: true });
@@ -3496,6 +4058,7 @@ app.delete(
 app.put(
   '/api/table-folders/reorder',
   requireNotWorker,
+  requirePermission2('tables.manage'),
   asyncHandler(async (req, res) => {
     if (!Array.isArray(req.body?.folders)) {
       res.status(400).json({ error: 'Invalid "folders"' });
@@ -3516,6 +4079,7 @@ app.put(
 app.delete(
   '/api/tables/:id',
   requireNotWorker,
+  requirePermission2('tables.manage'),
   asyncHandler(async (req, res) => {
     const companyId = req.auth!.companyId;
     const existing = getTable(req.params.id, companyId);
@@ -3563,6 +4127,7 @@ app.get(
 app.get(
   '/api/backups',
   requireNotWorker,
+  requirePermission2('backups.manage'),
   asyncHandler(async (req, res) => {
     res.json({ backups: listBackupsForCompany(req.auth!.companyId) });
   }),
@@ -3571,6 +4136,7 @@ app.get(
 app.delete(
   '/api/backups/:id',
   requireNotWorker,
+  requirePermission2('backups.manage'),
   asyncHandler(async (req, res) => {
     deleteBackup(req.params.id, req.auth!.companyId);
     res.json({ ok: true });
@@ -3587,6 +4153,7 @@ app.delete(
 app.get(
   '/api/backups/:id/csv',
   requireNotWorker,
+  requirePermission2('backups.manage'),
   asyncHandler(async (req, res) => {
     const result = backupToCsvText(req.params.id, req.auth!.companyId);
     if (!result) {
@@ -3604,6 +4171,7 @@ app.get(
 app.post(
   '/api/backups/:id/restore',
   requireNotWorker,
+  requirePermission2('backups.manage'),
   asyncHandler(async (req, res) => {
     const table = restoreBackupAsNewTable(req.params.id, req.auth!.companyId, effectiveUser(req)?.id);
     if (!table) {
@@ -3968,6 +4536,15 @@ const { companyId: firstCompanyId } = bootstrapFirstCompanyIfNeeded();
 backfillCompanyId(firstCompanyId);
 backfillTableOwners();
 
+// One-time, run-once-ever migration (see accounts/db.ts's own doc comment
+// on permission_migration_done) — converts every existing company's
+// implicit "super_admin can do everything" into an explicit full
+// permission_grants ceiling, and every existing worker's ten boolean
+// columns into their own permission_grants rows, with zero behavior
+// change on deploy day. Must run before any request can reach a
+// can()/requirePermission2() check.
+migratePermissionsIfNeeded();
+
 // One-time seed, same "idempotent, real on the very first boot after this
 // shipped, a no-op forever after" shape as backfillCompanyId above — moves
 // the first company's own already-working credentials (today's
@@ -4003,6 +4580,33 @@ if (!getCompanyIntegrations(firstCompanyId)) {
     // be an explicit env var.
     linkedinCdpUrl: process.env.LINKEDIN_CDP_URL || 'http://127.0.0.1:9222',
   });
+}
+
+// A second, narrower one-time seed, independent of the guard above (which
+// only fires when company_integrations has no row at all yet — already
+// long past true on the real, already-running deployment). Closes the
+// cross-COMPANY Zadarma SIP leak documented at GET /api/webrtc/key: these
+// two columns are brand new, so the one real company that already has
+// working ZADARMA_WEBRTC_SIP/_WIDGET_SIP env vars needs them copied into
+// its own row, or its softphone widget would otherwise go from "shared
+// deployment-wide default" to "nothing" the instant the route stops
+// reading process.env. Checked per-column so it never overwrites a value
+// someone has already set (including an explicit later choice to leave
+// one blank) on any later boot.
+{
+  const firstCompanyIntegrations = getCompanyIntegrations(firstCompanyId);
+  if (firstCompanyIntegrations) {
+    const zadarmaSipPatch: CompanyIntegrationsPatch = {};
+    if (!firstCompanyIntegrations.zadarmaSip && process.env.ZADARMA_WEBRTC_SIP) {
+      zadarmaSipPatch.zadarmaSip = process.env.ZADARMA_WEBRTC_SIP;
+    }
+    if (!firstCompanyIntegrations.zadarmaWidgetSip && process.env.ZADARMA_WEBRTC_WIDGET_SIP) {
+      zadarmaSipPatch.zadarmaWidgetSip = process.env.ZADARMA_WEBRTC_WIDGET_SIP;
+    }
+    if (Object.keys(zadarmaSipPatch).length > 0) {
+      upsertCompanyIntegrations(firstCompanyId, zadarmaSipPatch);
+    }
+  }
 }
 
 app.listen(PORT, HOST, () => {

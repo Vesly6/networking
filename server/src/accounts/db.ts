@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import { randomUUID, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { dataFilePath } from '../dataDir.js';
+import { ALL_PERMISSION_KEYS, LEGACY_BOOLEAN_PERMISSION_MAP, type PermissionKey } from '../permissions/registry.js';
 
 // Own SQLite file, same "one small file per feature" convention as
 // linkedin.sqlite/sms-inbox.sqlite/table-data.sqlite — see dataDir.ts for
@@ -146,6 +147,64 @@ function migrate(database: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS login_log_by_company ON login_log(company_id, logged_in_at);
     CREATE INDEX IF NOT EXISTS login_log_by_time ON login_log(logged_in_at);
+
+    -- Who holds which permission-registry key (see
+    -- server/src/permissions/registry.ts for the fixed catalog of keys —
+    -- this table is the "who," the registry is the "what's possible").
+    -- subject_type='company' rows are a company's own ceiling — set only
+    -- by the platform Super Super Admin, and what a company's super_admin
+    -- effective set always equals (see permissions/effective.ts). subject_
+    -- type='user' rows are one specific worker's own grant from their
+    -- company's super_admin — a worker's EFFECTIVE set is always the live
+    -- intersection of their own rows here with their company's ceiling
+    -- rows, computed fresh on every check, never cached/stored — see
+    -- effective.ts's own doc comment for why that's load-bearing (an
+    -- instant, walk-nothing revocation).
+    CREATE TABLE IF NOT EXISTS permission_grants (
+      id TEXT PRIMARY KEY,
+      subject_type TEXT NOT NULL,
+      subject_id TEXT NOT NULL,
+      permission_key TEXT NOT NULL,
+      granted_at INTEGER NOT NULL,
+      granted_by TEXT NOT NULL,
+      UNIQUE(subject_type, subject_id, permission_key)
+    );
+    CREATE INDEX IF NOT EXISTS permission_grants_subject ON permission_grants(subject_type, subject_id);
+
+    -- Append-only, never edited/deleted from any UI — every grant/revoke,
+    -- role change, company block/unblock, impersonation start/stop, and
+    -- rejected access attempt. company_id is nullable (a platform-wide
+    -- event, e.g. creating a company, concerns no single existing company);
+    -- actor_user_id is nullable for the one seed-time actor ('platform',
+    -- the one-time migration itself, never a real user id) — see
+    -- appendAuditLog's own doc comment.
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id TEXT PRIMARY KEY,
+      at INTEGER NOT NULL,
+      actor_user_id TEXT,
+      actor_role TEXT,
+      company_id TEXT,
+      action TEXT NOT NULL,
+      target_type TEXT,
+      target_id TEXT,
+      detail TEXT
+    );
+    CREATE INDEX IF NOT EXISTS audit_log_by_company ON audit_log(company_id, at);
+    CREATE INDEX IF NOT EXISTS audit_log_by_time ON audit_log(at);
+
+    -- One-row marker table, not a derived heuristic (e.g. "does this
+    -- subject have zero permission_grants rows yet") — a worker whose
+    -- super_admin has genuinely revoked every permission would look
+    -- identical to "never migrated" under that heuristic, and Render's
+    -- free-tier idle-restart (see dataDir.ts) would then silently re-seed
+    -- their old boolean-flag permissions back on the very next boot,
+    -- undoing a real revocation. This table exists purely so
+    -- migratePermissionsIfNeeded() can tell "already ran" from "genuinely
+    -- has nothing granted" and never re-run once it's done.
+    CREATE TABLE IF NOT EXISTS permission_migration_done (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      done_at INTEGER NOT NULL
+    );
   `);
   // Additive migration for databases created before these four existed —
   // CREATE TABLE IF NOT EXISTS above is a no-op against an already-existing
@@ -217,6 +276,52 @@ function migrate(database: Database.Database): void {
   } catch {
     // Column already exists — nothing to do.
   }
+  // Company-level suspension (platform Super Super Admin only — see
+  // blockCompany/unblockCompany below and auth.ts's requireAuth, which
+  // checks this on every request). NULL = active, the default for every
+  // existing and newly-created company, so this is a pure opt-in with zero
+  // effect until a platform admin explicitly blocks someone.
+  try {
+    database.exec(`ALTER TABLE companies ADD COLUMN blocked_at INTEGER`);
+  } catch {
+    // Column already exists — nothing to do.
+  }
+  // Per-provider Shared/Individual credential-fallback mode (see
+  // permissions/registry.ts's api_keys.set_mode and index.ts's requireXKey
+  // helpers) — 'shared' preserves today's exact worker-falls-back-to-
+  // company-key behavior for every company that never touches this, so the
+  // DEFAULT alone (SQLite backfills it onto every pre-existing row, not
+  // just future inserts) is the complete migration for this column; no
+  // separate UPDATE pass is needed.
+  for (const column of [
+    'apollo_mode',
+    'serper_mode',
+    'instantly_mode',
+    'openai_mode',
+    'anthropic_mode',
+    'elevenlabs_mode',
+  ]) {
+    try {
+      database.exec(`ALTER TABLE company_integrations ADD COLUMN ${column} TEXT NOT NULL DEFAULT 'shared'`);
+    } catch {
+      // Column already exists — nothing to do.
+    }
+  }
+  // Company-level Zadarma SIP/widget-SIP identity — closes the cross-
+  // COMPANY leak documented in the plan: GET /api/webrtc/key used to fall
+  // back straight to a single process.env pair shared by every company on
+  // the deployment once no per-worker override was set. These two columns
+  // are that missing middle fallback tier (worker override → this →
+  // nothing, no more env var in the chain) — see index.ts's startup seed
+  // for how the one pre-existing deployment's env-var values get copied in
+  // here once, and the webrtc/key route for the new three-tier resolution.
+  for (const column of ['zadarma_sip', 'zadarma_widget_sip']) {
+    try {
+      database.exec(`ALTER TABLE company_integrations ADD COLUMN ${column} TEXT`);
+    } catch {
+      // Column already exists — nothing to do.
+    }
+  }
 }
 
 function getDb(): Database.Database {
@@ -260,6 +365,11 @@ export interface Company {
   name: string;
   enabledFeatures: string[];
   createdAt: number;
+  /** Set only by the platform Super Super Admin (see blockCompany below) —
+   * null means active. Checked in auth.ts's requireAuth on every request,
+   * so blocking takes effect immediately for every one of that company's
+   * users, including one already mid-session with a live token. */
+  blockedAt: number | null;
 }
 
 interface CompanyRow {
@@ -267,6 +377,7 @@ interface CompanyRow {
   name: string;
   enabled_features: string;
   created_at: number;
+  blocked_at: number | null;
 }
 
 /** Parses a JSON array column, tolerating a NULL/empty/corrupted value
@@ -289,7 +400,13 @@ function parseJsonArray(raw: string | null | undefined): string[] {
 }
 
 function companyFromRow(r: CompanyRow): Company {
-  return { id: r.id, name: r.name, enabledFeatures: parseJsonArray(r.enabled_features), createdAt: r.created_at };
+  return {
+    id: r.id,
+    name: r.name,
+    enabledFeatures: parseJsonArray(r.enabled_features),
+    createdAt: r.created_at,
+    blockedAt: r.blocked_at ?? null,
+  };
 }
 
 export function getCompany(id: string): Company | null {
@@ -307,10 +424,24 @@ export function getCompany(id: string): Company | null {
  * now too, so there's no self-service moment for a feature to "just
  * appear" from anymore. */
 export function createCompany(name: string): Company {
-  const company: Company = { id: randomUUID(), name, enabledFeatures: [], createdAt: Date.now() };
+  const company: Company = { id: randomUUID(), name, enabledFeatures: [], createdAt: Date.now(), blockedAt: null };
   getDb()
     .prepare(`INSERT INTO companies (id, name, enabled_features, created_at) VALUES (?, ?, '[]', ?)`)
     .run(company.id, company.name, company.createdAt);
+  // A brand-new company's permission ceiling defaults to the FULL registry
+  // — unlike enabledFeatures above (a deliberate opt-in tab list), a
+  // permission gates whether this company's own super_admin can do
+  // anything with their own account at all (manage their own workers,
+  // create tables, use whatever integrations they configure). Starting
+  // empty would brick a freshly self-registered company until the
+  // platform manually intervened, which isn't how registration has ever
+  // worked — see migratePermissionsIfNeeded's own doc comment for why
+  // every company that existed BEFORE the permission registry shipped
+  // gets this same full-ceiling default; this is that same default
+  // applied to every company created from here on. The platform can
+  // still narrow it later via PUT /api/admin/companies/:id/permissions,
+  // same as for any other company.
+  setGrantedKeys('company', company.id, ALL_PERMISSION_KEYS, 'platform');
   return company;
 }
 
@@ -320,6 +451,21 @@ export function createCompany(name: string): Company {
 export function listCompanies(): Company[] {
   const rows = getDb().prepare(`SELECT * FROM companies ORDER BY created_at ASC`).all() as CompanyRow[];
   return rows.map(companyFromRow);
+}
+
+/** Platform-wide suspension — every one of this company's users is
+ * rejected by auth.ts's requireAuth on their very next request, including
+ * one already mid-session with a still-unexpired token (requireAuth
+ * re-reads the company fresh from the DB on every call, same "never trust
+ * a cached/token-baked copy" reasoning as requirePermission/
+ * requirePermission2). Deliberately does not touch any user/data row —
+ * unblocking restores exactly what was there before. */
+export function blockCompany(id: string): void {
+  getDb().prepare(`UPDATE companies SET blocked_at = ? WHERE id = ?`).run(Date.now(), id);
+}
+
+export function unblockCompany(id: string): void {
+  getDb().prepare(`UPDATE companies SET blocked_at = NULL WHERE id = ?`).run(id);
 }
 
 /** Direct, owner-set replacement for the brief "derive tabs from which
@@ -341,11 +487,27 @@ export function updateCompanyFeatures(companyId: string, features: string[]): vo
 // is configured — see computeAvailableFeatures below. All fields nullable
 // — a company only ever fills in what it actually uses.
 
+/** 'shared' (the default, preserving every existing company's behavior
+ * exactly) keeps today's worker-override-falls-back-to-company-key check;
+ * 'individual' removes the company-wide fallback for that one provider
+ * entirely — a worker (or the acting effective user generally) with no key
+ * of their own gets IntegrationNotConfiguredError, full stop. See
+ * index.ts's requireXKey() helpers and permissions/registry.ts's
+ * api_keys.set_mode. */
+export type IntegrationMode = 'shared' | 'individual';
+
 export interface CompanyIntegrations {
   companyId: string;
   zadarmaApiKey: string | null;
   zadarmaApiSecret: string | null;
   zadarmaCallerNumber: string | null;
+  /** Company-level fallback for the softphone widget's SIP identity — the
+   * new middle tier between a worker's own zadarma_sip/zadarma_widget_sip
+   * override and nothing, replacing the old process.env.ZADARMA_WEBRTC_SIP/
+   * _WIDGET_SIP globals that used to be shared by every company on the
+   * deployment (see GET /api/webrtc/key in index.ts). */
+  zadarmaSip: string | null;
+  zadarmaWidgetSip: string | null;
   instantlyApiKey: string | null;
   apolloApiKey: string | null;
   serperApiKey: string | null;
@@ -353,6 +515,12 @@ export interface CompanyIntegrations {
   anthropicApiKey: string | null;
   elevenlabsApiKey: string | null;
   linkedinCdpUrl: string | null;
+  apolloMode: IntegrationMode;
+  serperMode: IntegrationMode;
+  instantlyMode: IntegrationMode;
+  openaiMode: IntegrationMode;
+  anthropicMode: IntegrationMode;
+  elevenlabsMode: IntegrationMode;
   updatedAt: number;
 }
 
@@ -361,6 +529,8 @@ interface CompanyIntegrationsRow {
   zadarma_api_key: string | null;
   zadarma_api_secret: string | null;
   zadarma_caller_number: string | null;
+  zadarma_sip: string | null;
+  zadarma_widget_sip: string | null;
   instantly_api_key: string | null;
   apollo_api_key: string | null;
   serper_api_key: string | null;
@@ -368,7 +538,17 @@ interface CompanyIntegrationsRow {
   anthropic_api_key: string | null;
   elevenlabs_api_key: string | null;
   linkedin_cdp_url: string | null;
+  apollo_mode: string;
+  serper_mode: string;
+  instantly_mode: string;
+  openai_mode: string;
+  anthropic_mode: string;
+  elevenlabs_mode: string;
   updated_at: number;
+}
+
+function modeFromColumn(value: string | null | undefined): IntegrationMode {
+  return value === 'individual' ? 'individual' : 'shared';
 }
 
 function integrationsFromRow(r: CompanyIntegrationsRow): CompanyIntegrations {
@@ -377,6 +557,8 @@ function integrationsFromRow(r: CompanyIntegrationsRow): CompanyIntegrations {
     zadarmaApiKey: r.zadarma_api_key,
     zadarmaApiSecret: r.zadarma_api_secret,
     zadarmaCallerNumber: r.zadarma_caller_number,
+    zadarmaSip: r.zadarma_sip,
+    zadarmaWidgetSip: r.zadarma_widget_sip,
     instantlyApiKey: r.instantly_api_key,
     apolloApiKey: r.apollo_api_key,
     serperApiKey: r.serper_api_key,
@@ -384,6 +566,12 @@ function integrationsFromRow(r: CompanyIntegrationsRow): CompanyIntegrations {
     anthropicApiKey: r.anthropic_api_key,
     elevenlabsApiKey: r.elevenlabs_api_key,
     linkedinCdpUrl: r.linkedin_cdp_url,
+    apolloMode: modeFromColumn(r.apollo_mode),
+    serperMode: modeFromColumn(r.serper_mode),
+    instantlyMode: modeFromColumn(r.instantly_mode),
+    openaiMode: modeFromColumn(r.openai_mode),
+    anthropicMode: modeFromColumn(r.anthropic_mode),
+    elevenlabsMode: modeFromColumn(r.elevenlabs_mode),
     updatedAt: r.updated_at,
   };
 }
@@ -410,6 +598,8 @@ export function upsertCompanyIntegrations(companyId: string, patch: CompanyInteg
     zadarmaApiKey: patch.zadarmaApiKey ?? existing?.zadarmaApiKey ?? null,
     zadarmaApiSecret: patch.zadarmaApiSecret ?? existing?.zadarmaApiSecret ?? null,
     zadarmaCallerNumber: patch.zadarmaCallerNumber ?? existing?.zadarmaCallerNumber ?? null,
+    zadarmaSip: patch.zadarmaSip ?? existing?.zadarmaSip ?? null,
+    zadarmaWidgetSip: patch.zadarmaWidgetSip ?? existing?.zadarmaWidgetSip ?? null,
     instantlyApiKey: patch.instantlyApiKey ?? existing?.instantlyApiKey ?? null,
     apolloApiKey: patch.apolloApiKey ?? existing?.apolloApiKey ?? null,
     serperApiKey: patch.serperApiKey ?? existing?.serperApiKey ?? null,
@@ -417,21 +607,31 @@ export function upsertCompanyIntegrations(companyId: string, patch: CompanyInteg
     anthropicApiKey: patch.anthropicApiKey ?? existing?.anthropicApiKey ?? null,
     elevenlabsApiKey: patch.elevenlabsApiKey ?? existing?.elevenlabsApiKey ?? null,
     linkedinCdpUrl: patch.linkedinCdpUrl ?? existing?.linkedinCdpUrl ?? null,
+    apolloMode: patch.apolloMode ?? existing?.apolloMode ?? 'shared',
+    serperMode: patch.serperMode ?? existing?.serperMode ?? 'shared',
+    instantlyMode: patch.instantlyMode ?? existing?.instantlyMode ?? 'shared',
+    openaiMode: patch.openaiMode ?? existing?.openaiMode ?? 'shared',
+    anthropicMode: patch.anthropicMode ?? existing?.anthropicMode ?? 'shared',
+    elevenlabsMode: patch.elevenlabsMode ?? existing?.elevenlabsMode ?? 'shared',
     updatedAt: Date.now(),
   };
   database
     .prepare(
       `INSERT INTO company_integrations (
-        company_id, zadarma_api_key, zadarma_api_secret, zadarma_caller_number, instantly_api_key,
-        apollo_api_key, serper_api_key, openai_api_key, anthropic_api_key, elevenlabs_api_key, linkedin_cdp_url,
+        company_id, zadarma_api_key, zadarma_api_secret, zadarma_caller_number, zadarma_sip, zadarma_widget_sip,
+        instantly_api_key, apollo_api_key, serper_api_key, openai_api_key, anthropic_api_key, elevenlabs_api_key,
+        linkedin_cdp_url, apollo_mode, serper_mode, instantly_mode, openai_mode, anthropic_mode, elevenlabs_mode,
         updated_at
-      ) VALUES (@companyId, @zadarmaApiKey, @zadarmaApiSecret, @zadarmaCallerNumber, @instantlyApiKey,
-        @apolloApiKey, @serperApiKey, @openaiApiKey, @anthropicApiKey, @elevenlabsApiKey, @linkedinCdpUrl,
+      ) VALUES (@companyId, @zadarmaApiKey, @zadarmaApiSecret, @zadarmaCallerNumber, @zadarmaSip, @zadarmaWidgetSip,
+        @instantlyApiKey, @apolloApiKey, @serperApiKey, @openaiApiKey, @anthropicApiKey, @elevenlabsApiKey,
+        @linkedinCdpUrl, @apolloMode, @serperMode, @instantlyMode, @openaiMode, @anthropicMode, @elevenlabsMode,
         @updatedAt)
       ON CONFLICT(company_id) DO UPDATE SET
         zadarma_api_key = excluded.zadarma_api_key,
         zadarma_api_secret = excluded.zadarma_api_secret,
         zadarma_caller_number = excluded.zadarma_caller_number,
+        zadarma_sip = excluded.zadarma_sip,
+        zadarma_widget_sip = excluded.zadarma_widget_sip,
         instantly_api_key = excluded.instantly_api_key,
         apollo_api_key = excluded.apollo_api_key,
         serper_api_key = excluded.serper_api_key,
@@ -439,6 +639,12 @@ export function upsertCompanyIntegrations(companyId: string, patch: CompanyInteg
         anthropic_api_key = excluded.anthropic_api_key,
         elevenlabs_api_key = excluded.elevenlabs_api_key,
         linkedin_cdp_url = excluded.linkedin_cdp_url,
+        apollo_mode = excluded.apollo_mode,
+        serper_mode = excluded.serper_mode,
+        instantly_mode = excluded.instantly_mode,
+        openai_mode = excluded.openai_mode,
+        anthropic_mode = excluded.anthropic_mode,
+        elevenlabs_mode = excluded.elevenlabs_mode,
         updated_at = excluded.updated_at`,
     )
     .run(next);
@@ -450,12 +656,22 @@ export function upsertCompanyIntegrations(companyId: string, patch: CompanyInteg
  * unchanged"), since a real secret is never re-sent to the browser after
  * saving, so an empty form field can't be trusted to mean "the user wants
  * this blank" the way it normally would. IntegrationsView's "✕ Išvalyti"
- * button is the only caller. */
-export function clearCompanyIntegrationField(companyId: string, field: keyof CompanyIntegrationsPatch): CompanyIntegrations {
-  const columnByField: Record<keyof CompanyIntegrationsPatch, string> = {
+ * button is the only caller. Deliberately excludes the six *Mode fields —
+ * unlike a secret, a mode is a NOT NULL enum column always sent as an
+ * explicit value from the Shared/Individual toggle, never a "some value
+ * exists but isn't re-sent" secret, so "clear it" has no meaning for it. */
+export type ClearableIntegrationField = Exclude<
+  keyof CompanyIntegrationsPatch,
+  'apolloMode' | 'serperMode' | 'instantlyMode' | 'openaiMode' | 'anthropicMode' | 'elevenlabsMode'
+>;
+
+export function clearCompanyIntegrationField(companyId: string, field: ClearableIntegrationField): CompanyIntegrations {
+  const columnByField: Record<ClearableIntegrationField, string> = {
     zadarmaApiKey: 'zadarma_api_key',
     zadarmaApiSecret: 'zadarma_api_secret',
     zadarmaCallerNumber: 'zadarma_caller_number',
+    zadarmaSip: 'zadarma_sip',
+    zadarmaWidgetSip: 'zadarma_widget_sip',
     instantlyApiKey: 'instantly_api_key',
     apolloApiKey: 'apollo_api_key',
     serperApiKey: 'serper_api_key',
@@ -1260,4 +1476,206 @@ export function bootstrapFirstCompanyIfNeeded(): { companyId: string } {
  * matches 'owner' again, so this is a plain no-op on every later boot. */
 export function demoteOwnerUsers(): void {
   getDb().prepare(`UPDATE users SET role = 'super_admin' WHERE role = 'owner'`).run();
+}
+
+// --- Permission registry: who holds which key ---------------------------
+// See permissions/registry.ts for the fixed catalog of keys (the "what's
+// possible" — code) and permissions/effective.ts for how a 'company' row
+// here and a 'user' row here combine into one worker's live effective set
+// (the "who has what right now" — always computed fresh, never cached).
+
+export type PermissionSubjectType = 'company' | 'user';
+
+/** Every key currently granted directly to one subject — for a company,
+ * this IS that company's ceiling (see effective.ts's companyCeiling); for
+ * a user, this is their own grant, only meaningful once intersected with
+ * their company's ceiling. Order is irrelevant — always consumed as a Set
+ * by the caller. */
+export function listGrantedKeys(subjectType: PermissionSubjectType, subjectId: string): PermissionKey[] {
+  const rows = getDb()
+    .prepare(`SELECT permission_key FROM permission_grants WHERE subject_type = ? AND subject_id = ?`)
+    .all(subjectType, subjectId) as { permission_key: string }[];
+  return rows.map((r) => r.permission_key as PermissionKey);
+}
+
+/** Blind overwrite of one subject's ENTIRE granted set in a single
+ * transaction — the permission-panel UI always submits the complete
+ * checked set, same "whole list, not a delta" shape as updateWorker's
+ * visibleTabs/updateCompanyFeatures elsewhere in this file. `grantedBy` is
+ * the acting user's id, or the literal 'platform' for the one-time startup
+ * migration's own seed (see migratePermissionsIfNeeded below) — never a
+ * real user id for that specific case, so it stays visually distinct in
+ * the audit log. Unknown keys are the caller's responsibility to reject
+ * before calling this (see index.ts's route validation) — this function
+ * trusts its input, same as every other blind-overwrite function in this
+ * file (updateCompanyFeatures, upsertCompanyIntegrations). */
+export function setGrantedKeys(subjectType: PermissionSubjectType, subjectId: string, keys: PermissionKey[], grantedBy: string): void {
+  const database = getDb();
+  const tx = database.transaction((keysToInsert: PermissionKey[]) => {
+    database.prepare(`DELETE FROM permission_grants WHERE subject_type = ? AND subject_id = ?`).run(subjectType, subjectId);
+    const insert = database.prepare(
+      `INSERT INTO permission_grants (id, subject_type, subject_id, permission_key, granted_at, granted_by) VALUES (?, ?, ?, ?, ?, ?)`,
+    );
+    const now = Date.now();
+    for (const key of keysToInsert) insert.run(randomUUID(), subjectType, subjectId, key, now, grantedBy);
+  });
+  tx(keys);
+}
+
+/** Removes every permission_grants row for a subject — the counterpart
+ * setGrantedKeys([], ...) would already achieve, but named separately for
+ * callers that mean "this subject is gone" (e.g. deleteWorker) rather than
+ * "this subject now explicitly holds zero permissions." Both end in the
+ * same DB state; the distinction is only for readability at the call
+ * site. */
+export function clearGrantedKeys(subjectType: PermissionSubjectType, subjectId: string): void {
+  getDb().prepare(`DELETE FROM permission_grants WHERE subject_type = ? AND subject_id = ?`).run(subjectType, subjectId);
+}
+
+// --- Audit log ------------------------------------------------------------
+// Append-only — no update/delete function exists anywhere in this file on
+// purpose, matching the requirement that this log can never be edited from
+// any UI, including the platform Admin dashboard's own.
+
+export interface AuditLogEntry {
+  id: string;
+  at: number;
+  actorUserId: string | null;
+  actorRole: string | null;
+  companyId: string | null;
+  action: string;
+  targetType: string | null;
+  targetId: string | null;
+  detail: Record<string, unknown> | null;
+}
+
+interface AuditLogRow {
+  id: string;
+  at: number;
+  actor_user_id: string | null;
+  actor_role: string | null;
+  company_id: string | null;
+  action: string;
+  target_type: string | null;
+  target_id: string | null;
+  detail: string | null;
+}
+
+function auditLogFromRow(r: AuditLogRow): AuditLogEntry {
+  let detail: Record<string, unknown> | null = null;
+  if (r.detail) {
+    try {
+      detail = JSON.parse(r.detail);
+    } catch {
+      detail = null;
+    }
+  }
+  return {
+    id: r.id,
+    at: r.at,
+    actorUserId: r.actor_user_id,
+    actorRole: r.actor_role,
+    companyId: r.company_id,
+    action: r.action,
+    targetType: r.target_type,
+    targetId: r.target_id,
+    detail,
+  };
+}
+
+export interface AppendAuditLogInput {
+  actorUserId: string | null;
+  actorRole: string | null;
+  companyId: string | null;
+  action: string;
+  targetType?: string | null;
+  targetId?: string | null;
+  detail?: Record<string, unknown> | null;
+}
+
+export function appendAuditLog(input: AppendAuditLogInput): void {
+  getDb()
+    .prepare(
+      `INSERT INTO audit_log (id, at, actor_user_id, actor_role, company_id, action, target_type, target_id, detail)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      randomUUID(),
+      Date.now(),
+      input.actorUserId,
+      input.actorRole,
+      input.companyId,
+      input.action,
+      input.targetType ?? null,
+      input.targetId ?? null,
+      input.detail ? JSON.stringify(input.detail) : null,
+    );
+}
+
+/** Platform Super Super Admin sees every company's log (companyId
+ * omitted); a company's own super_admin sees only their own — same
+ * optional-filter shape as listLoginLog/listWorkerActions elsewhere in
+ * this codebase. */
+export function listAuditLog(companyId: string | undefined, limit: number): AuditLogEntry[] {
+  const rows = companyId
+    ? (getDb().prepare(`SELECT * FROM audit_log WHERE company_id = ? ORDER BY at DESC LIMIT ?`).all(companyId, limit) as AuditLogRow[])
+    : (getDb().prepare(`SELECT * FROM audit_log ORDER BY at DESC LIMIT ?`).all(limit) as AuditLogRow[]);
+  return rows.map(auditLogFromRow);
+}
+
+// --- One-time migration: booleans/env vars → permission_grants rows -----
+
+function isPermissionMigrationDone(): boolean {
+  const row = getDb().prepare(`SELECT 1 FROM permission_migration_done WHERE id = 1`).get();
+  return !!row;
+}
+
+function markPermissionMigrationDone(): void {
+  getDb().prepare(`INSERT OR IGNORE INTO permission_migration_done (id, done_at) VALUES (1, ?)`).run(Date.now());
+}
+
+/** Run once, ever, at startup (see index.ts's boot sequence, alongside
+ * bootstrapFirstCompanyIfNeeded/demoteOwnerUsers) — converts today's fixed
+ * boolean/role model into permission_grants rows with ZERO behavior
+ * change, so deploy day loses nobody any access (the account owner's own
+ * explicit, hard requirement):
+ *
+ *   - Every existing company's CEILING (subject_type='company') is seeded
+ *     to the full PERMISSIONS set — today, a company's own super_admin can
+ *     implicitly do everything (there's no company-level restriction
+ *     concept at all yet), so this makes that literally, explicitly true
+ *     going forward rather than changing it.
+ *   - Every existing worker's ten UserPermissions booleans are translated
+ *     1:1 into their own subject_type='user' rows via
+ *     LEGACY_BOOLEAN_PERMISSION_MAP — a worker who could delete rows
+ *     before still can after, nothing else changes. Workers get NO
+ *     integration/admin keys here (those didn't exist as booleans before —
+ *     see the isolation-matrix audit finding this whole task started
+ *     from), matching today's actual behavior where a worker's own
+ *     apolloApiKey/etc. override is the only thing that ever gated
+ *     per-worker integration access.
+ *
+ * Guarded by permission_migration_done (see above), not a derived "has
+ * zero rows" check — a worker legitimately revoked down to nothing must
+ * stay at nothing across a restart, not get silently re-seeded. */
+export function migratePermissionsIfNeeded(): void {
+  if (isPermissionMigrationDone()) return;
+  const database = getDb();
+  const tx = database.transaction(() => {
+    const companies = database.prepare(`SELECT id FROM companies`).all() as { id: string }[];
+    for (const { id } of companies) {
+      setGrantedKeys('company', id, ALL_PERMISSION_KEYS, 'platform');
+    }
+    const workers = database.prepare(`SELECT * FROM users WHERE role = 'worker'`).all() as UserRow[];
+    for (const row of workers) {
+      const user = userFromRow(row);
+      const keys: PermissionKey[] = [];
+      for (const [boolField, permKey] of Object.entries(LEGACY_BOOLEAN_PERMISSION_MAP) as [keyof UserPermissions, PermissionKey][]) {
+        if (user.permissions[boolField]) keys.push(permKey);
+      }
+      setGrantedKeys('user', user.id, keys, 'platform');
+    }
+    markPermissionMigrationDone();
+  });
+  tx();
 }

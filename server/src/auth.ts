@@ -1,6 +1,8 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { NextFunction, Request, Response } from 'express';
-import { getPasswordHash, getUserById, getUserByUsername, verifyPassword, type Role, type User } from './accounts/db.js';
+import { getCompany, getPasswordHash, getUserById, getUserByUsername, verifyPassword, type Role, type User } from './accounts/db.js';
+import { can } from './permissions/effective.js';
+import type { PermissionKey } from './permissions/registry.js';
 
 // Real multi-tenant accounts now (see accounts/db.ts) — this used to be a
 // single hardcoded AUTH_USERNAME/AUTH_PASSWORD pair with no users table at
@@ -44,6 +46,26 @@ export interface AuthContext {
    * GET /api/auth/me should resolve, and which worker the audit log
    * (worker_actions' real_user_id/real_user_name) attributes the write to. */
   actingAs?: { userId: string };
+  /** Set only while the platform Super Super Admin is diagnosing inside a
+   * company via POST /api/admin/companies/:id/impersonate (see
+   * issuePlatformImpersonationToken below). userId/companyId/role above are
+   * that company's OWN real super_admin — deliberately not a fake/sentinel
+   * identity, so every existing `getUserById(req.auth!.userId)` call site
+   * across this whole file keeps resolving a real row with zero changes
+   * needed anywhere else. This flag exists purely so GET /api/auth/me can
+   * tell the frontend to show the persistent "acting as Company X — Exit"
+   * banner, and so the handful of NEW audit_log writes that care can
+   * attribute themselves to the platform rather than the company's own
+   * admin — see index.ts's own impersonate route for where that
+   * distinction is actually applied at write time. Deliberately does NOT
+   * attempt to re-attribute every possible action a platform session might
+   * take while impersonating (e.g. tableData/db.ts's separate
+   * worker_actions log still shows the company's own admin identity,
+   * unchanged) — a disclosed scope limit for this diagnostic-only feature,
+   * not a security gap: authorization during a platform-impersonation
+   * session is identical to the company's own super_admin's real rights,
+   * never more. */
+  platformActing?: boolean;
 }
 
 function verifyToken(token: string): AuthContext | null {
@@ -113,9 +135,19 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
   }
   const header = req.headers.authorization;
   const token = header?.startsWith('Bearer ') ? header.slice(7) : null;
-  const auth = token ? (resolveImpersonationAuth(token) ?? verifyToken(token)) : null;
+  const auth = token ? (resolvePlatformImpersonationAuth(token) ?? resolveImpersonationAuth(token) ?? verifyToken(token)) : null;
   if (!auth) {
     res.status(401).json({ error: 'Neautentifikuota' });
+    return;
+  }
+  // Platform-wide suspension (accounts/db.ts's blockCompany, only reachable
+  // via the Super Super Admin dashboard) — checked fresh from the DB on
+  // every single request, same "never trust a cached/token-baked copy"
+  // reasoning as requirePermission below, so a block takes effect
+  // immediately for a user already mid-session with a still-unexpired
+  // token, not just after their next login.
+  if (getCompany(auth.companyId)?.blockedAt) {
+    res.status(403).json({ error: 'Ši įmonė yra užblokuota' });
     return;
   }
   req.auth = auth;
@@ -145,6 +177,52 @@ export function requirePermission(flag: keyof User['permissions']) {
     const user = getUserById(auth.userId);
     if (!user?.permissions[flag]) {
       res.status(403).json({ error: 'Neturite teisės atlikti šio veiksmo' });
+      return;
+    }
+    next();
+  };
+}
+
+/** Registry-driven counterpart to requirePermission above — parallel name
+ * (not a rename) so both can coexist while call sites migrate one at a
+ * time; requirePermission can be deleted once nothing references it. Two
+ * real differences from requirePermission, both deliberate:
+ *
+ *   1. Keyed against the open-ended PermissionKey registry
+ *      (permissions/registry.ts) instead of one of the ten fixed legacy
+ *      UserPermissions booleans.
+ *   2. super_admin does NOT automatically pass. Under the old boolean
+ *      model a company's own admin could always do everything (there was
+ *      no concept of restricting one), so requirePermission's "role !==
+ *      'worker' → always next()" was correct. Under the new registry, a
+ *      super_admin's effective set IS their company's platform-granted
+ *      ceiling (see effective.ts's effectivePermissions) — the whole point
+ *      of the Super Super Admin's per-company permission panel is that
+ *      unchecking something there must immediately remove it from that
+ *      company's own super_admin too, not just cascade to their workers.
+ *      So this checks can() for every role alike; can() itself is what
+ *      makes a super_admin's check reduce to "is this key in my company's
+ *      ceiling," with no separate carve-out needed here.
+ *
+ * Always resolves the REAL authenticated session (auth.userId), never an
+ * impersonated worker (auth.actingAs) — matches requireNotWorker/
+ * requirePermission's existing "impersonating admin keeps full admin
+ * rights throughout" rule, since an admin-shaped action like "manage
+ * workers" is a question about the real admin's own standing, not
+ * whichever worker's data view happens to be active right now. Contrast
+ * with index.ts's requireXKey() helpers, which deliberately DO resolve
+ * through effectiveUser() — those gate integration USE, a question about
+ * whoever's data context is currently active, not an admin-only action. */
+export function requirePermission2(key: PermissionKey) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const auth = req.auth;
+    if (!auth) {
+      res.status(401).json({ error: 'Neautentifikuota' });
+      return;
+    }
+    const user = getUserById(auth.userId);
+    if (!user || !can(user, key)) {
+      res.status(403).json({ error: 'Neturite teisės atlikti šio veiksmo', permission: key });
       return;
     }
     next();
@@ -302,6 +380,71 @@ function resolveImpersonationAuth(token: string): AuthContext | null {
   if (!admin || admin.role !== 'super_admin' || admin.companyId !== ctx.companyId) return null;
   if (!worker || worker.role !== 'worker' || worker.companyId !== admin.companyId) return null;
   return { userId: admin.id, companyId: admin.companyId, role: admin.role, actingAs: { userId: worker.id } };
+}
+
+// --- Platform impersonation ("Super Super Admin diagnoses inside a
+// company") ---
+//
+// A distinct, one-level-up counterpart to the worker-impersonation above,
+// issued only from index.ts's POST /api/admin/companies/:id/impersonate
+// (requireSuperAdmin-gated — only the platform credential can ever obtain
+// one). Deliberately NOT built on top of ImpersonationContext/
+// issueImpersonationToken above: those require a real admin AND a real
+// worker row, and semantically this is "the platform acting as this
+// company's own super_admin," not "an admin acting as their own worker."
+// Reusing the identical adminUserId=workerUserId=same row shape would work
+// mechanically but would make a platform diagnostic session indistinguishable
+// from that admin's own ordinary login in every downstream check — this
+// separate token type exists so it can be told apart wherever that matters
+// (see AuthContext.platformActing's own doc comment).
+const PLATFORM_IMPERSONATION_TOKEN_TTL_MS = 12 * 60 * 60 * 1000; // Same 12h as worker impersonation — see its own doc comment for why.
+
+export function issuePlatformImpersonationToken(admin: User): string {
+  const expiry = Date.now() + PLATFORM_IMPERSONATION_TOKEN_TTL_MS;
+  const payload = `platformimpersonate.${admin.id}.${admin.companyId}.${expiry}`;
+  const signature = sign(payload);
+  return Buffer.from(`${payload}.${signature}`).toString('base64url');
+}
+
+function verifyPlatformImpersonationToken(token: string): { adminUserId: string; companyId: string } | null {
+  let decoded: string;
+  try {
+    decoded = Buffer.from(token, 'base64url').toString('utf8');
+  } catch {
+    return null;
+  }
+  const parts = decoded.split('.');
+  // 5 parts, sentinel-prefixed — never mistakable for a normal 5-part
+  // token (different first segment), a superadmin 3-part one, or a
+  // worker-impersonation 6-part one.
+  if (parts.length !== 5 || parts[0] !== 'platformimpersonate') return null;
+  const [, adminUserId, companyId, expiryStr, signature] = parts;
+  const payload = `platformimpersonate.${adminUserId}.${companyId}.${expiryStr}`;
+  const expected = sign(payload);
+  const a = Buffer.from(signature);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
+  const expiry = Number(expiryStr);
+  if (!Number.isFinite(expiry) || Date.now() >= expiry) return null;
+  return { adminUserId, companyId };
+}
+
+/** Re-resolves the company's own super_admin fresh from the DB on every
+ * request, same reasoning as resolveImpersonationAuth above — deleting or
+ * moving that admin mid-session invalidates the token immediately. Unlike
+ * resolveImpersonationAuth, req.auth!.userId here IS a real row (that
+ * company's own actual super_admin) rather than a sentinel — see
+ * AuthContext.platformActing's own doc comment for why that's deliberate:
+ * every existing getUserById(req.auth!.userId) call site across this app
+ * keeps working unchanged, and authorization during a platform-
+ * impersonation session is exactly that company's own admin rights, never
+ * more. */
+function resolvePlatformImpersonationAuth(token: string): AuthContext | null {
+  const ctx = verifyPlatformImpersonationToken(token);
+  if (!ctx) return null;
+  const admin = getUserById(ctx.adminUserId);
+  if (!admin || admin.role !== 'super_admin' || admin.companyId !== ctx.companyId) return null;
+  return { userId: admin.id, companyId: admin.companyId, role: admin.role, platformActing: true };
 }
 
 declare global {
