@@ -858,12 +858,63 @@ td.demo-cell.demo-cell-dropdown select:focus {
 }
 
 /* Note history popover — same chrome as .demo-contact-popover (reused
-   via a second class on the same element), plus its own quick-tag row
-   and dated history list. Adapted from production's CellHoverEditor.tsx
-   note mode. */
+   via a second class on the same element), plus its own add-entry row,
+   quick-tag row, and dated history list. Ported from production's
+   CellHoverEditor.tsx note mode + its own .cell-hover-* CSS. */
 .demo-note-popover {
-  min-width: 340px;
+  min-width: 360px;
 }
+
+/* Add-comment row — textarea + explicit save + voice-note button. */
+.demo-note-new-entry-row {
+  display: flex;
+  align-items: flex-end;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  margin-bottom: 0.5rem;
+}
+.demo-note-new-entry {
+  flex: 1;
+  min-width: 0;
+  min-height: 2.2em;
+  max-height: 40vh;
+  resize: none;
+  border: none;
+  border-radius: 0;
+  padding: 0.45em 0.6em;
+}
+.demo-note-new-entry:focus {
+  box-shadow: none;
+  background: var(--today-bg);
+}
+.demo-note-new-entry-save {
+  flex: 0 0 auto;
+  border: none;
+  border-left: 1px solid var(--border);
+  border-radius: 0;
+  background: var(--bg-alt);
+  color: var(--accent);
+  padding: 0.45em 0.7em;
+  align-self: stretch;
+}
+.demo-note-new-entry-save:hover {
+  background: var(--bg-hover);
+}
+.demo-note-voice-btn {
+  flex: 0 0 auto;
+  border: none;
+  border-left: 1px solid var(--border);
+  border-radius: 0;
+  background: var(--bg-alt);
+  color: var(--text-muted);
+  padding: 0.45em 0.7em;
+  align-self: stretch;
+}
+.demo-note-voice-btn:hover {
+  background: var(--bg-hover);
+}
+
 .demo-note-tags {
   display: flex;
   flex-wrap: wrap;
@@ -875,26 +926,64 @@ td.demo-cell.demo-cell-dropdown select:focus {
   border-radius: 999px;
   padding: 0.2em 0.7em;
   font-size: 0.78rem;
-  color: #1c2128;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
 }
+.demo-note-tag:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+/* Deliberately brighter/more saturated than the plain quick-tags — a
+   different kind of action (pulls in AI-generated content, not a
+   one-word label), matching production's own visual distinction. */
+.demo-note-tag-summary {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-weight: 600;
+}
+.demo-note-tag-summary:hover {
+  filter: brightness(1.05);
+}
+
 .demo-note-history {
   list-style: none;
   margin: 0.6rem 0 0;
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.3rem;
-  max-height: 220px;
+  gap: 0.2rem;
+  max-height: 260px;
   overflow-y: auto;
 }
 .demo-note-entry {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
   font-size: 0.8rem;
-  background: var(--bg-alt);
-  border-radius: 6px;
-  padding: 0.3em 0.5em;
+  padding: 0.4em 0.5em;
+  border-top: 1px solid var(--border);
+}
+.demo-note-entry:first-child {
+  border-top: none;
+}
+.demo-note-entry-time {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  margin-bottom: 0.15em;
+}
+.demo-note-entry-author {
+  font-weight: 600;
+  color: var(--text);
+}
+.demo-note-entry-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+}
+.demo-note-history-tag-chip {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 0.1em 0.6em;
+  font-size: 0.85em;
+  font-weight: 600;
 }
 .demo-note-entry-text {
   flex: 1;
@@ -902,18 +991,18 @@ td.demo-cell.demo-cell-dropdown select:focus {
   text-align: left;
   border: none;
   background: transparent;
-  border-radius: 4px;
-  padding: 0.15em 0.4em;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: inherit;
+  border-radius: 0;
+  padding: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
+  cursor: text;
+  font: inherit;
 }
-.demo-note-entry-time {
-  flex: 0 0 auto;
-  color: var(--text-muted);
-  font-size: 0.72rem;
-  white-space: nowrap;
+.demo-note-entry-edit {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.85rem;
 }
 .demo-note-entry button {
   border: none;

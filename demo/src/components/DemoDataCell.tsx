@@ -1,7 +1,29 @@
 import { useEffect, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react';
 import type { Column, Row } from '../types';
-import { parseContacts, addContact, removeContact, updateContact, getContactsSummary, extractPhoneNumber, extractEmail } from '../utils/contacts';
-import { parseNoteHistory, addNoteEntry, updateNoteEntry, removeNoteEntry, getLatestNoteText, formatHistoryTimestamp } from '../utils/noteHistory';
+import {
+  parseContacts,
+  addContact,
+  removeContact,
+  updateContact,
+  getContactsSummary,
+  extractPhoneNumber,
+  extractEmail,
+  contactTextToFields,
+} from '../utils/contacts';
+import {
+  parseNoteHistory,
+  addNoteEntry,
+  updateNoteEntry,
+  removeNoteEntry,
+  getLatestNoteText,
+  formatHistoryTimestamp,
+  parseTaggedEntry,
+  NOTE_TAGS,
+  NO_ANSWER_SUFFIX,
+  NO_ANSWER_COLOR,
+  LINKEDIN_REQUEST_PREFIX,
+  LINKEDIN_REQUEST_COLOR,
+} from '../utils/noteHistory';
 import { getDatePart, getTimePart, combineDateTime } from '../utils/date';
 import { highlightMatches } from '../utils/highlight';
 import { ensureProtocol } from '../utils/link';
@@ -9,7 +31,16 @@ import { contrastTextColor } from '../utils/color';
 import { confirmDialog } from '../store/useConfirmStore';
 import { useToastStore } from '../store/useToastStore';
 import { Popover } from './Popover';
-import { X, ExternalLink, Search, Clock, FileText, User, Copy, PenLine } from 'lucide-react';
+import { X, ExternalLink, Search, Clock, FileText, User, Copy, PenLine, Check, Mic, Bot } from 'lucide-react';
+
+const NOT_CONFIGURED_MESSAGE = 'This integration isn’t configured — available in the full product';
+
+/** Which contact-picker is currently open under the note tag row — one
+ * shared anchor/state slot for all three picker flavors (a plain tag, the
+ * "Didn't answer" suffix-tag, or the "LinkedIn request" prefix-tag), same
+ * "anchor captured at click time" pattern the color-fill picker elsewhere
+ * in this app already uses. */
+type NotePickerKind = { kind: 'tag'; tag: { label: string; color: string } } | { kind: 'noAnswer' } | { kind: 'linkedin' };
 
 interface DemoDataCellProps {
   row: Row;
@@ -33,15 +64,6 @@ interface DemoDataCellProps {
   onSetLinkedContact: (contactId: string | null) => void;
   onSetNextActionNote: (note: string | null) => void;
 }
-
-const NOTE_TAGS: Array<{ label: string; color: string }> = [
-  { label: 'Email', color: '#e3ecf7' },
-  { label: 'Email follow-up', color: '#e1f0ef' },
-  { label: 'Meeting scheduled', color: '#eee3f3' },
-  { label: 'Meeting completed', color: '#f5e3ec' },
-  { label: 'Call', color: '#f6e9dd' },
-];
-const NOTE_TAG_COLORS: Record<string, string> = Object.fromEntries(NOTE_TAGS.map((t) => [t.label, t.color]));
 
 /** A right-sized rebuild of the real DataCell.tsx for the demo's own
  * feature scope — same click-to-edit convention (text/company/phone/link
@@ -74,6 +96,7 @@ export function DemoDataCell({
   const [newNoteText, setNewNoteText] = useState('');
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [noteEditDraft, setNoteEditDraft] = useState('');
+  const [notePicker, setNotePicker] = useState<{ anchor: HTMLElement; picker: NotePickerKind } | null>(null);
   const [timeExpanded, setTimeExpanded] = useState(false);
   const [dateCellPopover, setDateCellPopover] = useState<'note' | 'contact' | null>(null);
   const [dateNoteDraft, setDateNoteDraft] = useState(row.nextActionNote ?? '');
@@ -431,16 +454,41 @@ export function DemoDataCell({
 
   // A note cell's stored value is a JSON array of dated entries (see
   // utils/noteHistory.ts) — same click-to-expand pattern as `contact`
-  // above, just with a dated history list instead of a flat one, and a
-  // row of quick-tag buttons for the handful of things logged constantly
-  // in a real cold-calling workflow (matches production's own NOTE_TAGS
-  // idea, trimmed to a shorter English set).
+  // above, just with a dated history list instead of a flat one. Matches
+  // production's *current* Notes/History feature (CellHoverEditor.tsx):
+  // every quick-tag opens a contact picker and composes "{tag} {name}"
+  // (or "{name} Didn't answer" for the one suffix-shaped tag) — a tag is
+  // never logged standalone anymore, and existing entries render with
+  // just the tag word as a small inline chip (parseTaggedEntry), not a
+  // whole-entry background color.
   if (column.type === 'note') {
     const entries = parseNoteHistory(value);
-    const handleAddTag = (label: string) => onCommit(addNoteEntry(value, label));
+    const rowContacts = parseContacts(contactsRaw ?? '');
+    const noContacts = rowContacts.length === 0;
     const handleRemove = async (id: string, text: string) => {
       const ok = await confirmDialog({ message: `Delete this note entry?\n"${text}"`, danger: true });
       if (ok) onCommit(removeNoteEntry(value, id));
+    };
+    const commitNewEntry = () => {
+      if (!newNoteText.trim()) return;
+      onCommit(addNoteEntry(value, newNoteText.trim()));
+      setNewNoteText('');
+    };
+    const contactDisplayName = (c: { text: string }) => {
+      const { firstName, lastName } = contactTextToFields(c.text);
+      return `${firstName} ${lastName}`.trim() || c.text;
+    };
+    const pickerTitle =
+      notePicker?.picker.kind === 'tag'
+        ? `Who is "${notePicker.picker.tag.label}" about?`
+        : notePicker?.picker.kind === 'noAnswer'
+          ? 'Who didn’t answer?'
+          : 'Who was the LinkedIn request sent to?';
+    const composeAndAdd = (picker: NotePickerKind, name: string) => {
+      const text =
+        picker.kind === 'tag' ? `${picker.tag.label} ${name}` : picker.kind === 'noAnswer' ? `${name} ${NO_ANSWER_SUFFIX}` : `${LINKEDIN_REQUEST_PREFIX} ${name}`;
+      onCommit(addNoteEntry(value, text));
+      setNotePicker(null);
     };
     return (
       <td className="demo-cell demo-cell-note" style={cellStyle} onMouseDown={onSelect}>
@@ -455,72 +503,159 @@ export function DemoDataCell({
                 <X size={14} />
               </button>
             </div>
-            <div className="demo-note-tags">
-              {NOTE_TAGS.map((tag) => (
-                <button key={tag.label} type="button" className="demo-note-tag" style={{ background: tag.color }} onClick={() => handleAddTag(tag.label)}>
-                  {tag.label}
-                </button>
-              ))}
-            </div>
-            <div className="demo-contact-add-row">
-              <input
-                placeholder="Add a note…"
+            <div className="demo-note-new-entry-row">
+              <textarea
+                className="demo-note-new-entry"
+                placeholder="Add a comment…"
                 value={newNoteText}
                 onChange={(e) => setNewNoteText(e.target.value)}
+                onBlur={commitNewEntry}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter' && newNoteText.trim()) {
-                    onCommit(addNoteEntry(value, newNoteText.trim()));
-                    setNewNoteText('');
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    commitNewEntry();
                   }
                 }}
               />
+              <button type="button" className="demo-note-new-entry-save" title="Save" onClick={commitNewEntry}>
+                <Check size={14} />
+              </button>
               <button
                 type="button"
-                onClick={() => {
-                  if (!newNoteText.trim()) return;
-                  onCommit(addNoteEntry(value, newNoteText.trim()));
-                  setNewNoteText('');
-                }}
+                className="demo-note-voice-btn"
+                title="Record a voice note"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => showToast(NOT_CONFIGURED_MESSAGE)}
               >
-                Add
+                <Mic size={14} />
               </button>
             </div>
-            <ul className="demo-note-history">
-              {entries.map((entry) => (
-                <li key={entry.id} className="demo-note-entry">
-                  {editingNoteId === entry.id ? (
-                    <input
-                      autoFocus
-                      value={noteEditDraft}
-                      onChange={(e) => setNoteEditDraft(e.target.value)}
-                      onBlur={() => {
-                        if (noteEditDraft.trim()) onCommit(updateNoteEntry(value, entry.id, noteEditDraft));
-                        setEditingNoteId(null);
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') e.currentTarget.blur();
-                        if (e.key === 'Escape') setEditingNoteId(null);
-                      }}
-                    />
-                  ) : (
-                    <button
-                      type="button"
-                      className="demo-note-entry-text"
-                      style={NOTE_TAG_COLORS[entry.text] ? { background: NOTE_TAG_COLORS[entry.text] } : undefined}
-                      onClick={() => {
-                        setEditingNoteId(entry.id);
-                        setNoteEditDraft(entry.text);
-                      }}
-                    >
-                      {entry.text}
-                    </button>
-                  )}
-                  <span className="demo-note-entry-time">{formatHistoryTimestamp(entry.createdAt)}</span>
-                  <button type="button" onClick={() => void handleRemove(entry.id, entry.text)}>
-                    <X size={12} />
-                  </button>
-                </li>
+            <div className="demo-note-tags">
+              <button type="button" className="demo-note-tag demo-note-tag-summary" onClick={() => showToast(NOT_CONFIGURED_MESSAGE)}>
+                <Bot size={14} /> Last summary
+              </button>
+              {NOTE_TAGS.map((tag) => (
+                <button
+                  key={tag.label}
+                  type="button"
+                  className="demo-note-tag"
+                  style={{ backgroundColor: tag.color, color: contrastTextColor(tag.color) }}
+                  disabled={noContacts}
+                  title={noContacts ? 'No contacts on this row yet' : `Who is "${tag.label}" about?`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const anchor = e.currentTarget;
+                    setNotePicker((prev) => (prev?.picker.kind === 'tag' && prev.picker.tag.label === tag.label ? null : { anchor, picker: { kind: 'tag', tag } }));
+                  }}
+                >
+                  {tag.label}
+                </button>
               ))}
+              <button
+                type="button"
+                className="demo-note-tag"
+                style={{ backgroundColor: NO_ANSWER_COLOR, color: contrastTextColor(NO_ANSWER_COLOR) }}
+                disabled={noContacts}
+                title={noContacts ? 'No contacts on this row yet' : 'Who didn’t answer?'}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const anchor = e.currentTarget;
+                  setNotePicker((prev) => (prev?.picker.kind === 'noAnswer' ? null : { anchor, picker: { kind: 'noAnswer' } }));
+                }}
+              >
+                {NO_ANSWER_SUFFIX}
+              </button>
+              <button
+                type="button"
+                className="demo-note-tag"
+                style={{ backgroundColor: LINKEDIN_REQUEST_COLOR, color: contrastTextColor(LINKEDIN_REQUEST_COLOR) }}
+                disabled={noContacts}
+                title={noContacts ? 'No contacts on this row yet' : 'Who was the LinkedIn request sent to?'}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const anchor = e.currentTarget;
+                  setNotePicker((prev) => (prev?.picker.kind === 'linkedin' ? null : { anchor, picker: { kind: 'linkedin' } }));
+                }}
+              >
+                {LINKEDIN_REQUEST_PREFIX}
+              </button>
+            </div>
+            {notePicker && (
+              <Popover anchor={notePicker.anchor} width={220}>
+                <div className="popover-field">
+                  <span>{pickerTitle}</span>
+                </div>
+                {rowContacts.map((c) => (
+                  <button key={c.id} type="button" className="date-cell-contact-option" onClick={() => composeAndAdd(notePicker.picker, contactDisplayName(c))}>
+                    {contactDisplayName(c)}
+                  </button>
+                ))}
+              </Popover>
+            )}
+            <ul className="demo-note-history">
+              {entries.map((entry) => {
+                const tagged = parseTaggedEntry(entry.text);
+                return (
+                  <li key={entry.id} className="demo-note-entry">
+                    <div className="demo-note-entry-time">
+                      <span className="demo-note-entry-author">Account Owner</span>
+                      {entry.createdAt > 0 && ` · ${formatHistoryTimestamp(entry.createdAt)}`}
+                    </div>
+                    <div className="demo-note-entry-row">
+                      {editingNoteId === entry.id ? (
+                        <input
+                          autoFocus
+                          className="demo-note-entry-edit"
+                          value={noteEditDraft}
+                          onChange={(e) => setNoteEditDraft(e.target.value)}
+                          onBlur={() => {
+                            if (noteEditDraft.trim()) onCommit(updateNoteEntry(value, entry.id, noteEditDraft));
+                            setEditingNoteId(null);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') e.currentTarget.blur();
+                            if (e.key === 'Escape') setEditingNoteId(null);
+                          }}
+                        />
+                      ) : (
+                        <button
+                          type="button"
+                          className="demo-note-entry-text"
+                          onClick={() => {
+                            setEditingNoteId(entry.id);
+                            setNoteEditDraft(entry.text);
+                          }}
+                        >
+                          {!tagged ? (
+                            entry.text
+                          ) : tagged.tagPosition === 'suffix' ? (
+                            <>
+                              {tagged.restText && `${tagged.restText} `}
+                              <span className="demo-note-history-tag-chip" style={{ backgroundColor: tagged.color, color: contrastTextColor(tagged.color) }}>
+                                {tagged.tagLabel}
+                              </span>
+                            </>
+                          ) : tagged.tagPosition === 'prefix' ? (
+                            <>
+                              <span className="demo-note-history-tag-chip" style={{ backgroundColor: tagged.color, color: contrastTextColor(tagged.color) }}>
+                                {tagged.tagLabel}
+                              </span>
+                              {tagged.restText && ` ${tagged.restText}`}
+                            </>
+                          ) : (
+                            <span className="demo-note-history-tag-chip" style={{ backgroundColor: tagged.color, color: contrastTextColor(tagged.color) }}>
+                              {tagged.tagLabel}
+                            </span>
+                          )}
+                        </button>
+                      )}
+                      <button type="button" onClick={() => void handleRemove(entry.id, entry.text)}>
+                        <X size={12} />
+                      </button>
+                    </div>
+                  </li>
+                );
+              })}
             </ul>
           </div>
         )}

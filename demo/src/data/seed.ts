@@ -125,9 +125,15 @@ function buildCompaniesTable(): { table: DemoTable; rows: Row[] } {
       },
     ]);
     const daysAgo = (n: number) => Date.now() - n * 24 * 60 * 60 * 1000;
+    // A couple of rows get a properly-composed "{tag} {name}"/"{name}
+    // Didn't answer" entry (matching production's current tag+contact-
+    // picker shape — see utils/noteHistory.ts's parseTaggedEntry) so the
+    // inline-chip rendering is visibly demonstrated without requiring a
+    // visitor to log one first.
     const noteEntries: NoteEntry[] = [
       { id: randomUUID(), text: pick(CALL_NOTE_TEMPLATES, i), createdAt: daysAgo(1 + (i % 10)) },
-      ...(i % 3 === 0 ? [{ id: randomUUID(), text: 'Email', createdAt: daysAgo(2 + (i % 14)) }] : []),
+      ...(i % 3 === 0 ? [{ id: randomUUID(), text: `Call ${p1.first} ${p1.last}`, createdAt: daysAgo(2 + (i % 14)) }] : []),
+      ...(i % 5 === 0 ? [{ id: randomUUID(), text: `${p2.first} ${p2.last} Didn't answer`, createdAt: daysAgo(3 + (i % 9)) }] : []),
     ];
     // Only a fraction of rows get a next-call date at all (matches
     // production's own "most rows never touch this" reality) — every 3rd
