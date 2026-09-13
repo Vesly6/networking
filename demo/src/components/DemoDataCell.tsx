@@ -2,11 +2,13 @@ import { useEffect, useRef, useState, type CSSProperties, type MouseEvent as Rea
 import type { Column, Row } from '../types';
 import { parseContacts, addContact, removeContact, getContactsSummary } from '../utils/contacts';
 import { parseNoteHistory, addNoteEntry, updateNoteEntry, removeNoteEntry, getLatestNoteText, formatHistoryTimestamp } from '../utils/noteHistory';
+import { getDatePart, getTimePart, combineDateTime } from '../utils/date';
 import { highlightMatches } from '../utils/highlight';
 import { ensureProtocol } from '../utils/link';
 import { contrastTextColor } from '../utils/color';
 import { confirmDialog } from '../store/useConfirmStore';
-import { X, ExternalLink, Search } from 'lucide-react';
+import { Popover } from './Popover';
+import { X, ExternalLink, Search, Clock, FileText, User } from 'lucide-react';
 
 interface DemoDataCellProps {
   row: Row;
@@ -22,6 +24,13 @@ interface DemoDataCellProps {
   onOpenEditor: () => void;
   editorOpen: boolean;
   onCloseEditor: () => void;
+  /** The row's own Contacts-column raw string, computed once per row in
+   * DemoTableView (not per cell) — same "read fresh from a sibling
+   * column, not per cell" reasoning as production's own DataCell.tsx.
+   * Only used by the next-action-date cell's 👤 picker. */
+  contactsRaw?: string;
+  onSetLinkedContact: (contactId: string | null) => void;
+  onSetNextActionNote: (note: string | null) => void;
 }
 
 const NOTE_TAGS: Array<{ label: string; color: string }> = [
@@ -51,6 +60,9 @@ export function DemoDataCell({
   onOpenEditor,
   editorOpen,
   onCloseEditor,
+  contactsRaw,
+  onSetLinkedContact,
+  onSetNextActionNote,
 }: DemoDataCellProps) {
   const value = row.cells[column.id] ?? '';
   const [draft, setDraft] = useState(value);
@@ -58,6 +70,11 @@ export function DemoDataCell({
   const [newNoteText, setNewNoteText] = useState('');
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [noteEditDraft, setNoteEditDraft] = useState('');
+  const [timeExpanded, setTimeExpanded] = useState(false);
+  const [dateCellPopover, setDateCellPopover] = useState<'note' | 'contact' | null>(null);
+  const [dateNoteDraft, setDateNoteDraft] = useState(row.nextActionNote ?? '');
+  const noteBtnRef = useRef<HTMLButtonElement>(null);
+  const contactBtnRef = useRef<HTMLButtonElement>(null);
 
   // Cell fill color (🎨 Color tool) — same "inline style wins over both
   // the :focus rule and the option's own badge color logic" approach as
@@ -83,6 +100,10 @@ export function DemoDataCell({
   useEffect(() => {
     setDraft(value);
   }, [value]);
+
+  useEffect(() => {
+    setDateNoteDraft(row.nextActionNote ?? '');
+  }, [row.nextActionNote]);
 
   // A plain onBlur is NOT reliable on its own — this was a real, reported
   // bug ("текст не сохраняется"): clicking a *different* cell fires that
@@ -144,9 +165,150 @@ export function DemoDataCell({
   }
 
   if (column.type === 'date') {
+    const datePart = getDatePart(value);
+    const timePart = getTimePart(value);
+    const contacts = column.isNextActionDate ? parseContacts(contactsRaw ?? '') : [];
+    const linkedContact = contacts.find((c) => c.id === row.linkedContactId);
     return (
-      <td className="demo-cell" style={cellStyle}>
-        <input type="date" value={value} onChange={(e) => onCommit(e.target.value)} style={cellStyle} />
+      <td className="demo-cell" style={cellStyle} onMouseDown={onSelect}>
+        <div className="date-cell">
+          <input
+            type="date"
+            style={cellStyle}
+            value={datePart}
+            onChange={(e) => onCommit(combineDateTime(e.target.value, timePart))}
+          />
+          {datePart && (
+            <button
+              type="button"
+              className={`date-cell-add-time ${timePart ? 'date-cell-add-time-set' : ''}`}
+              title={timePart ? `Time: ${timePart} (click to view/change)` : 'Set a specific time'}
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                setTimeExpanded((v) => !v);
+              }}
+            >
+              <Clock size={14} />
+            </button>
+          )}
+          {timeExpanded && (
+            <input
+              type="time"
+              className="date-cell-time"
+              style={cellStyle}
+              value={timePart}
+              onMouseDown={(e) => e.stopPropagation()}
+              onChange={(e) => onCommit(combineDateTime(datePart, e.target.value))}
+            />
+          )}
+          {column.isNextActionDate && datePart && (
+            <button
+              ref={noteBtnRef}
+              type="button"
+              className={`date-cell-note-btn ${row.nextActionNote ? 'date-cell-note-set' : ''}`}
+              title={row.nextActionNote ? `Note: ${row.nextActionNote}` : 'Add a note about this call'}
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                setDateCellPopover((prev) => (prev === 'note' ? null : 'note'));
+              }}
+            >
+              <FileText size={14} />
+            </button>
+          )}
+          {column.isNextActionDate && datePart && contacts.length > 0 && (
+            <button
+              ref={contactBtnRef}
+              type="button"
+              className={`date-cell-contact-btn ${linkedContact ? 'date-cell-contact-linked' : ''}`}
+              title={linkedContact ? `Calling: ${linkedContact.text}` : 'Pick who this call is for'}
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                setDateCellPopover((prev) => (prev === 'contact' ? null : 'contact'));
+              }}
+            >
+              <User size={14} />
+            </button>
+          )}
+          {datePart && (
+            <button
+              type="button"
+              className="date-cell-clear-all"
+              title="Clear date, time, linked contact, and note"
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                onCommit('');
+                setTimeExpanded(false);
+                if (column.isNextActionDate && row.linkedContactId) onSetLinkedContact(null);
+                if (column.isNextActionDate && row.nextActionNote) onSetNextActionNote(null);
+              }}
+            >
+              <X size={14} />
+            </button>
+          )}
+        </div>
+        {dateCellPopover === 'note' && noteBtnRef.current && (
+          <Popover anchor={noteBtnRef.current} width={260}>
+            <div className="popover-field">
+              <span>Note about this call</span>
+              <textarea
+                autoFocus
+                className="date-cell-note-textarea"
+                rows={3}
+                placeholder="e.g. ask about budget approval"
+                value={dateNoteDraft}
+                onChange={(e) => setDateNoteDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    onSetNextActionNote(dateNoteDraft);
+                    setDateCellPopover(null);
+                  }
+                  if (e.key === 'Escape') {
+                    setDateNoteDraft(row.nextActionNote ?? '');
+                    setDateCellPopover(null);
+                  }
+                }}
+                onBlur={() => onSetNextActionNote(dateNoteDraft)}
+              />
+            </div>
+          </Popover>
+        )}
+        {dateCellPopover === 'contact' && contactBtnRef.current && (
+          <Popover anchor={contactBtnRef.current} width={220}>
+            <div className="popover-field">
+              <span>Who are you calling?</span>
+            </div>
+            {contacts.map((c) => (
+              <button
+                key={c.id}
+                type="button"
+                className={`date-cell-contact-option ${row.linkedContactId === c.id ? 'date-cell-contact-option-active' : ''}`}
+                onClick={() => {
+                  onSetLinkedContact(row.linkedContactId === c.id ? null : c.id);
+                  setDateCellPopover(null);
+                }}
+              >
+                {c.text}
+              </button>
+            ))}
+            {row.linkedContactId && (
+              <button
+                type="button"
+                className="date-cell-contact-clear"
+                onClick={() => {
+                  onSetLinkedContact(null);
+                  setDateCellPopover(null);
+                }}
+              >
+                Clear
+              </button>
+            )}
+          </Popover>
+        )}
       </td>
     );
   }

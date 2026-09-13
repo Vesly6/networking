@@ -34,6 +34,10 @@ export function getTimePart(value: string): string {
   return hasTime(value) ? value.slice(11, 16) : '';
 }
 
+export function combineDateTime(date: string, time: string): string {
+  return time ? `${date}T${time}` : date;
+}
+
 export function isOverdue(value: string): boolean {
   return !!value && getDatePart(value) < todayISO();
 }

@@ -8,6 +8,7 @@ import { DemoColumnHeaderMenu } from './DemoColumnHeaderMenu';
 import { Popover } from './Popover';
 import { ColorInput } from './ColorInput';
 import { parseCellRef, formatCellRef } from '../utils/spreadsheet';
+import { getColumnByType } from '../utils/row';
 import { PRESET_COLORS } from '../constants';
 import { ChevronUp, ChevronDown, MoreVertical } from 'lucide-react';
 
@@ -41,6 +42,10 @@ export function DemoTableView({ table, focusRowId, onFocusHandled }: DemoTableVi
   const canUndo = useDemoTableStore((s) => (s.undoStackByTable[table.id]?.length ?? 0) > 0);
   const canRedo = useDemoTableStore((s) => (s.redoStackByTable[table.id]?.length ?? 0) > 0);
   const setCellColor = useDemoTableStore((s) => s.setCellColor);
+  const setLinkedContact = useDemoTableStore((s) => s.setLinkedContact);
+  const setNextActionNote = useDemoTableStore((s) => s.setNextActionNote);
+
+  const contactColumn = useMemo(() => getColumnByType(table.columns, 'contact'), [table.columns]);
 
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<SortState>(null);
@@ -184,6 +189,12 @@ export function DemoTableView({ table, focusRowId, onFocusHandled }: DemoTableVi
       <DemoFormulaBar tableId={table.id} selection={activeCell} columns={table.columns} rows={rows} />
       <div className="demo-table-scroll" ref={scrollRef} onClick={() => setColumnMenu(null)}>
         <table className="demo-sheet">
+          <colgroup>
+            <col className="demo-col-gutter" />
+            {table.columns.map((col) => (
+              <col key={col.id} className={col.type === 'date' ? 'demo-col-date' : undefined} />
+            ))}
+          </colgroup>
           <thead>
             <tr>
               <th className="demo-row-gutter" />
@@ -263,6 +274,9 @@ export function DemoTableView({ table, focusRowId, onFocusHandled }: DemoTableVi
                     onOpenEditor={() => setExpandedCell({ rowId: row.id, columnId: col.id })}
                     editorOpen={expandedCell?.rowId === row.id && expandedCell?.columnId === col.id}
                     onCloseEditor={() => setExpandedCell(null)}
+                    contactsRaw={contactColumn ? row.cells[contactColumn.id] : undefined}
+                    onSetLinkedContact={(contactId) => setLinkedContact(table.id, row.id, contactId)}
+                    onSetNextActionNote={(note) => setNextActionNote(table.id, row.id, note)}
                   />
                 ))}
               </tr>

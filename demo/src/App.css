@@ -369,6 +369,102 @@
   max-height: calc(100dvh - 16px);
   overflow-y: auto;
 }
+.popover-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+/* Next-action-date cell icon row — copied from production's own
+   .date-cell* rules (App.css), minus the linked-contact-name-in-title
+   niceties this demo's simpler contact model doesn't need. */
+.date-cell {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.2em 0.4em;
+  overflow: hidden;
+}
+.date-cell input[type='date'] {
+  flex: 1 1 100px;
+  min-width: 100px;
+  padding: 0.25em 0.3em;
+}
+.date-cell-time {
+  flex: 0 0 5.5em;
+  padding: 0.25em 0.3em;
+}
+.date-cell .date-cell-time {
+  border-color: var(--border);
+  border-radius: 4px;
+}
+.date-cell-add-time,
+.date-cell-note-btn,
+.date-cell-contact-btn {
+  border: none;
+  background: transparent;
+  padding: 0.15em 0.3em;
+  font-size: 0.85em;
+  opacity: 0.55;
+  flex-shrink: 0;
+}
+.date-cell-add-time:hover,
+.date-cell-note-btn:hover,
+.date-cell-contact-btn:hover {
+  opacity: 1;
+  background: var(--bg-hover);
+}
+.date-cell-add-time-set,
+.date-cell-note-set,
+.date-cell-contact-linked {
+  opacity: 1;
+  color: var(--accent);
+}
+.date-cell-clear-all {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  padding: 0 0.3em;
+  font-size: 1em;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.date-cell-clear-all:hover {
+  color: var(--danger);
+  background: var(--danger-bg);
+}
+.date-cell-contact-option {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 1px solid transparent;
+  background: transparent;
+  padding: 0.4em 0.5em;
+  border-radius: 5px;
+  font-size: 0.82rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.date-cell-contact-option:hover {
+  background: var(--bg-hover);
+}
+.date-cell-contact-option-active {
+  border-color: var(--accent);
+  background: var(--today-bg);
+}
+.date-cell-contact-clear {
+  width: 100%;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+.date-cell-note-textarea {
+  width: 100%;
+  resize: vertical;
+  font-size: 0.85em;
+}
 
 /* Right-click column header menu — copied from production's own
    .context-menu* rules. */
@@ -462,6 +558,15 @@ table.demo-sheet {
   width: 100%;
   table-layout: fixed;
   font-size: 0.85rem;
+}
+.demo-col-gutter {
+  width: 3.5rem;
+}
+/* A date column's icon row (date input + 🕐/📝/👤/✕) needs real room —
+   the default equal-width split from table-layout: fixed clips it,
+   since this demo has no column-resize feature to widen it manually. */
+.demo-col-date {
+  width: 210px;
 }
 
 .demo-sheet thead th {

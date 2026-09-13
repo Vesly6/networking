@@ -66,6 +66,16 @@ function personName(seed: number): { first: string; last: string } {
   return { first: pick(FIRST_NAMES, seed), last: pick(LAST_NAMES, seed * 3 + 2) };
 }
 
+// Spread relative to the *actual* current date (not a fixed year) so the
+// Calendar tab's Overdue/Today/Upcoming grouping always has something
+// real to show regardless of when the demo happens to be opened — a
+// fixed-year date range would eventually drift entirely into the past.
+function relativeDate(offsetDays: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() + offsetDays);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 const COMPANY_COUNT = 180;
 
 function buildCompaniesTable(): { table: DemoTable; rows: Row[] } {
@@ -89,8 +99,9 @@ function buildCompaniesTable(): { table: DemoTable; rows: Row[] } {
   const phoneCol = col('Phone', 'phone');
   const employeesCol = col('Employees', 'text');
   const notesCol = col('Call Notes', 'note');
+  const nextCallCol = col('Next Call', 'date', { isNextActionDate: true });
 
-  const columns = [nameCol, industryCol, icpCol, contactsCol, statusCol, websiteCol, phoneCol, employeesCol, notesCol];
+  const columns = [nameCol, industryCol, icpCol, contactsCol, statusCol, websiteCol, phoneCol, employeesCol, notesCol, nextCallCol];
 
   const CALL_NOTE_TEMPLATES = [
     'Initial call went well, interested in a demo',
@@ -102,9 +113,10 @@ function buildCompaniesTable(): { table: DemoTable; rows: Row[] } {
   const rows: Row[] = Array.from({ length: COMPANY_COUNT }, (_, i) => {
     const p1 = personName(i);
     const p2 = personName(i + 41);
+    const contact1Id = randomUUID();
     const contacts = serializeContacts([
       {
-        id: randomUUID(),
+        id: contact1Id,
         text: `${p1.first} ${p1.last}, ${pick(TITLES, i)}, ${p1.first.toLowerCase()}.${p1.last.toLowerCase()}@${domain(i)}, +370 6${(10000000 + i * 37) % 90000000}`,
       },
       {
@@ -117,9 +129,19 @@ function buildCompaniesTable(): { table: DemoTable; rows: Row[] } {
       { id: randomUUID(), text: pick(CALL_NOTE_TEMPLATES, i), createdAt: daysAgo(1 + (i % 10)) },
       ...(i % 3 === 0 ? [{ id: randomUUID(), text: 'Email', createdAt: daysAgo(2 + (i % 14)) }] : []),
     ];
+    // Only a fraction of rows get a next-call date at all (matches
+    // production's own "most rows never touch this" reality) — every 3rd
+    // row, spread across a realistic overdue/today/upcoming window. A
+    // fraction of *those* also get a linked contact and/or a next-action
+    // note, so both the 👤 and 📝 buttons are visible somewhere without
+    // every row looking identical.
+    const hasNextCall = i % 3 === 0;
+    const nextCallOffset = i < 6 ? i - 2 : ((i * 5 + 2) % 40) - 15;
     return {
       id: randomUUID(),
       tableId: nameCol.id, // placeholder, replaced below once tableId is known
+      linkedContactId: hasNextCall && i % 2 === 0 ? contact1Id : undefined,
+      nextActionNote: hasNextCall && i % 4 === 0 ? 'Ask about budget approval timeline' : undefined,
       cells: {
         [nameCol.id]: companyName(i),
         [industryCol.id]: pick(INDUSTRIES, i),
@@ -128,6 +150,7 @@ function buildCompaniesTable(): { table: DemoTable; rows: Row[] } {
         [statusCol.id]: pick(STATUSES, i * 5 + 1),
         [websiteCol.id]: domain(i),
         [phoneCol.id]: `+370 5${(2000000 + i * 91) % 8000000}`,
+        [nextCallCol.id]: hasNextCall ? relativeDate(nextCallOffset) : '',
         [employeesCol.id]: `${10 + (i % 12) * 15}-${50 + (i % 12) * 20}`,
         [notesCol.id]: serializeNoteHistory(noteEntries),
       },
@@ -170,18 +193,8 @@ function buildPipelineTable(): { table: DemoTable; rows: Row[] } {
   const owners = ['Jonas K.', 'Rūta P.', 'Tomas B.', 'Ieva N.'];
   const nextSteps = ['Send follow-up email', 'Schedule demo call', 'Prepare proposal', 'Confirm contract terms', 'Check in after trial'];
 
-  // Spread relative to the *actual* current date (not a fixed year) so the
-  // Calendar tab's Overdue/Today/Upcoming grouping always has something
-  // real to show regardless of when the demo happens to be opened — a
-  // fixed-year date range would eventually drift entirely into the past.
-  // A few rows land exactly on today/tomorrow so those sections are never
-  // empty on a fresh load.
-  const relativeDate = (offsetDays: number): string => {
-    const d = new Date();
-    d.setDate(d.getDate() + offsetDays);
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-  };
-
+  // A few rows land exactly on today/tomorrow so the Calendar's
+  // Overdue/Today sections are never empty on a fresh load.
   const rows: Row[] = Array.from({ length: 60 }, (_, i) => {
     const offsetDays = i < 3 ? i : ((i * 7 + 3) % 45) - 20;
     return {

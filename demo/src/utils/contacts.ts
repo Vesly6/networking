@@ -74,3 +74,16 @@ export function contactTextToFields(text: string): ContactFormFields {
   const lastName = spaceIdx === -1 ? '' : name.slice(spaceIdx + 1);
   return { firstName, lastName, position, company, email, phone };
 }
+
+// Copied verbatim from app/src/utils/contacts.ts — requires 7+ digits so
+// a short junk value (a bare "+1" placeholder, an extension) doesn't get
+// mistaken for a real number.
+const PHONE_PATTERN = /\+?\d[\d\s().-]{6,}\d/;
+
+/** Pulls a callable number out of a contact entry's freeform text, or
+ * null if nothing phone-shaped is in there — used by the next-action-date
+ * cell's 👤 picker to resolve "who does this row's call number belong to." */
+export function extractPhoneNumber(text: string): string | null {
+  const match = PHONE_PATTERN.exec(text);
+  return match ? match[0].trim() : null;
+}

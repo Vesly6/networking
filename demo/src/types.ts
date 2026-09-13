@@ -27,6 +27,13 @@ export interface Row {
   colors?: Record<string, string>;
   order: number;
   height?: number;
+  /** Set via the next-action-date cell's 👤 picker — which of this row's
+   * own `contact`-column entries the date/call is for. */
+  linkedContactId?: string;
+  /** Set via the next-action-date cell's 📝 button — a single freeform
+   * note about this specific call/action, distinct from the `note`
+   * column's own dated history. */
+  nextActionNote?: string | null;
 }
 
 export interface DemoTable {

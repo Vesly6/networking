@@ -50,6 +50,10 @@ interface DemoTableState {
 
   setActiveTable: (id: string) => void;
   addRow: (tableId: string) => void;
+  /** Inserts one blank row before `beforeRowId` (end of the table when
+   * null) — mirrors production's insertRows (useTableStore.ts), used by
+   * the row right-click menu's "Insert row above/below". */
+  insertRows: (tableId: string, beforeRowId: string | null, count: number) => void;
   removeRows: (tableId: string, rowIds: string[]) => void;
   updateCell: (tableId: string, rowId: string, columnId: string, value: string) => void;
   setDropdownOptions: (tableId: string, columnId: string, options: string[]) => void;
@@ -59,6 +63,10 @@ interface DemoTableState {
   insertColumns: (tableId: string, beforeColumnId: string | null, count: number) => void;
   removeColumns: (tableId: string, columnIds: string[]) => void;
   setCellColor: (tableId: string, rowId: string, columnId: string, color: string | null) => void;
+  /** Next-action-date cell's 👤/📝 buttons — see Row.linkedContactId/
+   * nextActionNote in types.ts. */
+  setLinkedContact: (tableId: string, rowId: string, contactId: string | null) => void;
+  setNextActionNote: (tableId: string, rowId: string, note: string | null) => void;
   /** At most one per table, same rule as production's own
    * isNextActionDate — setting a new one clears any previous one on the
    * same table. */
@@ -119,6 +127,20 @@ export const useDemoTableStore = create<DemoTableState>((set, get) => {
       const maxOrder = rows.reduce((m, r) => Math.max(m, r.order), -1);
       const newRow: Row = { id: randomUUID(), tableId, cells: {}, order: maxOrder + 1 };
       set({ rowsByTable: { ...get().rowsByTable, [tableId]: [...rows, newRow] } });
+    },
+
+    insertRows: (tableId, beforeRowId, count) => {
+      if (count <= 0) return;
+      snapshot(tableId);
+      const rows = get().rowsByTable[tableId] ?? [];
+      const index = beforeRowId === null ? -1 : rows.findIndex((r) => r.id === beforeRowId);
+      const newRows: Row[] = Array.from({ length: count }, () => ({ id: randomUUID(), tableId, cells: {}, order: 0 }));
+      const combined = index === -1 ? [...rows, ...newRows] : [...rows.slice(0, index), ...newRows, ...rows.slice(index)];
+      // Reassign order across every row so the new ones land at the right
+      // position regardless of the current view's sort — same technique
+      // insertColumns/production's own insertRows already use.
+      const reordered = combined.map((r, i) => ({ ...r, order: i }));
+      set({ rowsByTable: { ...get().rowsByTable, [tableId]: reordered } });
     },
 
     removeRows: (tableId, rowIds) => {
@@ -254,6 +276,18 @@ export const useDemoTableStore = create<DemoTableState>((set, get) => {
         else delete colors[columnId];
         return { ...r, colors };
       });
+      set({ rowsByTable: { ...get().rowsByTable, [tableId]: rows } });
+    },
+
+    setLinkedContact: (tableId, rowId, contactId) => {
+      snapshot(tableId);
+      const rows = (get().rowsByTable[tableId] ?? []).map((r) => (r.id === rowId ? { ...r, linkedContactId: contactId ?? undefined } : r));
+      set({ rowsByTable: { ...get().rowsByTable, [tableId]: rows } });
+    },
+
+    setNextActionNote: (tableId, rowId, note) => {
+      snapshot(tableId);
+      const rows = (get().rowsByTable[tableId] ?? []).map((r) => (r.id === rowId ? { ...r, nextActionNote: note } : r));
       set({ rowsByTable: { ...get().rowsByTable, [tableId]: rows } });
     },
 
