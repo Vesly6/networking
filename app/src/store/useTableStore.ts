@@ -129,7 +129,10 @@ interface TableState {
    * time and doesn't return an id) — used by TableView.tsx's cross-table
    * name-matched paste to recreate a source table's missing columns in a
    * single undo step, then immediately know their new ids to paste into. */
-  addColumnsFromDefs: (defs: { name: string; type: ColumnType; options?: string[]; optionColors?: Record<string, string> }[]) => string[];
+  addColumnsFromDefs: (
+    defs: { name: string; type: ColumnType; options?: string[]; optionColors?: Record<string, string> }[],
+    beforeColumnId?: string | null,
+  ) => string[];
   setOptionColor: (columnId: string, option: string, color: string | null) => void;
   setColumnWidth: (id: string, width: number) => void;
   setNextActionDateColumn: (id: string) => void;
@@ -417,8 +420,9 @@ export const useTableStore = create<TableState>((set, get) => {
       persistColumns(columns);
     },
 
-    addColumnsFromDefs: (defs) => {
+    addColumnsFromDefs: (defs, beforeColumnId) => {
       snapshot();
+      const current = get().columns;
       const newColumns: Column[] = defs.map((d) => ({
         id: randomUUID(),
         name: d.name.trim() || 'Stulpelis',
@@ -427,7 +431,12 @@ export const useTableStore = create<TableState>((set, get) => {
         ...(d.options ? { options: d.options } : {}),
         ...(d.optionColors ? { optionColors: d.optionColors } : {}),
       }));
-      const columns = [...get().columns, ...newColumns];
+      // Same beforeColumnId/null-means-append convention as insertColumns
+      // above — on explicit request ("нажал на первую колонку... вставил,
+      // а оно вставилось в конце"): recreated columns land where the
+      // paste actually targeted, not always tacked on at the far end.
+      const index = beforeColumnId == null ? -1 : current.findIndex((c) => c.id === beforeColumnId);
+      const columns = index === -1 ? [...current, ...newColumns] : [...current.slice(0, index), ...newColumns, ...current.slice(index)];
       set({ columns });
       persistColumns(columns);
       return newColumns.map((c) => c.id);

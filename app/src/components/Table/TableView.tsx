@@ -1874,12 +1874,18 @@ export function TableView({
   // worker-lock checks, dropdown-option extension) via its
   // columnIdsOverride parameter — this function only resolves *which*
   // column each pasted column lands in.
-  const applyNameMatchedPaste = (grid: string[][], payload: MyDeskClipboardPayload, startRow: number) => {
+  const applyNameMatchedPaste = (grid: string[][], payload: MyDeskClipboardPayload, startRow: number, startCol: number) => {
     const key = (name: string) => name.trim().toLowerCase();
     const idByName = new Map(columns.map((c) => [key(c.name), c.id]));
     const missingDefs = (payload.columnDefs ?? []).filter((d) => !idByName.has(key(d.name)));
     if (missingDefs.length > 0) {
-      const newIds = addColumnsFromDefs(missingDefs);
+      // Recreated columns land at the paste target's own position (like
+      // Excel: click column A, paste, the pasted columns appear starting
+      // at A) — not always appended past the end, which is where they
+      // used to land regardless of what was actually selected before
+      // pasting.
+      const beforeColumnId = columns[startCol]?.id ?? null;
+      const newIds = addColumnsFromDefs(missingDefs, beforeColumnId);
       missingDefs.forEach((d, i) => idByName.set(key(d.name), newIds[i]));
     }
     // A header-only copy (see headerRowSelected/handleCopy) only ever
@@ -2101,12 +2107,13 @@ export function TableView({
       e.preventDefault();
       const grid = parseTsv(text);
       const startRow = (rangeAnchor ?? rangeFocus).r;
+      const startCol = (rangeAnchor ?? rangeFocus).c;
       const richRaw = e.clipboardData?.getData(MYDESK_CLIPBOARD_MIME);
       if (richRaw) {
         try {
           const payload: MyDeskClipboardPayload = JSON.parse(richRaw);
           if (payload.sourceTableId && payload.sourceTableId !== tableId) {
-            applyNameMatchedPaste(grid, payload, startRow);
+            applyNameMatchedPaste(grid, payload, startRow, startCol);
             return;
           }
         } catch {
@@ -3364,7 +3371,7 @@ export function TableView({
                     key={col.id}
                     className={[
                       'letter-cell',
-                      selectedColumnIds.has(col.id) && 'letter-cell-selected',
+                      (selectedColumnIds.has(col.id) || headerRowSelected) && 'letter-cell-selected',
                       dragOverColumnId === col.id && (dragOverColumnAfter ? 'col-drop-after' : 'col-drop-before'),
                       dragColumnIds?.includes(col.id) && 'col-dragging',
                     ]
@@ -3432,7 +3439,7 @@ export function TableView({
                 {columns.map((col) => (
                   <th
                     key={col.id}
-                    className={selectedColumnIds.has(col.id) ? 'letter-cell-selected' : undefined}
+                    className={selectedColumnIds.has(col.id) || headerRowSelected ? 'letter-cell-selected' : undefined}
                     onContextMenu={(e) => handleColumnContextMenu(e, col, columns.indexOf(col))}
                   >
                     <div className="th-content">
