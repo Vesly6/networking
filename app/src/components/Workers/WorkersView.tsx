@@ -7,6 +7,7 @@ import { typeToConfirmDialog } from '../../store/useTypeToConfirmStore';
 import { confirmDialog } from '../../store/useConfirmStore';
 import { formatHistoryTimestamp } from '../../utils/date';
 import { TAB_LABELS } from '../../utils/tabLabels';
+import { ALL_PERMISSION_KEYS, PERMISSION_GROUPS, PERMISSIONS, type PermissionKey } from '../../utils/permissions';
 import { ArrowRight, Key, UserCog, X } from 'lucide-react';
 
 const PERMISSION_LABELS: Array<{ key: keyof UserPermissions; label: string }> = [
@@ -193,6 +194,8 @@ function WorkerForm({
   initialLastName = '',
   initialTabs,
   initialPermissions,
+  initialPermissionKeys = [],
+  actingPermissionKeys,
   initialZadarma = EMPTY_ZADARMA,
   initialSecretsSet = {},
   submitLabel,
@@ -210,6 +213,21 @@ function WorkerForm({
   initialLastName?: string;
   initialTabs: string[];
   initialPermissions: UserPermissions;
+  /** The worker's own current raw grant (Worker.grantedPermissionKeys) —
+   * not the effective/intersected set, since this form should show exactly
+   * what was granted even if the company's own ceiling currently makes
+   * some of it inert (see utils/permissions.ts's own doc comment). Empty
+   * for a brand-new worker. */
+  initialPermissionKeys?: PermissionKey[];
+  /** The bound on what this form is even allowed to check — a company's
+   * own super_admin can only grant a subset of their own current effective
+   * set (enforced server-side too, see index.ts's PATCH /api/workers/:id),
+   * so WorkersView passes their own permissionKeys here. The platform
+   * Admin dashboard (companyId set) passes the full registry instead — the
+   * platform IS the ceiling's own author, and over-granting there is
+   * already structurally inert (see pickPermissionKeys' own server-side
+   * doc comment), so there's nothing to bound. */
+  actingPermissionKeys: PermissionKey[];
   initialZadarma?: WorkerZadarmaFields;
   initialSecretsSet?: WorkerSecretsSet;
   submitLabel: string;
@@ -218,6 +236,7 @@ function WorkerForm({
     lastName: string,
     tabs: string[],
     permissions: UserPermissions,
+    permissionKeys: PermissionKey[],
     zadarma: WorkerZadarmaFields,
     secretDrafts: SecretDrafts,
   ) => void;
@@ -227,11 +246,14 @@ function WorkerForm({
   const [lastName, setLastName] = useState(initialLastName);
   const [tabs, setTabs] = useState<string[]>(initialTabs);
   const [permissions, setPermissions] = useState<UserPermissions>(initialPermissions);
+  const [permissionKeys, setPermissionKeys] = useState<PermissionKey[]>(initialPermissionKeys);
   const [zadarma, setZadarma] = useState<WorkerZadarmaFields>(initialZadarma);
   const [secretDrafts, setSecretDrafts] = useState<SecretDrafts>({});
 
   const toggleTab = (t: string) => setTabs((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
   const togglePermission = (key: keyof UserPermissions) => setPermissions((prev) => ({ ...prev, [key]: !prev[key] }));
+  const togglePermissionKey = (key: PermissionKey) =>
+    setPermissionKeys((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
 
   const handleClearSecret = async (key: SecretApiKey, label: string) => {
     const ok = await confirmDialog({ message: `Išvalyti „${label}“ raktą šiam darbuotojui?`, danger: true });
@@ -279,6 +301,34 @@ function WorkerForm({
             </label>
           ))}
         </div>
+      </div>
+      <div className="worker-form-section">
+        <span className="worker-form-section-label">Leidimai (integracijos, API raktai, administravimas)</span>
+        {PERMISSION_GROUPS.map((group) => (
+          <div key={group.title} className="worker-form-permission-group">
+            <span className="worker-form-permission-group-title">{group.title}</span>
+            <div className="worker-form-permission-list">
+              {group.keys.map((key) => {
+                const grantable = actingPermissionKeys.includes(key);
+                return (
+                  <label
+                    key={key}
+                    className="search-filter-checkbox"
+                    title={grantable ? undefined : 'Jūs patys neturite šios teisės — negalite jos suteikti'}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={permissionKeys.includes(key)}
+                      disabled={!grantable}
+                      onChange={() => togglePermissionKey(key)}
+                    />
+                    <span>{PERMISSIONS[key]}</span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+        ))}
       </div>
       <div className="worker-form-section worker-form-always-restricted">
         <span className="worker-form-section-label">Visada apribota (nepriklausomai nuo varnelių)</span>
@@ -359,7 +409,11 @@ function WorkerForm({
         </div>
       </div>
       <div className="worker-form-actions">
-        <button type="button" className="primary" onClick={() => onSubmit(firstName, lastName, tabs, permissions, zadarma, secretDrafts)}>
+        <button
+          type="button"
+          className="primary"
+          onClick={() => onSubmit(firstName, lastName, tabs, permissions, permissionKeys, zadarma, secretDrafts)}
+        >
           {submitLabel}
         </button>
         {onCancel && (
@@ -446,11 +500,20 @@ export function WorkersView({ onJumpToRow, onJumpToContact, companyTabs, company
     if (actionsError) showToast(actionsError);
   }, [actionsError, showToast]);
 
+  // A company's own super_admin can only grant a subset of their own
+  // current effective set (see WorkerForm's own doc comment on
+  // actingPermissionKeys) — the platform Admin dashboard (companyId set)
+  // has no such bound, since over-granting there is already structurally
+  // inert server-side.
+  const ownPermissionKeys = useAuthStore((s) => s.user?.permissionKeys);
+  const actingPermissionKeys = companyId ? ALL_PERMISSION_KEYS : (ownPermissionKeys ?? []);
+
   const handleCreate = async (
     firstName: string,
     lastName: string,
     tabs: string[],
     permissions: UserPermissions,
+    permissionKeys: PermissionKey[],
     zadarma: WorkerZadarmaFields,
     secretDrafts: SecretDrafts,
   ) => {
@@ -467,6 +530,7 @@ export function WorkersView({ onJumpToRow, onJumpToContact, companyTabs, company
           lastName: lastName.trim(),
           visibleTabs: tabs,
           permissions,
+          permissionKeys,
           zadarmaSip: zadarma.zadarmaSip || undefined,
           zadarmaWidgetSip: zadarma.zadarmaWidgetSip || undefined,
           zadarmaCallerNumber: zadarma.zadarmaCallerNumber || undefined,
@@ -489,6 +553,7 @@ export function WorkersView({ onJumpToRow, onJumpToContact, companyTabs, company
     lastName: string,
     tabs: string[],
     permissions: UserPermissions,
+    permissionKeys: PermissionKey[],
     zadarma: WorkerZadarmaFields,
     secretDrafts: SecretDrafts,
   ) => {
@@ -504,6 +569,7 @@ export function WorkersView({ onJumpToRow, onJumpToContact, companyTabs, company
           lastName: lastName.trim(),
           visibleTabs: tabs,
           permissions,
+          permissionKeys,
           zadarmaSip: zadarma.zadarmaSip,
           zadarmaWidgetSip: zadarma.zadarmaWidgetSip,
           zadarmaCallerNumber: zadarma.zadarmaCallerNumber,
@@ -585,6 +651,7 @@ export function WorkersView({ onJumpToRow, onJumpToContact, companyTabs, company
             companyTabs={companyTabs}
             initialTabs={[]}
             initialPermissions={EMPTY_PERMISSIONS}
+            actingPermissionKeys={actingPermissionKeys}
             submitLabel="Sukurti"
             onSubmit={handleCreate}
             onCancel={() => setAddingOpen(false)}
@@ -653,6 +720,8 @@ export function WorkersView({ onJumpToRow, onJumpToContact, companyTabs, company
               initialLastName={worker.lastName}
               initialTabs={worker.visibleTabs ?? []}
               initialPermissions={worker.permissions}
+              initialPermissionKeys={worker.grantedPermissionKeys}
+              actingPermissionKeys={actingPermissionKeys}
               initialZadarma={{
                 zadarmaSip: worker.zadarmaSip ?? '',
                 zadarmaWidgetSip: worker.zadarmaWidgetSip ?? '',
@@ -667,8 +736,8 @@ export function WorkersView({ onJumpToRow, onJumpToContact, companyTabs, company
                 elevenlabsApiKey: worker.elevenlabsApiKeySet,
               }}
               submitLabel="Išsaugoti"
-              onSubmit={(firstName, lastName, tabs, permissions, zadarma, secretDrafts) =>
-                void handleUpdate(worker, firstName, lastName, tabs, permissions, zadarma, secretDrafts)
+              onSubmit={(firstName, lastName, tabs, permissions, permissionKeys, zadarma, secretDrafts) =>
+                void handleUpdate(worker, firstName, lastName, tabs, permissions, permissionKeys, zadarma, secretDrafts)
               }
             />
           ) : (

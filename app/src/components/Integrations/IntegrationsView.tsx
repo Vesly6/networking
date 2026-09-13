@@ -1,5 +1,10 @@
 import { useEffect, useState } from 'react';
-import { useIntegrationsStore, NON_SECRET_INTEGRATION_FIELDS, type IntegrationField } from '../../store/useIntegrationsStore';
+import {
+  useIntegrationsStore,
+  NON_SECRET_INTEGRATION_FIELDS,
+  type IntegrationField,
+  type IntegrationModeField,
+} from '../../store/useIntegrationsStore';
 import { useToastStore } from '../../store/useToastStore';
 import { confirmDialog } from '../../store/useConfirmStore';
 import { LOCAL_API_BASE } from '../../utils/localApi';
@@ -15,6 +20,14 @@ interface GroupDef {
   title: string;
   hint?: string;
   fields: FieldDef[];
+  /** Omitted for Zadarma's SIP/account credentials and LinkedIn's CDP URL —
+   * neither has a per-provider Shared/Individual concept (see
+   * server/src/accounts/db.ts's new company_integrations columns): Zadarma's
+   * account key/secret were always company-scoped only (no per-worker
+   * override to fall back from in the first place), and LinkedIn's CDP URL
+   * is a single shared browser connection by design (see linkedin/
+   * browser.ts's own doc comment), not a per-worker credential. */
+  modeField?: IntegrationModeField;
 }
 
 // One group per integration, in the same order as INTEGRATION_FIELDS
@@ -26,39 +39,47 @@ interface GroupDef {
 const GROUPS: GroupDef[] = [
   {
     title: 'Zadarma (Skambučiai)',
-    hint: 'Raktas ir paslaptis abu būtini, kad skiltis „Skambučiai" realiai veiktų — įjunkite ją atskirai skiltyje „Funkcijos".',
+    hint: 'Raktas ir paslaptis abu būtini, kad skiltis „Skambučiai" realiai veiktų — įjunkite ją atskirai skiltyje „Funkcijos". SIP/Widget SIP yra atsarginis numeris visai įmonei, naudojamas tik jei konkretus darbuotojas neturi savo (žr. „Darbuotojai").',
     fields: [
       { field: 'zadarmaApiKey', label: 'API raktas' },
       { field: 'zadarmaApiSecret', label: 'API paslaptis' },
       { field: 'zadarmaCallerNumber', label: 'Skambinančio numeris', placeholder: '+37066653965' },
+      { field: 'zadarmaSip', label: 'SIP vidinis numeris (įmonės)', placeholder: '100' },
+      { field: 'zadarmaWidgetSip', label: 'Widget SIP (įmonės)', placeholder: '488048-100' },
     ],
   },
   {
     title: 'Instantly (Paštas)',
     fields: [{ field: 'instantlyApiKey', label: 'API raktas' }],
+    modeField: 'instantlyMode',
   },
   {
     title: 'Apollo (Paieška)',
     fields: [{ field: 'apolloApiKey', label: 'API raktas' }],
+    modeField: 'apolloMode',
   },
   {
     title: 'Serper',
     hint: 'Papildo skiltį „Paieška" (Apollo raktas) ir gali savarankiškai įjungti skiltį „Naujienos" (žr. „Funkcijos").',
     fields: [{ field: 'serperApiKey', label: 'API raktas' }],
+    modeField: 'serperMode',
   },
   {
     title: 'OpenAI',
     hint: 'Neatveria atskiros skilties — naudojamas pagalbinėms funkcijoms (kontaktų tvarkymas ir kt.) kitose skiltyse.',
     fields: [{ field: 'openaiApiKey', label: 'API raktas' }],
+    modeField: 'openaiMode',
   },
   {
     title: 'Anthropic (El. laiškų generatorius)',
     fields: [{ field: 'anthropicApiKey', label: 'API raktas' }],
+    modeField: 'anthropicMode',
   },
   {
     title: 'ElevenLabs',
     hint: 'Neatveria atskiros skilties — naudojamas skambučių transkribavimui skiltyje „Skambučiai".',
     fields: [{ field: 'elevenlabsApiKey', label: 'API raktas' }],
+    modeField: 'elevenlabsMode',
   },
   {
     title: 'LinkedIn',
@@ -99,6 +120,7 @@ export function IntegrationsView({ companyId }: IntegrationsViewProps) {
   const load = useIntegrationsStore((s) => s.load);
   const save = useIntegrationsStore((s) => s.save);
   const clear = useIntegrationsStore((s) => s.clear);
+  const setMode = useIntegrationsStore((s) => s.setMode);
   const showToast = useToastStore((s) => s.show);
 
   const [draft, setDraft] = useState<Partial<Record<IntegrationField, string>>>({});
@@ -160,6 +182,15 @@ export function IntegrationsView({ companyId }: IntegrationsViewProps) {
     }
   };
 
+  const handleSetMode = async (field: IntegrationModeField, mode: 'shared' | 'individual') => {
+    try {
+      await setMode(field, mode, companyId);
+      showToast(mode === 'individual' ? 'Perjungta į Individual režimą' : 'Perjungta į Shared režimą');
+    } catch {
+      // error already surfaced via the effect watching the store's `error`
+    }
+  };
+
   const handleClear = async (field: IntegrationField, label: string) => {
     const ok = await confirmDialog({
       message: `Išvalyti "${label}"? Susijusi skiltis gali dingti, kol raktas nebus įvestas iš naujo.`,
@@ -198,6 +229,24 @@ export function IntegrationsView({ companyId }: IntegrationsViewProps) {
         <div key={group.title} className="worker-card integrations-group">
           <div className="worker-card-header">
             <strong>{group.title}</strong>
+            {group.modeField && status && (
+              <div className="integrations-mode-toggle" title="Shared: darbuotojas be savo rakto naudoja įmonės. Individual: darbuotojas be savo rakto negali naudoti šios integracijos.">
+                <button
+                  type="button"
+                  className={status[group.modeField] !== 'individual' ? 'active' : ''}
+                  onClick={() => void handleSetMode(group.modeField!, 'shared')}
+                >
+                  Shared
+                </button>
+                <button
+                  type="button"
+                  className={status[group.modeField] === 'individual' ? 'active' : ''}
+                  onClick={() => void handleSetMode(group.modeField!, 'individual')}
+                >
+                  Individual
+                </button>
+              </div>
+            )}
           </div>
           {group.hint && <p className="integrations-hint">{group.hint}</p>}
           <div className="integrations-fields">

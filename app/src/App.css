@@ -233,6 +233,35 @@ svg.icon {
   }
 }
 
+/* Platform Super Super Admin diagnosing inside a company — a distinctly
+   more alarming red palette than the everyday amber admin-as-worker
+   banner above, since this is a rarer, higher-stakes event (the platform
+   operator, not the company's own admin, is in the driver's seat). */
+.impersonation-banner-platform {
+  background: #fbdede;
+  border-bottom-color: #d64545;
+  color: #7a1414;
+}
+.impersonation-banner-platform .impersonation-banner-return {
+  background: #7a1414;
+  color: #fff0f0;
+}
+.impersonation-banner-platform .impersonation-banner-return:hover {
+  background: #601010;
+}
+:root[data-theme='dark'] .impersonation-banner-platform {
+  background: #3d1616;
+  border-bottom-color: #7a3232;
+  color: #f0a8a8;
+}
+:root[data-theme='dark'] .impersonation-banner-platform .impersonation-banner-return {
+  background: #f0a8a8;
+  color: #2e2e2c;
+}
+:root[data-theme='dark'] .impersonation-banner-platform .impersonation-banner-return:hover {
+  background: #e38080;
+}
+
 .recovery-banner {
   display: flex;
   align-items: center;
@@ -8240,6 +8269,25 @@ tr.row-drop-end td {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 1rem;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+.workers-header-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+.admin-blocked-badge {
+  display: inline-block;
+  margin-left: 0.5rem;
+  padding: 0.1em 0.5em;
+  border-radius: 999px;
+  background: #d64545;
+  color: #fff0f0;
+  font-size: 0.7rem;
+  font-weight: 700;
+  vertical-align: middle;
+  white-space: nowrap;
 }
 .worker-card {
   border: 1px solid var(--border);
@@ -8352,6 +8400,24 @@ tr.row-drop-end td {
   grid-template-columns: 1fr 1fr;
   gap: 0.4rem;
 }
+.worker-form-permission-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-top: 0.5rem;
+}
+.worker-form-permission-group-title {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+  opacity: 0.8;
+}
+.worker-form-permission-list label:has(input:disabled) {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 .worker-form-actions {
   display: flex;
   gap: 0.5rem;
@@ -8399,6 +8465,18 @@ tr.row-drop-end td {
   color: var(--text-muted);
   font-size: 0.78rem;
   margin: 0.3rem 0 0.6rem;
+}
+/* Same look as .calls-mode-switch's List/Statistics toggle — kept as its
+   own class since this toggle has no actual relationship to that tab. */
+.integrations-mode-toggle {
+  display: flex;
+  gap: 0.3rem;
+  flex-shrink: 0;
+}
+.integrations-mode-toggle button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
 }
 .integrations-fields {
   display: flex;

@@ -11,6 +11,8 @@ export type IntegrationField =
   | 'zadarmaApiKey'
   | 'zadarmaApiSecret'
   | 'zadarmaCallerNumber'
+  | 'zadarmaSip'
+  | 'zadarmaWidgetSip'
   | 'instantlyApiKey'
   | 'apolloApiKey'
   | 'serperApiKey'
@@ -19,9 +21,23 @@ export type IntegrationField =
   | 'elevenlabsApiKey'
   | 'linkedinCdpUrl';
 
-export const NON_SECRET_INTEGRATION_FIELDS: readonly IntegrationField[] = ['zadarmaCallerNumber', 'linkedinCdpUrl'];
+export const NON_SECRET_INTEGRATION_FIELDS: readonly IntegrationField[] = [
+  'zadarmaCallerNumber',
+  'zadarmaSip',
+  'zadarmaWidgetSip',
+  'linkedinCdpUrl',
+];
 
-export type IntegrationsStatus = Record<IntegrationField, boolean | string | null>;
+// Per-provider Shared/Individual credential-fallback mode (accounts/db.ts's
+// new company_integrations columns, gated server-side by api_keys.set_mode)
+// — a small enum, handled separately from the free-text fields above via
+// their own setMode() action rather than folding into `save`'s patch,
+// since a mode toggle is meant to apply immediately (like a switch), not
+// batched with the rest of the form's "Išsaugoti" button.
+export type IntegrationModeField = 'apolloMode' | 'serperMode' | 'instantlyMode' | 'openaiMode' | 'anthropicMode' | 'elevenlabsMode';
+export type IntegrationMode = 'shared' | 'individual';
+
+export type IntegrationsStatus = Record<IntegrationField, boolean | string | null> & Record<IntegrationModeField, IntegrationMode>;
 
 interface IntegrationsState {
   status: IntegrationsStatus | null;
@@ -41,6 +57,7 @@ interface IntegrationsState {
    * just whichever fields the user actually typed into. */
   save: (patch: Partial<Record<IntegrationField, string>>, companyId: string) => Promise<void>;
   clear: (field: IntegrationField, companyId: string) => Promise<void>;
+  setMode: (field: IntegrationModeField, mode: IntegrationMode, companyId: string) => Promise<void>;
 }
 
 function integrationsPath(companyId: string, suffix = ''): string {
@@ -94,6 +111,22 @@ export const useIntegrationsStore = create<IntegrationsState>((set, get) => ({
       await get().load(companyId);
     } catch (err) {
       set({ saving: false, error: err instanceof Error ? err.message : 'Nepavyko išvalyti' });
+      throw err;
+    }
+  },
+
+  setMode: async (field, mode, companyId) => {
+    set({ saving: true, error: null });
+    try {
+      await superAdminApiRequest(integrationsPath(companyId), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [field]: mode }),
+      });
+      set({ saving: false });
+      await get().load(companyId);
+    } catch (err) {
+      set({ saving: false, error: err instanceof Error ? err.message : 'Nepavyko pakeisti režimo' });
       throw err;
     }
   },

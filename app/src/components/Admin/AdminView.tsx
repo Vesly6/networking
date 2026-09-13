@@ -6,9 +6,14 @@ import {
   fetchLoginLog,
   fetchCompanySuperAdmin,
   updateCompanySuperAdmin,
+  blockCompany,
+  unblockCompany,
+  fetchAuditLog,
   type AdminCompany,
   type LoginLogEntry,
+  type AuditLogEntry,
 } from '../../utils/adminApi';
+import { startPlatformImpersonation } from '../../utils/platformImpersonation';
 import { fetchAllBackups, fetchBackupCsv, deleteBackup, restoreBackup, type BackupSummary } from '../../utils/backupsApi';
 import { downloadCsv } from '../../utils/csv';
 import { confirmDialog } from '../../store/useConfirmStore';
@@ -17,9 +22,26 @@ import { useWorkspaceStore } from '../../store/useWorkspaceStore';
 import type { Worker } from '../../store/useWorkersStore';
 import { WorkersView } from '../Workers/WorkersView';
 import { IntegrationsView } from '../Integrations/IntegrationsView';
+import { PermissionsPanel } from './PermissionsPanel';
 import { formatHistoryTimestamp } from '../../utils/date';
 import { TAB_LABELS, ALL_TABS, workerGrantableTabs } from '../../utils/tabLabels';
-import { Building2, Users, Key, ToggleLeft, Archive, History as HistoryIcon, ArrowLeft, Download, Trash2, RotateCcw, UserCog } from 'lucide-react';
+import {
+  Building2,
+  Users,
+  Key,
+  ToggleLeft,
+  Archive,
+  History as HistoryIcon,
+  ArrowLeft,
+  Download,
+  Trash2,
+  RotateCcw,
+  UserCog,
+  ShieldCheck,
+  Ban,
+  ScrollText,
+  Eye,
+} from 'lucide-react';
 
 // Mirrors server/src/accounts/db.ts's ALWAYS_ON_FEATURES exactly — these
 // two can never be turned off, so the Funkcijos checkbox list omits them
@@ -28,8 +50,8 @@ const CORE_FEATURES = new Set(['table', 'calendar']);
 
 const ROLE_LABELS: Record<string, string> = { super_admin: 'Administratorius', worker: 'Darbuotojas' };
 
-type TopSection = 'companies' | 'backups' | 'login-log';
-type CompanyPanel = 'super-admin' | 'workers' | 'integrations' | 'features';
+type TopSection = 'companies' | 'backups' | 'login-log' | 'audit-log';
+type CompanyPanel = 'super-admin' | 'workers' | 'integrations' | 'features' | 'permissions';
 
 function FeaturesPanel({ companyId }: { companyId: string }) {
   const [features, setFeatures] = useState<string[] | null>(null);
@@ -276,6 +298,14 @@ export function AdminView() {
   const [loginLogReady, setLoginLogReady] = useState(false);
   const [loginLogCompanyFilter, setLoginLogCompanyFilter] = useState('');
 
+  const [auditLog, setAuditLog] = useState<AuditLogEntry[]>([]);
+  const [auditLogReady, setAuditLogReady] = useState(false);
+  const [auditLogCompanyFilter, setAuditLogCompanyFilter] = useState('');
+
+  const [blocking, setBlocking] = useState(false);
+  const [impersonating, setImpersonating] = useState(false);
+  const showToast = useToastStore((s) => s.show);
+
   const refreshCompanies = () => {
     void fetchCompanies().then((r) => {
       setCompanies(r.companies);
@@ -307,7 +337,50 @@ export function AdminView() {
     });
   }, [section, loginLogCompanyFilter]);
 
+  useEffect(() => {
+    if (section !== 'audit-log') return;
+    setAuditLogReady(false);
+    void fetchAuditLog(auditLogCompanyFilter || undefined).then((r) => {
+      setAuditLog(r.entries);
+      setAuditLogReady(true);
+    });
+  }, [section, auditLogCompanyFilter]);
+
   const selectedCompany = companies.find((c) => c.id === selectedCompanyId) ?? null;
+
+  const handleToggleBlock = async (company: AdminCompany) => {
+    const blockedNow = !!company.blockedAt;
+    if (!blockedNow) {
+      const ok = await confirmDialog({
+        message: `Užblokuoti „${company.name}"? Kiekvienas šios įmonės vartotojas (įskaitant jau prisijungusius) iškart nebegalės atlikti jokio veiksmo.`,
+        danger: true,
+      });
+      if (!ok) return;
+    }
+    setBlocking(true);
+    try {
+      if (blockedNow) await unblockCompany(company.id);
+      else await blockCompany(company.id);
+      refreshCompanies();
+      showToast(blockedNow ? 'Įmonė atblokuota' : 'Įmonė užblokuota');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Nepavyko pakeisti būsenos');
+    } finally {
+      setBlocking(false);
+    }
+  };
+
+  const handleImpersonate = async (company: AdminCompany) => {
+    setImpersonating(true);
+    try {
+      await startPlatformImpersonation(company.id);
+      // startPlatformImpersonation navigates away (window.location.href)
+      // on success — nothing left to do here even on the happy path.
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Nepavyko prisijungti kaip administratorius');
+      setImpersonating(false);
+    }
+  };
 
   if (selectedCompany) {
     return (
@@ -316,11 +389,34 @@ export function AdminView() {
           <button type="button" onClick={() => setSelectedCompanyId(null)}>
             <ArrowLeft className="icon" size={16} /> Įmonės
           </button>
-          <h2>{selectedCompany.name}</h2>
+          <h2>
+            {selectedCompany.name}
+            {selectedCompany.blockedAt && <span className="admin-blocked-badge">Užblokuota</span>}
+          </h2>
+          <div className="workers-header-actions">
+            <button type="button" disabled={impersonating} onClick={() => void handleImpersonate(selectedCompany)}>
+              <Eye className="icon" size={14} /> {impersonating ? 'Jungiamasi…' : 'Peržiūrėti kaip administratorius'}
+            </button>
+            <button
+              type="button"
+              className={selectedCompany.blockedAt ? '' : 'danger'}
+              disabled={blocking}
+              onClick={() => void handleToggleBlock(selectedCompany)}
+            >
+              {selectedCompany.blockedAt ? (
+                <><ShieldCheck className="icon" size={14} /> Atblokuoti</>
+              ) : (
+                <><Ban className="icon" size={14} /> Blokuoti</>
+              )}
+            </button>
+          </div>
         </div>
         <nav className="linkedin-subnav">
           <button type="button" className={companyPanel === 'super-admin' ? 'active' : ''} onClick={() => setCompanyPanel('super-admin')}>
             <UserCog className="icon" size={16} /> Administratorius
+          </button>
+          <button type="button" className={companyPanel === 'permissions' ? 'active' : ''} onClick={() => setCompanyPanel('permissions')}>
+            <ShieldCheck className="icon" size={16} /> Leidimai
           </button>
           <button type="button" className={companyPanel === 'workers' ? 'active' : ''} onClick={() => setCompanyPanel('workers')}>
             <Users className="icon" size={16} /> Darbuotojai
@@ -333,6 +429,7 @@ export function AdminView() {
           </button>
         </nav>
         {companyPanel === 'super-admin' && <SuperAdminAccountPanel companyId={selectedCompany.id} />}
+        {companyPanel === 'permissions' && <PermissionsPanel companyId={selectedCompany.id} />}
         {companyPanel === 'workers' && (
           <WorkersView companyId={selectedCompany.id} companyTabs={workerGrantableTabs(selectedCompany.enabledFeatures)} />
         )}
@@ -354,6 +451,9 @@ export function AdminView() {
         <button type="button" className={section === 'login-log' ? 'active' : ''} onClick={() => setSection('login-log')}>
           <HistoryIcon className="icon" size={16} /> Prisijungimų istorija
         </button>
+        <button type="button" className={section === 'audit-log' ? 'active' : ''} onClick={() => setSection('audit-log')}>
+          <ScrollText className="icon" size={16} /> Audito žurnalas
+        </button>
       </nav>
 
       {section === 'companies' &&
@@ -363,7 +463,10 @@ export function AdminView() {
           <div className="table-cards">
             {companies.map((c) => (
               <div key={c.id} className="table-card" onClick={() => setSelectedCompanyId(c.id)}>
-                <div className="table-card-name">{c.name}</div>
+                <div className="table-card-name">
+                  {c.name}
+                  {c.blockedAt && <span className="admin-blocked-badge">Užblokuota</span>}
+                </div>
                 <div className="table-card-meta">{c.enabledFeatures.length} funkcij(ų)</div>
               </div>
             ))}
@@ -402,6 +505,51 @@ export function AdminView() {
                       <td>{ROLE_LABELS[e.role] ?? e.role}</td>
                       <td>{companies.find((c) => c.id === e.companyId)?.name ?? e.companyId}</td>
                       <td>{formatHistoryTimestamp(e.loggedInAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )
+          ) : (
+            <p>Kraunama…</p>
+          )}
+        </div>
+      )}
+
+      {section === 'audit-log' && (
+        <div className="admin-login-log">
+          <select value={auditLogCompanyFilter} onChange={(e) => setAuditLogCompanyFilter(e.target.value)}>
+            <option value="">Visos įmonės</option>
+            {companies.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+          {auditLogReady ? (
+            auditLog.length === 0 ? (
+              <p className="empty-state">Kol kas nėra įrašų.</p>
+            ) : (
+              <table className="admin-backups-table">
+                <thead>
+                  <tr>
+                    <th>Veiksmas</th>
+                    <th>Atlikėjas</th>
+                    <th>Įmonė</th>
+                    <th>Taikinys</th>
+                    <th>Data</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {auditLog.map((e) => (
+                    <tr key={e.id}>
+                      <td>{e.action}</td>
+                      <td>{ROLE_LABELS[e.actorRole ?? ''] ?? e.actorRole ?? '—'}</td>
+                      <td>{companies.find((c) => c.id === e.companyId)?.name ?? e.companyId ?? '—'}</td>
+                      <td>
+                        {e.targetType ?? '—'} {e.targetId ?? ''}
+                      </td>
+                      <td>{formatHistoryTimestamp(e.at)}</td>
                     </tr>
                   ))}
                 </tbody>

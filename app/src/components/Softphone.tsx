@@ -4,6 +4,8 @@ import { fetchWebrtcKey } from '../utils/webrtcApi';
 import { useTableStore } from '../store/useTableStore';
 import { startIncomingCallWatcher } from '../utils/incomingCallBridge';
 import { useSoftphoneVisibilityStore } from '../store/useSoftphoneVisibilityStore';
+import { useAuthStore } from '../store/useAuthStore';
+import { can } from '../utils/permissions';
 
 // Zadarma's widget loader (app/index.html) defines this on `window` — it's
 // a plain classic <script>, not an npm package, so there's no type for it
@@ -61,9 +63,17 @@ const SOFTPHONE_ENABLED = true;
 export function Softphone() {
   const softphoneHidden = useSoftphoneVisibilityStore((s) => s.hidden);
   const toggleSoftphoneHidden = useSoftphoneVisibilityStore((s) => s.toggle);
+  // GET /api/webrtc/key already independently rejects a request without
+  // this permission (see server/src/index.ts) — this is purely a frontend
+  // optimization so a permission-less worker's browser doesn't bother
+  // fetching a key/loading the widget script at all, not the actual
+  // security boundary. Re-evaluates on every render (no memo) since
+  // permissionKeys itself only ever changes on a fresh /api/auth/me
+  // response, which is already infrequent.
+  const zadarmaPermitted = useAuthStore((s) => can(s.user?.permissionKeys, 'integrations.zadarma.use'));
 
   useEffect(() => {
-    if (!SOFTPHONE_ENABLED) return;
+    if (!SOFTPHONE_ENABLED || !zadarmaPermitted) return;
     // Relying on `cancelled` alone (rather than an extra "ran once" ref) is
     // what actually makes this correct under StrictMode's dev-only double
     // mount→cleanup→mount: the throwaway first run's cleanup flips its own
@@ -117,10 +127,14 @@ export function Softphone() {
     return () => {
       cancelled = true;
     };
-    // Intentionally once per app session — re-running this on every
-    // re-render would re-init the widget (and re-fetch/burn a new key)
-    // for no reason.
-  }, []);
+    // Otherwise intentionally once per app session — re-running this on
+    // every re-render would re-init the widget (and re-fetch/burn a new
+    // key) for no reason. zadarmaPermitted is only here so the very first
+    // render (before /api/auth/me resolves, when it's still false) doesn't
+    // permanently skip initializing the widget once the real permission
+    // state comes in — it changes rarely enough in practice (only around
+    // login/impersonation) that this isn't a meaningful re-init risk.
+  }, [zadarmaPermitted]);
 
   // Watches for a live incoming call — a separate effect from the widget
   // init above (own cleanup, doesn't wait on/depend on that one
@@ -130,14 +144,14 @@ export function Softphone() {
   // currently loaded at that moment, not whatever was active when this
   // component first mounted.
   useEffect(() => {
-    if (!SOFTPHONE_ENABLED) return;
+    if (!SOFTPHONE_ENABLED || !zadarmaPermitted) return;
     return startIncomingCallWatcher(() => {
       const { columns, rows } = useTableStore.getState();
       return { columns, rows };
     });
-  }, []);
+  }, [zadarmaPermitted]);
 
-  if (!SOFTPHONE_ENABLED) return null;
+  if (!SOFTPHONE_ENABLED || !zadarmaPermitted) return null;
   return (
     <button
       type="button"

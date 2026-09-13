@@ -19,6 +19,7 @@ import { EmailGeneratorView } from './components/Email/EmailGeneratorView';
 import { LessonsView } from './components/Lessons/LessonsView';
 import { IncomingCallBanner } from './components/IncomingCallBanner';
 import { ImpersonationBanner } from './components/ImpersonationBanner';
+import { PlatformImpersonationBanner } from './components/PlatformImpersonationBanner';
 import { Toast } from './components/Toast';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { TypeToConfirmDialog } from './components/TypeToConfirmDialog';
@@ -520,6 +521,7 @@ function App() {
           setWorkspaceScreen('tables');
         }}
       />
+      <PlatformImpersonationBanner />
       <ConfirmDialog />
       <TypeToConfirmDialog />
       {!activeTable ? (

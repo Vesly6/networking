@@ -8,6 +8,7 @@ import {
   setStashedAdminToken,
 } from '../utils/authToken';
 import { DEMO_MODE } from '../utils/demoMode';
+import { ALL_PERMISSION_KEYS, type PermissionKey } from '../utils/permissions';
 
 export type Role = 'super_admin' | 'worker';
 
@@ -47,8 +48,18 @@ export interface AuthUser {
    * enabledFeatures has; only a worker's tab set is ever restricted
    * further. See App.tsx's tab-bar filtering. */
   visibleTabs: string[] | null;
+  /** Legacy fixed boolean flags — kept alongside permissionKeys below for
+   * one release while every call site migrates (see server/src/index.ts's
+   * userToPublic doc comment); not read by any new permission check. */
   permissions: UserPermissions;
-  company: { id: string; name: string; enabledFeatures: string[] } | null;
+  /** The live, registry-driven effective permission set (server/src/
+   * permissions/effective.ts) — for a worker, already the intersection
+   * with their company's own platform-granted ceiling; for a super_admin,
+   * the ceiling itself. Recomputed by the server on every /api/auth/login
+   * or /api/auth/me call, never cached beyond that — see utils/
+   * permissions.ts's can() for how components should read this. */
+  permissionKeys: PermissionKey[];
+  company: { id: string; name: string; enabledFeatures: string[]; blockedAt?: number | null } | null;
   /** Per-worker Zadarma overrides (see server/src/accounts/db.ts's
    * migration) — null/undefined means "fall back to the company/deployment
    * default." Only meaningful for a worker account; a super_admin's own
@@ -78,6 +89,13 @@ export interface AuthUser {
    * omit it, since a fresh login is never mid-impersonation) — treat a
    * missing field the same as null. */
   impersonating?: { workerId: string; workerName: string; adminUserId: string; adminName: string } | null;
+  /** True only for a platform Super Super Admin diagnosing inside this
+   * company (server/src/auth.ts's issuePlatformImpersonationToken) —
+   * distinct from `impersonating` above (a company's own worker-
+   * impersonation). Drives the persistent "acting as {company} — Exit"
+   * banner. Only GET /api/auth/me populates this, same "missing means
+   * false" convention as `impersonating`. */
+  platformActing?: boolean;
 }
 
 interface AuthState {
@@ -141,12 +159,20 @@ const DEMO_USER: AuthUser = {
     canHideRowsColumns: true,
     canClearContent: true,
   },
+  // Full ceiling, same reasoning as every legacy boolean above being true
+  // — the demo visitor experiences a Super Admin with nothing withheld.
+  permissionKeys: ALL_PERMISSION_KEYS,
   // 'table'/'calendar' are gated by enabledFeatures the same as every
   // other tab (App.tsx's allowedTabs) — they aren't a special, always-on
   // baseline the way the standalone demo project's own two-tab nav
   // assumed. Everything else (calls/search/linkedin/instantly/email) is
-  // deliberately left out — see the plan's scope decision.
-  company: { id: 'demo-company', name: 'Demo', enabledFeatures: ['table', 'calendar'] },
+  // deliberately left out — see the plan's scope decision. 'workers' is
+  // the one addition for the permission-registry demo: it's what makes
+  // App.tsx show the "Darbuotojai" nav button at all (see its own
+  // enabledFeatures.includes('workers') check), needed so a visitor can
+  // reach the pre-seeded roster (db/demoWorkers.ts) and its working
+  // grant/revoke UI.
+  company: { id: 'demo-company', name: 'Demo', enabledFeatures: ['table', 'calendar', 'workers'], blockedAt: null },
 };
 
 export const useAuthStore = create<AuthState>((set) => ({

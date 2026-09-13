@@ -1,9 +1,22 @@
 import { create } from 'zustand';
 import { localApiRequest } from '../utils/localApi';
 import { superAdminApiRequest } from '../utils/superAdminApi';
+import { DEMO_MODE } from '../utils/demoMode';
+import { listDemoWorkers, createDemoWorker, updateDemoWorker, deleteDemoWorker } from '../db/demoWorkers';
 import type { AuthUser, UserPermissions } from './useAuthStore';
+import type { PermissionKey } from '../utils/permissions';
 
-export type Worker = Omit<AuthUser, 'company'>;
+// AuthUser.permissionKeys is the EFFECTIVE, already-intersected set for
+// "the currently logged-in session" — a worker-list item needs two
+// different things instead (see server/src/index.ts's workerToPublic):
+// grantedPermissionKeys (this worker's own raw grant, independent of
+// whether the company's ceiling currently allows it — lets the panel
+// explain a greyed-out checkbox) and effectivePermissionKeys (the live
+// intersection, what's actually active right now).
+export type Worker = Omit<AuthUser, 'company' | 'permissionKeys'> & {
+  grantedPermissionKeys: PermissionKey[];
+  effectivePermissionKeys: PermissionKey[];
+};
 
 export type WorkerActionType = 'row_created' | 'cell_edited' | 'note_added' | 'contact_added';
 
@@ -54,6 +67,9 @@ interface CreateWorkerInput extends WorkerIntegrationOverrides {
   lastName: string;
   visibleTabs: string[];
   permissions: Partial<UserPermissions>;
+  /** The registry-driven grant (see utils/permissions.ts) — omitted means
+   * "grant nothing," same as the server's own createUser default. */
+  permissionKeys?: PermissionKey[];
 }
 
 interface UpdateWorkerInput extends WorkerIntegrationOverrides {
@@ -77,6 +93,13 @@ interface UpdateWorkerInput extends WorkerIntegrationOverrides {
   // leaves unchanged, explicit '' clears back to the company-wide
   // fallback" convention — see server/src/accounts/db.ts's updateWorker()
   // for the exact server-side handling.
+  /** Omitted leaves the worker's existing grant unchanged — same
+   * convention as password/visibleTabs above. An explicit array (including
+   * []) blindly overwrites the whole grant, checked server-side against an
+   * escalation guard (a company's own super_admin can never grant more
+   * than their own current effective set — see index.ts's PATCH
+   * /api/workers/:id doc comment). */
+  permissionKeys?: PermissionKey[];
 }
 
 interface WorkersState {
@@ -128,6 +151,14 @@ export const useWorkersStore = create<WorkersState>((set, get) => ({
   error: null,
 
   load: async (companyId) => {
+    // The demo's Super Super Admin tier doesn't exist at all (see
+    // useAuthStore.ts's DEMO_USER doc comment), so companyId is never
+    // passed in DEMO_MODE — a demo visitor only ever manages their own
+    // company's pre-seeded roster (demoWorkers.ts).
+    if (DEMO_MODE) {
+      set({ workers: listDemoWorkers(), loading: false, error: null });
+      return;
+    }
     set({ loading: true, error: null });
     try {
       const { workers } = await workersRequest<{ workers: Worker[] }>(companyId, workersPath(companyId));
@@ -138,25 +169,31 @@ export const useWorkersStore = create<WorkersState>((set, get) => ({
   },
 
   create: async (input, companyId) => {
-    const worker = await workersRequest<Worker>(companyId, workersPath(companyId), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(input),
-    });
+    const worker = DEMO_MODE
+      ? createDemoWorker(input)
+      : await workersRequest<Worker>(companyId, workersPath(companyId), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(input),
+        });
     set({ workers: [...get().workers, worker] });
   },
 
   update: async (id, input, companyId) => {
-    const worker = await workersRequest<Worker>(companyId, workersPath(companyId, `/${encodeURIComponent(id)}`), {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(input),
-    });
+    const worker = DEMO_MODE
+      ? updateDemoWorker(id, input)
+      : await workersRequest<Worker>(companyId, workersPath(companyId, `/${encodeURIComponent(id)}`), {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(input),
+        });
+    if (!worker) return;
     set({ workers: get().workers.map((w) => (w.id === id ? worker : w)) });
   },
 
   remove: async (id, companyId) => {
-    await workersRequest(companyId, workersPath(companyId, `/${encodeURIComponent(id)}`), { method: 'DELETE' });
+    if (DEMO_MODE) deleteDemoWorker(id);
+    else await workersRequest(companyId, workersPath(companyId, `/${encodeURIComponent(id)}`), { method: 'DELETE' });
     set({ workers: get().workers.filter((w) => w.id !== id) });
   },
 
@@ -164,6 +201,15 @@ export const useWorkersStore = create<WorkersState>((set, get) => ({
   actionsLoading: false,
   actionsError: null,
   loadActions: async (userId) => {
+    // No real worker-action log exists behind the demo (see
+    // tableData/db.ts's own worker_actions, which demoData.ts never
+    // populates) — an empty list reads as "nothing logged yet," which is
+    // true, rather than surfacing a network-error toast for a feature
+    // that was never going to work in the demo anyway.
+    if (DEMO_MODE) {
+      set({ actions: [], actionsLoading: false, actionsError: null });
+      return;
+    }
     set({ actionsLoading: true, actionsError: null });
     try {
       const query = userId ? `?userId=${encodeURIComponent(userId)}` : '';
