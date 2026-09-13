@@ -3,6 +3,8 @@ import type { Row, TableMeta, TableFolder } from '../types';
 import type { TranscriptionRecord, SmsLogRecord } from '../utils/callsApi';
 import type { CallStatRecord } from '../utils/callStats';
 import { localApiRequest } from '../utils/localApi';
+import { DEMO_MODE } from '../utils/demoMode';
+import * as demoData from './demoData';
 
 interface AppDB extends DBSchema {
   tables: {
@@ -89,11 +91,13 @@ function getDB(): Promise<IDBPDatabase<AppDB>> {
 // further down this file can still read whatever old local data exists.
 
 export async function loadTables(): Promise<TableMeta[]> {
+  if (DEMO_MODE) return demoData.loadTables();
   const { tables } = await localApiRequest<{ tables: TableMeta[] }>('/api/tables');
   return tables;
 }
 
 export async function saveTable(table: TableMeta): Promise<void> {
+  if (DEMO_MODE) return demoData.saveTable(table);
   await localApiRequest('/api/tables', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -102,6 +106,7 @@ export async function saveTable(table: TableMeta): Promise<void> {
 }
 
 export async function getTable(id: string, signal?: AbortSignal): Promise<TableMeta | null> {
+  if (DEMO_MODE) return demoData.getTable(id);
   try {
     return await localApiRequest<TableMeta>(`/api/tables/${encodeURIComponent(id)}`, { signal });
   } catch {
@@ -114,6 +119,7 @@ export async function getTable(id: string, signal?: AbortSignal): Promise<TableM
  * way client-side: a stale in-memory `columns`/`name` copy from one store
  * must never clobber a fresher write made through the other. */
 export async function updateTableColumns(tableId: string, columns: TableMeta['columns']): Promise<void> {
+  if (DEMO_MODE) return demoData.updateTableColumns(tableId, columns);
   await localApiRequest(`/api/tables/${encodeURIComponent(tableId)}/columns`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
@@ -122,6 +128,7 @@ export async function updateTableColumns(tableId: string, columns: TableMeta['co
 }
 
 export async function updateTableName(tableId: string, name: string): Promise<void> {
+  if (DEMO_MODE) return demoData.updateTableName(tableId, name);
   await localApiRequest(`/api/tables/${encodeURIComponent(tableId)}/name`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
@@ -134,6 +141,7 @@ export async function updateTableName(tableId: string, name: string): Promise<vo
  * ownership migration doc comment. Used by WorkspaceView.tsx's owner
  * picker (admin-only). */
 export async function setTableOwnerDB(tableId: string, ownerUserId: string): Promise<void> {
+  if (DEMO_MODE) return demoData.setTableOwnerDB();
   await localApiRequest(`/api/tables/${encodeURIComponent(tableId)}/owner`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
@@ -147,6 +155,7 @@ export async function setTableOwnerDB(tableId: string, ownerUserId: string): Pro
  * every other one" convention as updateTableName/updateTableColumns
  * above. */
 export async function updateTableBackupFlag(tableId: string, enabled: boolean): Promise<void> {
+  if (DEMO_MODE) return demoData.updateTableBackupFlag(tableId, enabled);
   await localApiRequest(`/api/tables/${encodeURIComponent(tableId)}/backup-flag`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -157,6 +166,7 @@ export async function updateTableBackupFlag(tableId: string, enabled: boolean): 
 /** SheetTabs' right-click "Priskirti aplankui"/"Išimti iš aplanko" —
  * folderId null ungroups the table. */
 export async function setTableFolder(tableId: string, folderId: string | null): Promise<void> {
+  if (DEMO_MODE) return demoData.setTableFolder(tableId, folderId);
   await localApiRequest(`/api/tables/${encodeURIComponent(tableId)}/folder`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
@@ -167,6 +177,7 @@ export async function setTableFolder(tableId: string, folderId: string | null): 
 /** SheetTabs' drag-reorder — one bulk request for the whole batch, same
  * "never one request per item" reasoning as saveRows below. */
 export async function reorderTablesDB(updates: { id: string; order: number }[]): Promise<void> {
+  if (DEMO_MODE) return demoData.reorderTablesDB(updates);
   await localApiRequest('/api/tables/reorder', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
@@ -175,11 +186,13 @@ export async function reorderTablesDB(updates: { id: string; order: number }[]):
 }
 
 export async function loadTableFolders(): Promise<TableFolder[]> {
+  if (DEMO_MODE) return demoData.loadTableFolders();
   const { folders } = await localApiRequest<{ folders: TableFolder[] }>('/api/table-folders');
   return folders;
 }
 
 export async function createTableFolderDB(folder: TableFolder): Promise<void> {
+  if (DEMO_MODE) return demoData.createTableFolderDB(folder);
   await localApiRequest('/api/table-folders', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -188,6 +201,7 @@ export async function createTableFolderDB(folder: TableFolder): Promise<void> {
 }
 
 export async function renameTableFolderDB(id: string, name: string): Promise<void> {
+  if (DEMO_MODE) return demoData.renameTableFolderDB(id, name);
   await localApiRequest(`/api/table-folders/${encodeURIComponent(id)}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
@@ -196,10 +210,12 @@ export async function renameTableFolderDB(id: string, name: string): Promise<voi
 }
 
 export async function deleteTableFolderDB(id: string): Promise<void> {
+  if (DEMO_MODE) return demoData.deleteTableFolderDB(id);
   await localApiRequest(`/api/table-folders/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }
 
 export async function reorderTableFoldersDB(updates: { id: string; order: number }[]): Promise<void> {
+  if (DEMO_MODE) return demoData.reorderTableFoldersDB(updates);
   await localApiRequest('/api/table-folders/reorder', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
@@ -208,20 +224,24 @@ export async function reorderTableFoldersDB(updates: { id: string; order: number
 }
 
 export async function countRowsForTable(tableId: string): Promise<number> {
+  if (DEMO_MODE) return demoData.countRowsForTable(tableId);
   const { count } = await localApiRequest<{ count: number }>(`/api/tables/${encodeURIComponent(tableId)}/rows/count`);
   return count;
 }
 
 export async function deleteTableDB(id: string): Promise<void> {
+  if (DEMO_MODE) return demoData.deleteTableDB(id);
   await localApiRequest(`/api/tables/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }
 
 export async function loadRowsForTable(tableId: string, signal?: AbortSignal): Promise<Row[]> {
+  if (DEMO_MODE) return demoData.loadRowsForTable(tableId);
   const { rows } = await localApiRequest<{ rows: Row[] }>(`/api/tables/${encodeURIComponent(tableId)}/rows`, { signal });
   return rows;
 }
 
 export async function saveRow(row: Row): Promise<void> {
+  if (DEMO_MODE) return demoData.saveRow(row);
   await localApiRequest(`/api/rows/${encodeURIComponent(row.id)}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
@@ -237,6 +257,7 @@ export async function saveRow(row: Row): Promise<void> {
  * wraps the whole batch in a single SQLite transaction. */
 export async function saveRows(rows: Row[]): Promise<void> {
   if (rows.length === 0) return;
+  if (DEMO_MODE) return demoData.saveRows(rows);
   await localApiRequest('/api/rows', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
@@ -252,6 +273,7 @@ export async function saveRows(rows: Row[]): Promise<void> {
  * this instead of saveRows for each of its batches. */
 export async function importRows(rows: Row[]): Promise<void> {
   if (rows.length === 0) return;
+  if (DEMO_MODE) return demoData.importRows(rows);
   await localApiRequest('/api/rows/import', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -266,6 +288,7 @@ export async function importRows(rows: Row[]): Promise<void> {
  * many simultaneous DELETE requests at once. */
 export async function deleteRowsDB(ids: string[]): Promise<void> {
   if (ids.length === 0) return;
+  if (DEMO_MODE) return demoData.deleteRowsDB(ids);
   await localApiRequest('/api/rows', {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json' },

@@ -1,4 +1,5 @@
 import { getAuthToken, notifyUnauthorized } from './authToken';
+import { DEMO_MODE, NOT_CONFIGURED_MESSAGE } from './demoMode';
 
 // Shared by every feature that talks to the proxy server (calls, contacts
 // AI-parsing, click-to-call) — one place for the base URL and the
@@ -17,6 +18,14 @@ export const LOCAL_API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://local
 const IS_LOCAL_DEFAULT = !import.meta.env.VITE_API_BASE_URL;
 
 export async function localApiRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  // db.ts's own table/row/folder functions never reach this point in demo
+  // mode — they short-circuit to demoData.ts first (see db.ts). Every
+  // *other* integration this app has (AI contact cleanup, social lookup,
+  // calls/SMS, transcription, Apollo, Instantly, LinkedIn, email
+  // generation) goes through this one shared function, so this single
+  // guard makes all of them degrade through the try/catch-and-toast
+  // handling those call sites already have, without touching any of them.
+  if (DEMO_MODE) throw new Error(NOT_CONFIGURED_MESSAGE);
   const token = getAuthToken();
   const headers = { ...(init?.headers ?? {}), ...(token ? { Authorization: `Bearer ${token}` } : {}) };
   let res: Response;

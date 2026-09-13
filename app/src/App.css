@@ -312,6 +312,19 @@ svg.icon {
   max-width: 30vw;
 }
 
+/* /demo build only (see utils/demoMode.ts) — a small, unobtrusive
+   indicator that changes here aren't saved, without looking like a
+   separate, lesser product. */
+.demo-header-badge {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--accent);
+  background: var(--today-bg, #eaf2ff);
+  border-radius: 999px;
+  padding: 0.15em 0.6em;
+  flex-shrink: 0;
+}
+
 .app-tabs {
   display: flex;
   gap: 0.4rem;

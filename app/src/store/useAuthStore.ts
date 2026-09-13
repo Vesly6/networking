@@ -7,6 +7,7 @@ import {
   getStashedAdminToken,
   setStashedAdminToken,
 } from '../utils/authToken';
+import { DEMO_MODE } from '../utils/demoMode';
 
 export type Role = 'super_admin' | 'worker';
 
@@ -110,9 +111,47 @@ interface AuthState {
   stopImpersonating: () => Promise<void>;
 }
 
+// A synthetic, always-valid user for the /demo build — no login screen,
+// full access (role: 'super_admin' short-circuits every `role !== 'worker'
+// || permissions.X` gate throughout the app, so there's no need to fill in
+// every UserPermissions field individually), and enabledFeatures: [] so
+// the tab bar shows exactly Table + Calendar — the same state a real
+// minimal-tier client's account would already be in, not a demo-specific
+// special case. fetchMe() below still "runs" against this user but is a
+// no-op in practice: localApiRequest throws immediately in demo mode
+// (see localApi.ts), and fetchMe's own catch block swallows that without
+// touching `user`.
+const DEMO_USER: AuthUser = {
+  id: 'demo-user',
+  companyId: 'demo-company',
+  username: 'demo',
+  firstName: 'Demo',
+  lastName: 'Account',
+  role: 'super_admin',
+  visibleTabs: null,
+  permissions: {
+    canDeleteRows: true,
+    canDeleteColumns: true,
+    canDeleteNotes: true,
+    canEditContacts: true,
+    canDeleteContacts: true,
+    canExportImport: true,
+    canInsertRows: true,
+    canInsertColumns: true,
+    canHideRowsColumns: true,
+    canClearContent: true,
+  },
+  // 'table'/'calendar' are gated by enabledFeatures the same as every
+  // other tab (App.tsx's allowedTabs) — they aren't a special, always-on
+  // baseline the way the standalone demo project's own two-tab nav
+  // assumed. Everything else (calls/search/linkedin/instantly/email) is
+  // deliberately left out — see the plan's scope decision.
+  company: { id: 'demo-company', name: 'Demo', enabledFeatures: ['table', 'calendar'] },
+};
+
 export const useAuthStore = create<AuthState>((set) => ({
-  token: getAuthToken(),
-  user: null,
+  token: DEMO_MODE ? 'demo-token' : getAuthToken(),
+  user: DEMO_MODE ? DEMO_USER : null,
   loggingIn: false,
   error: null,
 
@@ -159,6 +198,10 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
 
   logout: () => {
+    // No real session to end in demo mode, and there's no login screen to
+    // send the visitor back to (see App.tsx) — logging out would just
+    // strand them. Reloading the page is the demo's own "start over."
+    if (DEMO_MODE) return;
     setAuthToken(null);
     setStashedAdminToken(null); // defensive: a shared-machine logout mid-impersonation
     // shouldn't leave a stale admin token sitting in localStorage.

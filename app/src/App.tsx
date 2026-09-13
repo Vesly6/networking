@@ -34,6 +34,7 @@ import { AdminView } from './components/Admin/AdminView';
 import { OwnBackupsView } from './components/Workspace/OwnBackupsView';
 import { BrandLogo } from './components/BrandLogo';
 import { getNextActionColumn } from './utils/row';
+import { DEMO_MODE } from './utils/demoMode';
 import { workerGrantableTabs } from './utils/tabLabels';
 import { isOverdue, isDueToday } from './utils/date';
 import { ArrowLeft, Clock, Bell, BellOff, Menu } from 'lucide-react';
@@ -624,6 +625,7 @@ function App() {
                 {activeTable.name}
               </h1>
             )}
+            {DEMO_MODE && <span className="demo-header-badge">Live Demo</span>}
             {pendingPhoneCount > 0 && (
               <span
                 className="pending-phone-search-badge"
@@ -791,9 +793,11 @@ function App() {
                 from a different table would otherwise silently hide rows
                 in the new one, which is worse than not persisting at
                 all). Calls has no such key: it isn't scoped to a table. */}
-            <div className={`tab-panel ${tab === 'calls' ? 'tab-panel-active' : ''}`}>
-              <CallsView onJumpToRow={handleJumpToRow} onJumpToContact={handleJumpToContact} />
-            </div>
+            {allowedTabs.has('calls') && (
+              <div className={`tab-panel ${tab === 'calls' ? 'tab-panel-active' : ''}`}>
+                <CallsView onJumpToRow={handleJumpToRow} onJumpToContact={handleJumpToContact} />
+              </div>
+            )}
             {/* Not gated on tableReady/keyed by activeTableId like Table/
                 Calendar — SearchView's own state (useSearchStore) has
                 nothing to do with which table is active; it only reads
@@ -802,25 +806,33 @@ function App() {
                 switching tables while search results are on screen just
                 means the next "Add to table" click lands in the newly
                 active table — no stale-state risk to guard against. */}
-            <div className={`tab-panel ${tab === 'search' ? 'tab-panel-active' : ''}`}>
-              <SearchView />
-            </div>
+            {allowedTabs.has('search') && (
+              <div className={`tab-panel ${tab === 'search' ? 'tab-panel-active' : ''}`}>
+                <SearchView />
+              </div>
+            )}
             {/* Same reasoning as Search above — account-level, not scoped to
                 the active table, so no tableReady gate or activeTableId
                 key. */}
-            <div className={`tab-panel ${tab === 'linkedin' ? 'tab-panel-active' : ''}`}>
-              <LinkedInView />
-            </div>
+            {allowedTabs.has('linkedin') && (
+              <div className={`tab-panel ${tab === 'linkedin' ? 'tab-panel-active' : ''}`}>
+                <LinkedInView />
+              </div>
+            )}
             {/* Same reasoning as Search/LinkedIn above — not scoped to the
                 active table, so no tableReady gate or activeTableId key. */}
-            <div className={`tab-panel ${tab === 'instantly' ? 'tab-panel-active' : ''}`}>
-              <InstantlyView active={tab === 'instantly'} />
-            </div>
+            {allowedTabs.has('instantly') && (
+              <div className={`tab-panel ${tab === 'instantly' ? 'tab-panel-active' : ''}`}>
+                <InstantlyView active={tab === 'instantly'} />
+              </div>
+            )}
             {/* Same reasoning as Search/LinkedIn above — not scoped to the
                 active table, so no tableReady gate or activeTableId key. */}
-            <div className={`tab-panel ${tab === 'email' ? 'tab-panel-active' : ''}`}>
-              <EmailGeneratorView />
-            </div>
+            {allowedTabs.has('email') && (
+              <div className={`tab-panel ${tab === 'email' ? 'tab-panel-active' : ''}`}>
+                <EmailGeneratorView />
+              </div>
+            )}
             <div className={`tab-panel ${tab === 'table' ? 'tab-panel-active' : ''}`}>
               {tableReady ? (
                 <TableView

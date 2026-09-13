@@ -1,12 +1,27 @@
-// Entirely generated demo data — no real companies or people. Built
-// programmatically from name-part lists rather than hand-typed so the
-// demo has a realistic-feeling volume of rows (matches the request's
-// "normal amount of data," not a 3-row toy table) without ever touching
-// production data of any kind.
-import type { Column, DemoTable, Row } from '../types';
+// The in-memory data source for db.ts's DEMO_MODE branch — see
+// utils/demoMode.ts. Every function here mirrors the signature of its
+// db.ts counterpart exactly (same name, same params, same return shape)
+// so db.ts's own bodies stay a one-line `if (DEMO_MODE) return
+// demoData.xxx(...)` and nothing else in the app (useTableStore.ts,
+// useWorkspaceStore.ts, every component) needs to know this exists.
+//
+// State lives in plain module-level variables, not a class or store —
+// this module is only ever imported from db.ts, so there's exactly one
+// instance per page load, which is also exactly the lifetime we want:
+// buildSeed() runs once when this module first loads (a hard refresh, a
+// new tab, a different browser) and there is nowhere for a change to be
+// written that would outlive that load. This is what makes "every demo
+// visitor always starts from the same clean dataset, and nothing one
+// visitor does is ever visible to another" true with zero extra code.
+import type { Column, Row, TableFolder, TableMeta } from '../types';
 import { randomUUID } from '../utils/uuid';
-import { serializeContacts } from '../utils/contacts';
-import { serializeNoteHistory, type NoteEntry } from '../utils/noteHistory';
+
+// --- Seed data generator ---------------------------------------------
+// Entirely generated — no real companies or people. Ported from the
+// standalone demo project's own data/seed.ts (proven over several
+// rounds of review this session), adapted to this app's real
+// TableMeta/Row/Column shapes (order/createdAt/updatedAt on both Row and
+// TableMeta, which the standalone project's simplified types omitted).
 
 const COMPANY_PREFIXES = [
   'Baltic', 'Nordic', 'Vilnius', 'Kaunas', 'Amber', 'Pine', 'Summit', 'Bright',
@@ -66,19 +81,27 @@ function personName(seed: number): { first: string; last: string } {
   return { first: pick(FIRST_NAMES, seed), last: pick(LAST_NAMES, seed * 3 + 2) };
 }
 
-// Spread relative to the *actual* current date (not a fixed year) so the
+// Spread relative to the actual current date (not a fixed year) so the
 // Calendar tab's Overdue/Today/Upcoming grouping always has something
-// real to show regardless of when the demo happens to be opened — a
-// fixed-year date range would eventually drift entirely into the past.
+// real to show regardless of when the demo happens to be opened.
 function relativeDate(offsetDays: number): string {
   const d = new Date();
   d.setDate(d.getDate() + offsetDays);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+function serializeContacts(entries: { id: string; text: string }[]): string {
+  return JSON.stringify(entries);
+}
+
+function serializeNoteHistory(entries: { id: string; text: string; createdAt: number }[]): string {
+  return JSON.stringify(entries);
+}
+
 const COMPANY_COUNT = 180;
 
-function buildCompaniesTable(): { table: DemoTable; rows: Row[] } {
+function buildCompaniesTable(): { table: TableMeta; rows: Row[] } {
+  const now = Date.now();
   const col = (name: string, type: Column['type'], extra: Partial<Column> = {}): Column => ({
     id: randomUUID(),
     name,
@@ -90,12 +113,8 @@ function buildCompaniesTable(): { table: DemoTable; rows: Row[] } {
   const industryCol = col('Industry', 'text');
   const icpCol = col('ICP', 'text');
   const contactsCol = col('Decision Makers', 'contact');
-  const statusCol = col('Status', 'dropdown', {
-    options: STATUSES,
-    optionColors: STATUS_COLORS,
-    isStatusColumn: true,
-  });
-  const websiteCol = col('Website', 'link');
+  const statusCol = col('Status', 'dropdown', { options: STATUSES, optionColors: STATUS_COLORS, isStatusColumn: true });
+  const websiteCol = col('Website', 'link', { isWebsiteColumn: true });
   const phoneCol = col('Phone', 'phone');
   const employeesCol = col('Employees', 'text');
   const notesCol = col('Call Notes', 'note');
@@ -110,6 +129,7 @@ function buildCompaniesTable(): { table: DemoTable; rows: Row[] } {
     'Not the right time — follow up next quarter',
   ];
 
+  const tableId = randomUUID();
   const rows: Row[] = Array.from({ length: COMPANY_COUNT }, (_, i) => {
     const p1 = personName(i);
     const p2 = personName(i + 41);
@@ -124,28 +144,17 @@ function buildCompaniesTable(): { table: DemoTable; rows: Row[] } {
         text: `${p2.first} ${p2.last}, ${pick(TITLES, i + 5)}, ${p2.first.toLowerCase()}.${p2.last.toLowerCase()}@${domain(i)}`,
       },
     ]);
-    const daysAgo = (n: number) => Date.now() - n * 24 * 60 * 60 * 1000;
-    // A couple of rows get a properly-composed "{tag} {name}"/"{name}
-    // Didn't answer" entry (matching production's current tag+contact-
-    // picker shape — see utils/noteHistory.ts's parseTaggedEntry) so the
-    // inline-chip rendering is visibly demonstrated without requiring a
-    // visitor to log one first.
-    const noteEntries: NoteEntry[] = [
+    const daysAgo = (n: number) => now - n * 24 * 60 * 60 * 1000;
+    const noteEntries = [
       { id: randomUUID(), text: pick(CALL_NOTE_TEMPLATES, i), createdAt: daysAgo(1 + (i % 10)) },
       ...(i % 3 === 0 ? [{ id: randomUUID(), text: `Call ${p1.first} ${p1.last}`, createdAt: daysAgo(2 + (i % 14)) }] : []),
       ...(i % 5 === 0 ? [{ id: randomUUID(), text: `${p2.first} ${p2.last} Didn't answer`, createdAt: daysAgo(3 + (i % 9)) }] : []),
     ];
-    // Only a fraction of rows get a next-call date at all (matches
-    // production's own "most rows never touch this" reality) — every 3rd
-    // row, spread across a realistic overdue/today/upcoming window. A
-    // fraction of *those* also get a linked contact and/or a next-action
-    // note, so both the 👤 and 📝 buttons are visible somewhere without
-    // every row looking identical.
     const hasNextCall = i % 3 === 0;
     const nextCallOffset = i < 6 ? i - 2 : ((i * 5 + 2) % 40) - 15;
     return {
       id: randomUUID(),
-      tableId: nameCol.id, // placeholder, replaced below once tableId is known
+      tableId,
       linkedContactId: hasNextCall && i % 2 === 0 ? contact1Id : undefined,
       nextActionNote: hasNextCall && i % 4 === 0 ? 'Ask about budget approval timeline' : undefined,
       cells: {
@@ -161,15 +170,17 @@ function buildCompaniesTable(): { table: DemoTable; rows: Row[] } {
         [notesCol.id]: serializeNoteHistory(noteEntries),
       },
       order: i,
+      createdAt: now,
+      updatedAt: now,
     };
   });
 
-  const table: DemoTable = { id: randomUUID(), name: 'Companies', columns };
-  const finalRows = rows.map((r) => ({ ...r, tableId: table.id }));
-  return { table, rows: finalRows };
+  const table: TableMeta = { id: tableId, name: 'Companies', columns, order: 0, createdAt: now, updatedAt: now };
+  return { table, rows };
 }
 
-function buildPipelineTable(): { table: DemoTable; rows: Row[] } {
+function buildPipelineTable(): { table: TableMeta; rows: Row[] } {
+  const now = Date.now();
   const col = (name: string, type: Column['type'], extra: Partial<Column> = {}): Column => ({
     id: randomUUID(),
     name,
@@ -199,13 +210,12 @@ function buildPipelineTable(): { table: DemoTable; rows: Row[] } {
   const owners = ['Jonas K.', 'Rūta P.', 'Tomas B.', 'Ieva N.'];
   const nextSteps = ['Send follow-up email', 'Schedule demo call', 'Prepare proposal', 'Confirm contract terms', 'Check in after trial'];
 
-  // A few rows land exactly on today/tomorrow so the Calendar's
-  // Overdue/Today sections are never empty on a fresh load.
+  const tableId = randomUUID();
   const rows: Row[] = Array.from({ length: 60 }, (_, i) => {
     const offsetDays = i < 3 ? i : ((i * 7 + 3) % 45) - 20;
     return {
       id: randomUUID(),
-      tableId: nameCol.id,
+      tableId,
       cells: {
         [nameCol.id]: companyName(i + 200),
         [dealCol.id]: String(1000 * (5 + (i % 40))),
@@ -215,32 +225,140 @@ function buildPipelineTable(): { table: DemoTable; rows: Row[] } {
         [dateCol.id]: relativeDate(offsetDays),
       },
       order: i,
+      createdAt: now,
+      updatedAt: now,
     };
   });
 
-  const table: DemoTable = { id: randomUUID(), name: 'Sales Pipeline', columns };
-  const finalRows = rows.map((r) => ({ ...r, tableId: table.id }));
-  return { table, rows: finalRows };
+  const table: TableMeta = { id: tableId, name: 'Sales Pipeline', columns, order: 1, createdAt: now, updatedAt: now };
+  return { table, rows };
 }
 
-export interface SeedResult {
-  tables: DemoTable[];
-  rowsByTable: Record<string, Row[]>;
+interface DemoState {
+  tables: TableMeta[];
+  rowsByTableId: Map<string, Row[]>;
+  folders: TableFolder[];
 }
 
-/** Called fresh on every page load (see useDemoTableStore.ts) — a brand
- * new object graph every time, never the same array/row-id twice across
- * sessions, so there's nothing any prior visitor's session could ever
- * leak into a new one even if some reference were accidentally held
- * onto. */
-export function buildSeedData(): SeedResult {
+function buildSeed(): DemoState {
   const companies = buildCompaniesTable();
   const pipeline = buildPipelineTable();
-  return {
-    tables: [companies.table, pipeline.table],
-    rowsByTable: {
-      [companies.table.id]: companies.rows,
-      [pipeline.table.id]: pipeline.rows,
-    },
-  };
+  const rowsByTableId = new Map<string, Row[]>();
+  rowsByTableId.set(companies.table.id, companies.rows);
+  rowsByTableId.set(pipeline.table.id, pipeline.rows);
+  return { tables: [companies.table, pipeline.table], rowsByTableId, folders: [] };
+}
+
+const state: DemoState = buildSeed();
+
+// --- Functions mirroring db.ts's own exported signatures --------------
+
+export async function loadTables(): Promise<TableMeta[]> {
+  return state.tables;
+}
+
+export async function saveTable(table: TableMeta): Promise<void> {
+  const i = state.tables.findIndex((t) => t.id === table.id);
+  if (i === -1) {
+    state.tables.push(table);
+    if (!state.rowsByTableId.has(table.id)) state.rowsByTableId.set(table.id, []);
+  } else {
+    state.tables[i] = table;
+  }
+}
+
+export async function getTable(id: string): Promise<TableMeta | null> {
+  return state.tables.find((t) => t.id === id) ?? null;
+}
+
+export async function updateTableColumns(tableId: string, columns: TableMeta['columns']): Promise<void> {
+  const table = state.tables.find((t) => t.id === tableId);
+  if (table) table.columns = columns;
+}
+
+export async function updateTableName(tableId: string, name: string): Promise<void> {
+  const table = state.tables.find((t) => t.id === tableId);
+  if (table) table.name = name;
+}
+
+export async function setTableOwnerDB(): Promise<void> {
+  // No worker/ownership concept in the demo (a single super_admin-like
+  // user) — nothing to assign.
+}
+
+export async function updateTableBackupFlag(tableId: string, enabled: boolean): Promise<void> {
+  const table = state.tables.find((t) => t.id === tableId);
+  if (table) table.dailyBackupEnabled = enabled;
+}
+
+export async function setTableFolder(tableId: string, folderId: string | null): Promise<void> {
+  const table = state.tables.find((t) => t.id === tableId);
+  if (table) table.folderId = folderId;
+}
+
+export async function reorderTablesDB(updates: { id: string; order: number }[]): Promise<void> {
+  for (const u of updates) {
+    const table = state.tables.find((t) => t.id === u.id);
+    if (table) table.order = u.order;
+  }
+}
+
+export async function loadTableFolders(): Promise<TableFolder[]> {
+  return state.folders;
+}
+
+export async function createTableFolderDB(folder: TableFolder): Promise<void> {
+  state.folders.push(folder);
+}
+
+export async function renameTableFolderDB(id: string, name: string): Promise<void> {
+  const folder = state.folders.find((f) => f.id === id);
+  if (folder) folder.name = name;
+}
+
+export async function deleteTableFolderDB(id: string): Promise<void> {
+  state.folders = state.folders.filter((f) => f.id !== id);
+}
+
+export async function reorderTableFoldersDB(updates: { id: string; order: number }[]): Promise<void> {
+  for (const u of updates) {
+    const folder = state.folders.find((f) => f.id === u.id);
+    if (folder) folder.order = u.order;
+  }
+}
+
+export async function countRowsForTable(tableId: string): Promise<number> {
+  return state.rowsByTableId.get(tableId)?.length ?? 0;
+}
+
+export async function deleteTableDB(id: string): Promise<void> {
+  state.tables = state.tables.filter((t) => t.id !== id);
+  state.rowsByTableId.delete(id);
+}
+
+export async function loadRowsForTable(tableId: string): Promise<Row[]> {
+  return state.rowsByTableId.get(tableId) ?? [];
+}
+
+export async function saveRow(row: Row): Promise<void> {
+  const rows = state.rowsByTableId.get(row.tableId) ?? [];
+  const i = rows.findIndex((r) => r.id === row.id);
+  if (i === -1) rows.push(row);
+  else rows[i] = row;
+  state.rowsByTableId.set(row.tableId, rows);
+}
+
+export async function saveRows(rows: Row[]): Promise<void> {
+  for (const row of rows) await saveRow(row);
+}
+
+export async function importRows(rows: Row[]): Promise<void> {
+  await saveRows(rows);
+}
+
+export async function deleteRowsDB(ids: string[]): Promise<void> {
+  const idSet = new Set(ids);
+  for (const [tableId, rows] of state.rowsByTableId) {
+    state.rowsByTableId.set(tableId, rows.filter((r) => !idSet.has(r.id)));
+  }
 }
