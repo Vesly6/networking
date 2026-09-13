@@ -87,3 +87,17 @@ export function extractPhoneNumber(text: string): string | null {
   const match = PHONE_PATTERN.exec(text);
   return match ? match[0].trim() : null;
 }
+
+const EMAIL_PATTERN = /[\w.+-]+@[\w-]+\.[a-zA-Z.]+/;
+
+/** Pulls an email out of a contact entry's freeform text via pattern
+ * match, not positional comma-splitting — contactTextToFields's own
+ * "5th field is company" assumption doesn't hold for a real entry that
+ * never included a company segment in the first place (e.g. "Name,
+ * Title, email, phone" — only 4 fields), which would otherwise shift
+ * email into the company slot and phone into the email slot. Used for
+ * the contact popover's copy-email button. */
+export function extractEmail(text: string): string | null {
+  const match = EMAIL_PATTERN.exec(text);
+  return match ? match[0].trim() : null;
+}

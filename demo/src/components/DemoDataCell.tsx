@@ -1,14 +1,15 @@
 import { useEffect, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react';
 import type { Column, Row } from '../types';
-import { parseContacts, addContact, removeContact, getContactsSummary } from '../utils/contacts';
+import { parseContacts, addContact, removeContact, updateContact, getContactsSummary, extractPhoneNumber, extractEmail } from '../utils/contacts';
 import { parseNoteHistory, addNoteEntry, updateNoteEntry, removeNoteEntry, getLatestNoteText, formatHistoryTimestamp } from '../utils/noteHistory';
 import { getDatePart, getTimePart, combineDateTime } from '../utils/date';
 import { highlightMatches } from '../utils/highlight';
 import { ensureProtocol } from '../utils/link';
 import { contrastTextColor } from '../utils/color';
 import { confirmDialog } from '../store/useConfirmStore';
+import { useToastStore } from '../store/useToastStore';
 import { Popover } from './Popover';
-import { X, ExternalLink, Search, Clock, FileText, User } from 'lucide-react';
+import { X, ExternalLink, Search, Clock, FileText, User, Copy, PenLine } from 'lucide-react';
 
 interface DemoDataCellProps {
   row: Row;
@@ -67,6 +68,9 @@ export function DemoDataCell({
   const value = row.cells[column.id] ?? '';
   const [draft, setDraft] = useState(value);
   const [newContactText, setNewContactText] = useState('');
+  const [editingContactId, setEditingContactId] = useState<string | null>(null);
+  const [contactEditDraft, setContactEditDraft] = useState('');
+  const showToast = useToastStore((s) => s.show);
   const [newNoteText, setNewNoteText] = useState('');
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [noteEditDraft, setNoteEditDraft] = useState('');
@@ -319,6 +323,10 @@ export function DemoDataCell({
       const ok = await confirmDialog({ message: `Remove "${text}"?`, danger: true });
       if (ok) onCommit(removeContact(value, id));
     };
+    const handleCopy = (fieldValue: string, label: string) => {
+      void navigator.clipboard.writeText(fieldValue);
+      showToast(`${label} copied`);
+    };
     return (
       <td className="demo-cell demo-cell-contact" style={cellStyle} onMouseDown={onSelect}>
         <button type="button" className="demo-cell-preview demo-cell-preview-hoverable" tabIndex={-1} onClick={onOpenEditor}>
@@ -333,14 +341,64 @@ export function DemoDataCell({
               </button>
             </div>
             <ul className="demo-contact-list">
-              {entries.map((entry) => (
-                <li key={entry.id} className="demo-contact-entry">
-                  <span>{entry.text}</span>
-                  <button type="button" onClick={() => void handleRemove(entry.id, entry.text)}>
-                    <X size={12} />
-                  </button>
-                </li>
-              ))}
+              {entries.map((entry) => {
+                const entryPhone = extractPhoneNumber(entry.text);
+                const entryEmail = extractEmail(entry.text);
+                return (
+                  <li key={entry.id} className="demo-contact-entry">
+                    {editingContactId === entry.id ? (
+                      <input
+                        autoFocus
+                        className="demo-contact-edit-input"
+                        value={contactEditDraft}
+                        onChange={(e) => setContactEditDraft(e.target.value)}
+                        onBlur={() => {
+                          if (contactEditDraft.trim()) onCommit(updateContact(value, entry.id, contactEditDraft));
+                          setEditingContactId(null);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') e.currentTarget.blur();
+                          if (e.key === 'Escape') setEditingContactId(null);
+                        }}
+                      />
+                    ) : (
+                      <span className="demo-contact-entry-text">{entry.text}</span>
+                    )}
+                    <div className="demo-contact-entry-actions">
+                      {entryPhone && (
+                        <button type="button" title="Copy phone" onClick={() => handleCopy(entryPhone, 'Phone')}>
+                          <Copy size={12} />
+                        </button>
+                      )}
+                      {entryEmail && (
+                        <button type="button" title="Copy email" onClick={() => handleCopy(entryEmail, 'Email')}>
+                          <Copy size={12} />
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        title="Find on Instagram / Facebook"
+                        onClick={() => showToast('This integration isn’t configured — available in the full product')}
+                      >
+                        <Search size={12} />
+                      </button>
+                      <button
+                        type="button"
+                        title="Edit contact"
+                        onClick={() => {
+                          setEditingContactId(entry.id);
+                          setContactEditDraft(entry.text);
+                        }}
+                      >
+                        <PenLine size={12} />
+                      </button>
+                      <button type="button" title="Remove contact" onClick={() => void handleRemove(entry.id, entry.text)}>
+                        <X size={12} />
+                      </button>
+                    </div>
+                  </li>
+                );
+              })}
             </ul>
             <div className="demo-contact-add-row">
               <input

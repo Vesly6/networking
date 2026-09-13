@@ -828,6 +828,25 @@ td.demo-cell.demo-cell-dropdown select:focus {
   background: transparent;
   padding: 0.1em;
   flex: 0 0 auto;
+  color: var(--text-muted);
+}
+.demo-contact-entry button:hover {
+  color: var(--text);
+}
+.demo-contact-entry-text {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: break-word;
+}
+.demo-contact-entry-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  flex-shrink: 0;
+}
+.demo-contact-edit-input {
+  flex: 1;
+  min-width: 0;
 }
 .demo-contact-add-row {
   display: flex;
