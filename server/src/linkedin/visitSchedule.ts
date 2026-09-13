@@ -66,7 +66,7 @@ function generateVisitWindowsMinutes(
  * seed for no reason. */
 export async function getOrCreateTodaysVisitPlan(settings: SafetySettings, companyId: string, now = Date.now()): Promise<VisitPlan> {
   const { dateStr } = getZonedDateParts(settings.workHoursTimezone, new Date(now));
-  const existing = getVisitSchedule(dateStr);
+  const existing = getVisitSchedule(companyId, dateStr);
   if (existing) return existing;
 
   const rand = mulberry32(hashString(`visits:${companyId}:${dateStr}`));
@@ -83,12 +83,12 @@ export async function getOrCreateTodaysVisitPlan(settings: SafetySettings, compa
     })),
     generatedAt: Date.now(),
   };
-  saveVisitSchedule(plan);
+  saveVisitSchedule(companyId, plan);
   // saveVisitSchedule is INSERT ... ON CONFLICT DO NOTHING — re-read rather
   // than trust `plan` as final, in case a concurrent caller won the race
   // and inserted first (same caution as dailyPlan.ts's own
   // getOrCreateTodaysPlan).
-  return getVisitSchedule(dateStr) ?? plan;
+  return getVisitSchedule(companyId, dateStr) ?? plan;
 }
 
 export function isWithinVisitWindow(plan: VisitPlan, now = Date.now()): boolean {

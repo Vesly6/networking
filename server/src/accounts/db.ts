@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import { randomUUID, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { dataFilePath } from '../dataDir.js';
-import { ALL_PERMISSION_KEYS, LEGACY_BOOLEAN_PERMISSION_MAP, type PermissionKey } from '../permissions/registry.js';
+import { ALL_PERMISSION_KEYS, DEFAULT_NEW_COMPANY_KEYS, LEGACY_BOOLEAN_PERMISSION_MAP, type PermissionKey } from '../permissions/registry.js';
 
 // Own SQLite file, same "one small file per feature" convention as
 // linkedin.sqlite/sms-inbox.sqlite/table-data.sqlite — see dataDir.ts for
@@ -428,20 +428,23 @@ export function createCompany(name: string): Company {
   getDb()
     .prepare(`INSERT INTO companies (id, name, enabled_features, created_at) VALUES (?, ?, '[]', ?)`)
     .run(company.id, company.name, company.createdAt);
-  // A brand-new company's permission ceiling defaults to the FULL registry
-  // — unlike enabledFeatures above (a deliberate opt-in tab list), a
-  // permission gates whether this company's own super_admin can do
-  // anything with their own account at all (manage their own workers,
+  // A brand-new company's permission ceiling defaults to (almost) the FULL
+  // registry — unlike enabledFeatures above (a deliberate opt-in tab
+  // list), a permission gates whether this company's own super_admin can
+  // do anything with their own account at all (manage their own workers,
   // create tables, use whatever integrations they configure). Starting
   // empty would brick a freshly self-registered company until the
   // platform manually intervened, which isn't how registration has ever
   // worked — see migratePermissionsIfNeeded's own doc comment for why
   // every company that existed BEFORE the permission registry shipped
-  // gets this same full-ceiling default; this is that same default
-  // applied to every company created from here on. The platform can
-  // still narrow it later via PUT /api/admin/companies/:id/permissions,
-  // same as for any other company.
-  setGrantedKeys('company', company.id, ALL_PERMISSION_KEYS, 'platform');
+  // gets this same near-full-ceiling default; this is that same default
+  // applied to every company created from here on. The platform can still
+  // narrow it later via PUT /api/admin/companies/:id/permissions, same as
+  // for any other company. DEFAULT_NEW_COMPANY_KEYS (not the raw
+  // ALL_PERMISSION_KEYS) deliberately excludes integrations.linkedin.use —
+  // see that constant's own doc comment for why that one integration
+  // can't safely be an automatic default the way every other one is.
+  setGrantedKeys('company', company.id, DEFAULT_NEW_COMPANY_KEYS, 'platform');
   return company;
 }
 

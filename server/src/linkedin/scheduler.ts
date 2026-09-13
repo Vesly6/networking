@@ -39,16 +39,13 @@ import {
 import { maybeRunHumanizePass } from './humanize.js';
 import { personalizeLinkedInMessage } from '../openai.js';
 
-// The LinkedIn feature is still single-tenant end to end (one shared
-// browser/session, no company_id column anywhere in linkedin.sqlite —
-// see this codebase's own notes on the deferred multi-company project).
-// dailyPlan.ts's persona-bias seeding takes a companyId purely so a
-// future multi-tenant version can vary it per account without touching
-// dailyPlan.ts itself; today there's only ever one real caller, so a
-// fixed constant is the correct, honest value rather than threading a
-// real company id through a feature that doesn't have per-company state
-// anywhere else yet.
-export const SINGLE_TENANT_PLAN_ID = 'default';
+// The browser/Chrome session behind this feature is still single-tenant
+// (one shared CDP connection — see browser.ts — safely bounded now by the
+// integrations.linkedin.use permission gate in index.ts, granted to only
+// one company). The DATA layer, however, is now genuinely company-scoped
+// throughout this file — every function below takes a real companyId,
+// mostly read off DueAction.companyId (see findDueActions) rather than
+// threaded as a separate parameter everywhere.
 
 const DAY_MS = 86_400_000;
 
@@ -90,6 +87,7 @@ function isNoConnectButtonError(detail: string | null): boolean {
 }
 
 export interface DueAction {
+  companyId: string;
   leadId: string;
   leadUrl: string;
   leadName: string | null;
@@ -190,13 +188,14 @@ function evaluateCondition(node: SequenceNode, lead: Lead, lastActionTime: numbe
  * one call — a well-formed graph never gets remotely close to that many
  * hops in a single resolution. */
 function resolveNextNode(
+  companyId: string,
   nodesById: Map<string, SequenceNode>,
   edgesFrom: Map<string, SequenceEdge[]>,
   lead: Lead,
   lastNodeId: string | null,
   now: number,
 ): SequenceNode | null {
-  const lastActionTime = getLastActionTime(lead.id);
+  const lastActionTime = getLastActionTime(companyId, lead.id);
   let fromKey = lastNodeId ?? START_KEY;
 
   for (let hop = 0; hop < MAX_GRAPH_HOPS; hop++) {
@@ -250,12 +249,12 @@ function resolveNextNode(
  * due for their next graph node right now. Read-only — doesn't execute
  * or check the Safety Engine; see executeAction()/runSchedulerTick()
  * below for that. */
-export function findDueActions(now = Date.now()): DueAction[] {
+export function findDueActions(companyId: string, now = Date.now()): DueAction[] {
   const due: DueAction[] = [];
-  const campaigns = listCampaigns().filter((c) => c.status === 'active');
+  const campaigns = listCampaigns(companyId).filter((c) => c.status === 'active');
 
   for (const campaign of campaigns) {
-    const { nodes, edges } = getCampaignGraph(campaign.id);
+    const { nodes, edges } = getCampaignGraph(companyId, campaign.id);
     if (nodes.length === 0) continue;
 
     const nodesById = new Map(nodes.map((n) => [n.id, n]));
@@ -270,13 +269,13 @@ export function findDueActions(now = Date.now()): DueAction[] {
     // 'withdrawn' (Phase 3): a lead whose invite was pulled back should
     // never come up as due for anything else either — same reasoning as
     // excluding 'replied'/'skipped' here.
-    const leads = listLeadsForCampaign(campaign.id).filter(
+    const leads = listLeadsForCampaign(companyId, campaign.id).filter(
       (l) => l.status !== 'replied' && l.status !== 'skipped' && l.status !== 'withdrawn',
     );
 
     for (const lead of leads) {
-      const lastNodeId = getLastCompletedNodeId(lead.id);
-      const nextNode = resolveNextNode(nodesById, edgesFrom, lead, lastNodeId, now);
+      const lastNodeId = getLastCompletedNodeId(companyId, lead.id);
+      const nextNode = resolveNextNode(companyId, nodesById, edgesFrom, lead, lastNodeId, now);
       if (!nextNode) continue;
 
       // Defensive fallback gate — a well-authored graph places a
@@ -300,11 +299,12 @@ export function findDueActions(now = Date.now()): DueAction[] {
       // break, which has already happened twice this session for other
       // selectors).
       if (nextNode.type === 'connect') {
-        const lastAttempt = getLastActionForLeadStep(lead.id, nextNode.id);
+        const lastAttempt = getLastActionForLeadStep(companyId, lead.id, nextNode.id);
         if (lastAttempt?.status === 'error' && isNoConnectButtonError(lastAttempt.detail)) continue;
       }
 
       due.push({
+        companyId,
         leadId: lead.id,
         leadUrl: lead.linkedinUrl,
         leadName: lead.name,
@@ -343,7 +343,7 @@ async function runAndLog(action: DueAction, actionType: string, fn: () => Promis
   const startedAt = Date.now();
   try {
     const timing = await fn();
-    logAction({
+    logAction(action.companyId, {
       leadId: action.leadId,
       stepId: action.stepId,
       actionType,
@@ -357,7 +357,7 @@ async function runAndLog(action: DueAction, actionType: string, fn: () => Promis
     return { ok: true };
   } catch (err) {
     const message = err instanceof Error ? err.message : `Failed to execute ${actionType}`;
-    logAction({
+    logAction(action.companyId, {
       leadId: action.leadId,
       stepId: action.stepId,
       actionType,
@@ -373,7 +373,7 @@ async function runAndLog(action: DueAction, actionType: string, fn: () => Promis
     // staying alive. The next scheduler tick sees `paused` and stops
     // considering anything due at all until a human explicitly resumes.
     if (isCircuitBreakerCondition(err)) {
-      setPaused(true);
+      setPaused(action.companyId, true);
       return { ok: false, error: message, circuitBreakerTripped: true };
     }
     return { ok: false, error: message };
@@ -431,7 +431,7 @@ async function resolveOutgoingText(
  * that function's doc comment on why this file otherwise stays
  * company-agnostic), only ever affects resolveOutgoingText() above. */
 export async function executeAction(action: DueAction, openaiApiKey?: string): Promise<ExecuteResult> {
-  const settings = getSafetySettings();
+  const settings = getSafetySettings(action.companyId);
   // {{firstName}}/{{title}}/{{company}} substituted from the lead's own
   // fields — a free personalization floor every send gets, independent of
   // resolveOutgoingText()'s optional AI rewrite on top of it.
@@ -442,54 +442,56 @@ export async function executeAction(action: DueAction, openaiApiKey?: string): P
   }).trim();
 
   if (action.stepType === 'connect') {
-    const check = canSendConnect();
+    const check = canSendConnect(action.companyId);
     if (!check.allowed) return { ok: false, error: check.reason };
     // Counted unconditionally, before the outcome is known — this is what
     // actually bounds total profile-page-view activity per day regardless
     // of how many attempts turn out to be duds (already-connected leads).
     // See canSendConnect()'s own doc comment on why the success-only caps
     // alone weren't enough.
-    recordConnectAttempt();
+    recordConnectAttempt(action.companyId);
     // The connect node's own messageTemplate doubles as the optional
     // "Add a note" text (LinkedIn's connect flow, not a separate DM).
     const resolvedText = await resolveOutgoingText(placeholderText, action, settings, openaiApiKey, true);
-    const result = await runAndLog(action, 'connect', () => sendConnectionRequest(action.leadUrl, resolvedText || undefined, action.leadName));
+    const result = await runAndLog(action, 'connect', () =>
+      sendConnectionRequest(action.companyId, action.leadUrl, resolvedText || undefined, action.leadName),
+    );
     if (result.ok) {
-      recordConnectSent();
-      updateLeadStatus(action.leadId, 'pending');
+      recordConnectSent(action.companyId);
+      updateLeadStatus(action.companyId, action.leadId, 'pending');
     }
     return result;
   }
 
   if (action.stepType === 'message') {
-    const check = canSendMessage();
+    const check = canSendMessage(action.companyId);
     if (!check.allowed) return { ok: false, error: check.reason };
     if (!placeholderText) return { ok: false, error: 'This step has no message template set.' };
     const resolvedText = await resolveOutgoingText(placeholderText, action, settings, openaiApiKey, false);
     const result = await runAndLog(action, 'message', () => sendMessage(action.leadUrl, resolvedText));
-    if (result.ok) recordMessageSent();
+    if (result.ok) recordMessageSent(action.companyId);
     return result;
   }
 
   if (action.stepType === 'withdraw') {
-    if (isPaused()) return { ok: false, error: 'Automation is paused (stop switch is on).' };
+    if (isPaused(action.companyId)) return { ok: false, error: 'Automation is paused (stop switch is on).' };
     const result = await runAndLog(action, 'withdraw', () => withdrawConnectionRequest(action.leadUrl));
-    if (result.ok) updateLeadStatus(action.leadId, 'withdrawn');
+    if (result.ok) updateLeadStatus(action.companyId, action.leadId, 'withdrawn');
     return result;
   }
 
   if (action.stepType === 'view_profile') {
-    if (isPaused()) return { ok: false, error: 'Automation is paused (stop switch is on).' };
+    if (isPaused(action.companyId)) return { ok: false, error: 'Automation is paused (stop switch is on).' };
     return runAndLog(action, 'view_profile', () => viewProfile(action.leadUrl));
   }
 
   if (action.stepType === 'follow') {
-    if (isPaused()) return { ok: false, error: 'Automation is paused (stop switch is on).' };
+    if (isPaused(action.companyId)) return { ok: false, error: 'Automation is paused (stop switch is on).' };
     return runAndLog(action, 'follow', () => followProfile(action.leadUrl));
   }
 
   if (action.stepType === 'like_post') {
-    if (isPaused()) return { ok: false, error: 'Automation is paused (stop switch is on).' };
+    if (isPaused(action.companyId)) return { ok: false, error: 'Automation is paused (stop switch is on).' };
     return runAndLog(action, 'like_post', () => likeLatestPost(action.leadUrl));
   }
 
@@ -581,7 +583,9 @@ const MAX_ATTEMPTS_PER_TICK = 5;
  * /api/linkedin/scheduler/run (`isAutomatic = false`, the default) and,
  * separately, on index.ts's own background interval (`isAutomatic = true`
  * — see that call site's own doc comment for why the interval was safe to
- * bring back). Manual review was removed from this codebase entirely (on
+ * bring back; the interval now loops over every company holding
+ * integrations.linkedin.use and calls this once per company, `companyId`
+ * no longer a fixed constant). Manual review was removed from this codebase entirely (on
  * explicit request — "Убрать совсем из кода"): a due action always
  * executes here, gated only by the Safety Engine's own caps/pause/work-
  * hours/warm-up ramp inside executeAction(), the same gate that already
@@ -615,7 +619,7 @@ const MAX_ATTEMPTS_PER_TICK = 5;
  *   to "run now" reasonably means "work through what's due," and stops at
  *   the *first* circuit-breaker condition (checkpoint/logged-out/Chrome
  *   unreachable) either way. */
-export async function runSchedulerTick(isAutomatic = false, openaiApiKey?: string): Promise<SchedulerTickResult> {
+export async function runSchedulerTick(companyId: string, isAutomatic = false, openaiApiKey?: string): Promise<SchedulerTickResult> {
   if (tickInProgress) {
     return { due: 0, autoExecuted: 0, errors: 0, circuitBreakerTripped: false, skippedConcurrent: true };
   }
@@ -624,7 +628,7 @@ export async function runSchedulerTick(isAutomatic = false, openaiApiKey?: strin
     // Hoisted to the top (was previously read further down, after the
     // humanize/due-action checks) — the visit-window gate right below needs
     // it before anything else in this tick runs.
-    const settings = getSafetySettings();
+    const settings = getSafetySettings(companyId);
 
     // Visit windows (visitSchedule.ts): opt-in re-creation of "a person who
     // checks LinkedIn every couple of hours, not someone who leaves it open
@@ -638,7 +642,7 @@ export async function runSchedulerTick(isAutomatic = false, openaiApiKey?: strin
     // doc comment on the old "window keeps turning itself back on even
     // while paused" bug).
     if (isAutomatic && settings.visitWindowsEnabled && !settings.paused) {
-      const visitPlan = await getOrCreateTodaysVisitPlan(settings, SINGLE_TENANT_PLAN_ID);
+      const visitPlan = await getOrCreateTodaysVisitPlan(settings, companyId);
       if (!isWithinVisitWindow(visitPlan)) {
         // "Leaving" — closes the tab if the previous tick's visit window
         // has since ended. Bounded by this function's own 5-minute
@@ -669,21 +673,21 @@ export async function runSchedulerTick(isAutomatic = false, openaiApiKey?: strin
     // maybeRunHumanizePass() has its own internal pause/work-hours/
     // frequency/probability gates, so most calls here are a no-op.
     if (isAutomatic && (await getLinkedInPage(true)) !== null) {
-      const humanizeResult = await maybeRunHumanizePass();
+      const humanizeResult = await maybeRunHumanizePass(companyId);
       if (humanizeResult.ran) {
         console.log('[linkedin/humanize] liked', humanizeResult.liked, 'feed post(s) this tick.');
       }
     }
 
-    const due = findDueActions();
+    const due = findDueActions(companyId);
     if (due.length === 0) {
       return { due: 0, autoExecuted: 0, errors: 0, circuitBreakerTripped: false };
     }
 
     let actionable = due;
     if (isAutomatic) {
-      const snapshot = getSafetySnapshot();
-      const plan = await getOrCreateTodaysPlan(settings, snapshot.effectiveDailyCap, SINGLE_TENANT_PLAN_ID);
+      const snapshot = getSafetySnapshot(companyId);
+      const plan = await getOrCreateTodaysPlan(settings, snapshot.effectiveDailyCap, companyId);
       const dueSlot = nextDueSlot(plan, Date.now(), snapshot.connectsToday);
       if (dueSlot === null) {
         return { due: due.length, autoExecuted: 0, errors: 0, circuitBreakerTripped: false, waitingForNextSlot: true };
@@ -739,6 +743,7 @@ export async function runSchedulerTick(isAutomatic = false, openaiApiKey?: strin
 // a time" shape as the Pending Approval panel.
 
 export interface StaleInvite {
+  companyId: string;
   leadId: string;
   leadUrl: string;
   leadName: string | null;
@@ -755,17 +760,18 @@ export interface StaleInvite {
  * (which only looks at 'active' campaigns, since nothing new should be
  * *sent* for an inactive one, but an already-sent invite still exists on
  * LinkedIn's side either way). */
-export function findStaleInvites(minDays = 14): StaleInvite[] {
+export function findStaleInvites(companyId: string, minDays = 14): StaleInvite[] {
   const now = Date.now();
   const stale: StaleInvite[] = [];
-  for (const campaign of listCampaigns()) {
-    const leads = listLeadsForCampaign(campaign.id).filter((l) => l.status === 'pending');
+  for (const campaign of listCampaigns(companyId)) {
+    const leads = listLeadsForCampaign(companyId, campaign.id).filter((l) => l.status === 'pending');
     for (const lead of leads) {
-      const sentAt = getLastActionTime(lead.id);
+      const sentAt = getLastActionTime(companyId, lead.id);
       if (sentAt === null) continue;
       const daysSince = Math.floor((now - sentAt) / DAY_MS);
       if (daysSince < minDays) continue;
       stale.push({
+        companyId,
         leadId: lead.id,
         leadUrl: lead.linkedinUrl,
         leadName: lead.name,
@@ -784,13 +790,13 @@ export function findStaleInvites(minDays = 14): StaleInvite[] {
  * inbox sync could have promoted it to 'connected' since the list was
  * fetched), then marks it 'withdrawn' on success so it stops showing up
  * here and in any future due-action consideration. */
-export async function withdrawInvite(leadId: string): Promise<ExecuteResult> {
-  const match = findStaleInvites(0).find((s) => s.leadId === leadId);
+export async function withdrawInvite(companyId: string, leadId: string): Promise<ExecuteResult> {
+  const match = findStaleInvites(companyId, 0).find((s) => s.leadId === leadId);
   if (!match) return { ok: false, error: 'This lead is no longer a pending invite (already accepted, replied, or withdrawn).' };
   const startedAt = Date.now();
   try {
     await withLinkedInBusyGuard(() => withdrawConnectionRequest(match.leadUrl));
-    logAction({
+    logAction(companyId, {
       leadId,
       stepId: null,
       actionType: 'withdraw',
@@ -800,11 +806,11 @@ export async function withdrawInvite(leadId: string): Promise<ExecuteResult> {
       executedAt: startedAt,
       responseTimeMs: Date.now() - startedAt,
     });
-    updateLeadStatus(leadId, 'withdrawn');
+    updateLeadStatus(companyId, leadId, 'withdrawn');
     return { ok: true };
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to withdraw invitation';
-    logAction({
+    logAction(companyId, {
       leadId,
       stepId: null,
       actionType: 'withdraw',

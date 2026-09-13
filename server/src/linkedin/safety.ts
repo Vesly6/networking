@@ -137,8 +137,8 @@ const DEFAULTS = {
 
 export type SafetySettingKey = keyof typeof DEFAULTS;
 
-function get(key: SafetySettingKey): string {
-  return getSetting(key) ?? DEFAULTS[key];
+function get(companyId: string, key: SafetySettingKey): string {
+  return getSetting(companyId, key) ?? DEFAULTS[key];
 }
 
 export interface SafetySettings {
@@ -169,33 +169,33 @@ export interface SafetySettings {
   visitDurationMinutes: number;
 }
 
-export function getSafetySettings(): SafetySettings {
+export function getSafetySettings(companyId: string): SafetySettings {
   return {
-    dailyConnectCap: Number(get('daily_connect_cap')),
-    weeklyConnectCap: Number(get('weekly_connect_cap')),
-    dailyMessageCap: Number(get('daily_message_cap')),
-    weeklyMessageCap: Number(get('weekly_message_cap')),
-    workHoursStart: get('work_hours_start'),
-    workHoursEnd: get('work_hours_end'),
-    workHoursTimezone: get('work_hours_timezone'),
-    warmUpEnabled: get('warm_up_enabled') === 'true',
-    warmUpDurationDays: Number(get('warm_up_duration_days')),
-    warmUpStartPct: Number(get('warm_up_start_pct')),
-    warmUpStartDate: get('warm_up_start_date') || null,
-    paused: get('paused') === 'true',
-    dailyTargetJitterPct: Number(get('daily_target_jitter_pct')),
-    browseActivityProbability: Number(get('browse_activity_probability')),
-    searchNavigationProbability: Number(get('search_navigation_probability')),
-    dailySearchCap: Number(get('daily_search_cap')),
-    searchBlockedUntil: get('search_blocked_until') ? Number(get('search_blocked_until')) : null,
-    searchLockoutDays: Number(get('search_lockout_days')),
-    likesProbability: Number(get('likes_probability')),
-    likesMinGapMinutes: Number(get('likes_min_gap_minutes')),
-    aiScheduleEnabled: get('ai_schedule_enabled') === 'true',
-    autoPersonalizeEnabled: get('auto_personalize_enabled') === 'true',
-    visitWindowsEnabled: get('visit_windows_enabled') === 'true',
-    visitGapHours: Number(get('visit_gap_hours')),
-    visitDurationMinutes: Number(get('visit_duration_minutes')),
+    dailyConnectCap: Number(get(companyId, 'daily_connect_cap')),
+    weeklyConnectCap: Number(get(companyId, 'weekly_connect_cap')),
+    dailyMessageCap: Number(get(companyId, 'daily_message_cap')),
+    weeklyMessageCap: Number(get(companyId, 'weekly_message_cap')),
+    workHoursStart: get(companyId, 'work_hours_start'),
+    workHoursEnd: get(companyId, 'work_hours_end'),
+    workHoursTimezone: get(companyId, 'work_hours_timezone'),
+    warmUpEnabled: get(companyId, 'warm_up_enabled') === 'true',
+    warmUpDurationDays: Number(get(companyId, 'warm_up_duration_days')),
+    warmUpStartPct: Number(get(companyId, 'warm_up_start_pct')),
+    warmUpStartDate: get(companyId, 'warm_up_start_date') || null,
+    paused: get(companyId, 'paused') === 'true',
+    dailyTargetJitterPct: Number(get(companyId, 'daily_target_jitter_pct')),
+    browseActivityProbability: Number(get(companyId, 'browse_activity_probability')),
+    searchNavigationProbability: Number(get(companyId, 'search_navigation_probability')),
+    dailySearchCap: Number(get(companyId, 'daily_search_cap')),
+    searchBlockedUntil: get(companyId, 'search_blocked_until') ? Number(get(companyId, 'search_blocked_until')) : null,
+    searchLockoutDays: Number(get(companyId, 'search_lockout_days')),
+    likesProbability: Number(get(companyId, 'likes_probability')),
+    likesMinGapMinutes: Number(get(companyId, 'likes_min_gap_minutes')),
+    aiScheduleEnabled: get(companyId, 'ai_schedule_enabled') === 'true',
+    autoPersonalizeEnabled: get(companyId, 'auto_personalize_enabled') === 'true',
+    visitWindowsEnabled: get(companyId, 'visit_windows_enabled') === 'true',
+    visitGapHours: Number(get(companyId, 'visit_gap_hours')),
+    visitDurationMinutes: Number(get(companyId, 'visit_duration_minutes')),
   };
 }
 
@@ -205,21 +205,21 @@ export function getSafetySettings(): SafetySettings {
  * `warm_up_start_date` set yet) stamps today as day 0 automatically —
  * the alternative (leaving it unset until some later action notices) risks
  * silently running at 100% for a while before warm-up "starts". */
-export function updateSafetySettings(patch: Partial<Record<SafetySettingKey, string | number | boolean>>): void {
+export function updateSafetySettings(companyId: string, patch: Partial<Record<SafetySettingKey, string | number | boolean>>): void {
   for (const [key, value] of Object.entries(patch)) {
-    setSetting(key, String(value));
+    setSetting(companyId, key, String(value));
   }
-  if (patch.warm_up_enabled === true && !get('warm_up_start_date')) {
-    setSetting('warm_up_start_date', new Date().toISOString().slice(0, 10));
+  if (patch.warm_up_enabled === true && !get(companyId, 'warm_up_start_date')) {
+    setSetting(companyId, 'warm_up_start_date', new Date().toISOString().slice(0, 10));
   }
 }
 
-export function isPaused(): boolean {
-  return get('paused') === 'true';
+export function isPaused(companyId: string): boolean {
+  return get(companyId, 'paused') === 'true';
 }
 
-export function setPaused(paused: boolean): void {
-  setSetting('paused', paused ? 'true' : 'false');
+export function setPaused(companyId: string, paused: boolean): void {
+  setSetting(companyId, 'paused', paused ? 'true' : 'false');
 }
 
 export interface ZonedDateParts {
@@ -326,8 +326,8 @@ const DAILY_ATTEMPT_CAP_MULTIPLIER = 2.5;
  * attempt-count ceiling (below), and both daily/weekly *success* caps
  * (each scaled down by the current warm-up multiplier) before allowing
  * anything through. */
-export function canSendConnect(now = new Date()): SafetyCheckResult {
-  const settings = getSafetySettings();
+export function canSendConnect(companyId: string, now = new Date()): SafetyCheckResult {
+  const settings = getSafetySettings(companyId);
   const gate = checkPauseAndWorkHours(settings, now);
   if (gate) return gate;
 
@@ -335,7 +335,7 @@ export function canSendConnect(now = new Date()): SafetyCheckResult {
   const effectiveDailyCap = Math.max(1, Math.round(settings.dailyConnectCap * multiplier));
   const effectiveWeeklyCap = Math.max(1, Math.round(settings.weeklyConnectCap * multiplier));
 
-  const today = getTodaySafetyState();
+  const today = getTodaySafetyState(companyId);
 
   // Checked before the success-only caps below, deliberately: this is the
   // one that actually stops a dud-heavy list from being fully attempted in
@@ -352,15 +352,15 @@ export function canSendConnect(now = new Date()): SafetyCheckResult {
   if (today.connectsSent >= effectiveDailyCap) {
     return { allowed: false, reason: `Daily connect cap reached (${today.connectsSent}/${effectiveDailyCap}).` };
   }
-  const week = getWeekSafetyTotals();
+  const week = getWeekSafetyTotals(companyId);
   if (week.connects >= effectiveWeeklyCap) {
     return { allowed: false, reason: `Weekly connect cap reached (${week.connects}/${effectiveWeeklyCap}).` };
   }
   return { allowed: true };
 }
 
-export function recordConnectSent(): void {
-  incrementSafetyCounter('connects_sent');
+export function recordConnectSent(companyId: string): void {
+  incrementSafetyCounter(companyId, 'connects_sent');
 }
 
 /** Counts one attempt (success or failure — call this unconditionally,
@@ -369,8 +369,8 @@ export function recordConnectSent(): void {
  * the schema (straight from the TZ's own data model) but was never wired
  * up to anything until this fix — repurposed here as "connect attempts
  * today" rather than adding a new column for the same underlying need. */
-export function recordConnectAttempt(): void {
-  incrementSafetyCounter('profile_views');
+export function recordConnectAttempt(companyId: string): void {
+  incrementSafetyCounter(companyId, 'profile_views');
 }
 
 /** Whether *this* send should navigate via LinkedIn's own search-by-name
@@ -382,18 +382,18 @@ export function recordConnectAttempt(): void {
  * returns false and every remaining send that day just uses a direct URL
  * instead, never blocking the connect itself over a search-quota
  * concern. */
-export function shouldUseSearchNavigation(settings: SafetySettings): boolean {
+export function shouldUseSearchNavigation(companyId: string, settings: SafetySettings): boolean {
   // Checked before the daily cap/probability — a live lockout means "not
   // right now, regardless of how the day's numbers look," see
   // recordSearchLockout()'s own doc comment for what sets this.
   if (settings.searchBlockedUntil !== null && Date.now() < settings.searchBlockedUntil) return false;
-  const today = getTodaySafetyState();
+  const today = getTodaySafetyState(companyId);
   if (today.searchesUsed >= Math.max(0, settings.dailySearchCap)) return false;
   return Math.random() * 100 < settings.searchNavigationProbability;
 }
 
-export function recordSearchUsed(): void {
-  incrementSafetyCounter('searches_used');
+export function recordSearchUsed(companyId: string): void {
+  incrementSafetyCounter(companyId, 'searches_used');
 }
 
 /** A search-by-name attempt that found zero real person-shaped results at
@@ -401,17 +401,17 @@ export function recordSearchUsed(): void {
  * page.ts's searchByNameAndNavigate() for the call site. Returns the new
  * consecutive-miss count so the caller can decide whether it's crossed
  * the lockout threshold without a second read. */
-export function recordSearchMiss(): number {
-  const next = Number(get('search_misses_in_a_row')) + 1;
-  setSetting('search_misses_in_a_row', String(next));
+export function recordSearchMiss(companyId: string): number {
+  const next = Number(get(companyId, 'search_misses_in_a_row')) + 1;
+  setSetting(companyId, 'search_misses_in_a_row', String(next));
   return next;
 }
 
 /** A search-by-name attempt that found real candidates — resets the
  * consecutive-miss streak, since whatever degraded the search (if
  * anything) is evidently not happening right now. */
-export function recordSearchHit(): void {
-  setSetting('search_misses_in_a_row', '0');
+export function recordSearchHit(companyId: string): void {
+  setSetting(companyId, 'search_misses_in_a_row', '0');
 }
 
 /** Sets search_blocked_until `search_lockout_days` days out from now and
@@ -424,19 +424,19 @@ export function recordSearchHit(): void {
  * miss without watching the UI — the next scheduler tick's own log line
  * will otherwise just look like an ordinary "used direct URL" send with
  * no visible cause. */
-export function recordSearchLockout(reason: string): void {
-  const days = Math.max(1, Number(get('search_lockout_days')));
+export function recordSearchLockout(companyId: string, reason: string): void {
+  const days = Math.max(1, Number(get(companyId, 'search_lockout_days')));
   const until = Date.now() + days * 86_400_000;
-  setSetting('search_blocked_until', String(until));
-  setSetting('search_misses_in_a_row', '0');
+  setSetting(companyId, 'search_blocked_until', String(until));
+  setSetting(companyId, 'search_misses_in_a_row', '0');
   console.log(`[linkedin/safety] Search-by-name locked out until ${new Date(until).toISOString()} — ${reason}`);
 }
 
 /** Same gate as canSendConnect, scoped to the message caps/counters
  * instead — a campaign sending a lot of follow-up messages shouldn't be
  * able to bypass rate limiting just because it's not a connect request. */
-export function canSendMessage(now = new Date()): SafetyCheckResult {
-  const settings = getSafetySettings();
+export function canSendMessage(companyId: string, now = new Date()): SafetyCheckResult {
+  const settings = getSafetySettings(companyId);
   const gate = checkPauseAndWorkHours(settings, now);
   if (gate) return gate;
 
@@ -444,30 +444,30 @@ export function canSendMessage(now = new Date()): SafetyCheckResult {
   const effectiveDailyCap = Math.max(1, Math.round(settings.dailyMessageCap * multiplier));
   const effectiveWeeklyCap = Math.max(1, Math.round(settings.weeklyMessageCap * multiplier));
 
-  const today = getTodaySafetyState();
+  const today = getTodaySafetyState(companyId);
   if (today.messagesSent >= effectiveDailyCap) {
     return { allowed: false, reason: `Daily message cap reached (${today.messagesSent}/${effectiveDailyCap}).` };
   }
-  const week = getWeekSafetyTotals();
+  const week = getWeekSafetyTotals(companyId);
   if (week.messages >= effectiveWeeklyCap) {
     return { allowed: false, reason: `Weekly message cap reached (${week.messages}/${effectiveWeeklyCap}).` };
   }
   return { allowed: true };
 }
 
-export function recordMessageSent(): void {
-  incrementSafetyCounter('messages_sent');
+export function recordMessageSent(companyId: string): void {
+  incrementSafetyCounter(companyId, 'messages_sent');
 }
 
 /** For the Settings UI / status display — today's counts alongside the
  * *effective* (warm-up-scaled) caps they're being measured against, not
  * just the raw configured numbers, so "12/15" on screen means what it
  * looks like it means. */
-export function getSafetySnapshot(now = new Date()) {
-  const settings = getSafetySettings();
+export function getSafetySnapshot(companyId: string, now = new Date()) {
+  const settings = getSafetySettings(companyId);
   const multiplier = getWarmUpMultiplier(settings, now);
-  const today = getTodaySafetyState();
-  const week = getWeekSafetyTotals();
+  const today = getTodaySafetyState(companyId);
+  const week = getWeekSafetyTotals(companyId);
   return {
     settings,
     warmUpMultiplier: multiplier,

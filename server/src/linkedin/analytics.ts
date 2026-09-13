@@ -48,10 +48,10 @@ export interface CampaignFunnel extends Funnel {
   campaignName: string;
 }
 
-export function getCampaignFunnel(campaignId: string): CampaignFunnel | null {
-  const campaign = getCampaign(campaignId);
+export function getCampaignFunnel(companyId: string, campaignId: string): CampaignFunnel | null {
+  const campaign = getCampaign(companyId, campaignId);
   if (!campaign) return null;
-  return { campaignId, campaignName: campaign.name, ...computeFunnel(listLeadsForCampaign(campaignId)) };
+  return { campaignId, campaignName: campaign.name, ...computeFunnel(listLeadsForCampaign(companyId, campaignId)) };
 }
 
 export interface AnalyticsSummary {
@@ -67,10 +67,14 @@ export interface AnalyticsSummary {
  * daily activity) are for the two questions this summary alone can't
  * answer: "where exactly in the sequence are leads dropping off" and
  * "how much did I actually send today/this week." */
-export function getAnalyticsSummary(): AnalyticsSummary {
-  const campaigns = listCampaigns();
-  const campaignFunnels = campaigns.map((c) => ({ campaignId: c.id, campaignName: c.name, ...computeFunnel(listLeadsForCampaign(c.id)) }));
-  const allLeads = campaigns.flatMap((c) => listLeadsForCampaign(c.id));
+export function getAnalyticsSummary(companyId: string): AnalyticsSummary {
+  const campaigns = listCampaigns(companyId);
+  const campaignFunnels = campaigns.map((c) => ({
+    campaignId: c.id,
+    campaignName: c.name,
+    ...computeFunnel(listLeadsForCampaign(companyId, c.id)),
+  }));
+  const allLeads = campaigns.flatMap((c) => listLeadsForCampaign(companyId, c.id));
   return { overall: computeFunnel(allLeads), campaigns: campaignFunnels };
 }
 
@@ -108,8 +112,8 @@ export interface StepBreakdown {
  * just pointed at the Scheduler's own real traversal instead of a
  * simpler ordinal comparison that no longer applies to an arbitrary
  * graph. */
-export function getCampaignStepBreakdown(campaignId: string): StepBreakdown[] {
-  const { nodes, edges } = getCampaignGraph(campaignId);
+export function getCampaignStepBreakdown(companyId: string, campaignId: string): StepBreakdown[] {
+  const { nodes, edges } = getCampaignGraph(companyId, campaignId);
   const actionNodes = nodes.filter((n) => n.type !== 'wait' && n.type !== 'end' && !isConditionNodeType(n.type));
   if (actionNodes.length === 0) return [];
 
@@ -117,11 +121,11 @@ export function getCampaignStepBreakdown(campaignId: string): StepBreakdown[] {
   // already are — the sequence has permanently ended for them either
   // way, so counting them anywhere in this breakdown would be wrong
   // (they'll never actually reach anything further).
-  const leads = listLeadsForCampaign(campaignId).filter((l) => l.status !== 'skipped' && l.status !== 'withdrawn');
-  const lastNodeIdByLead = new Map(leads.map((l) => [l.id, getLastCompletedNodeId(l.id)]));
+  const leads = listLeadsForCampaign(companyId, campaignId).filter((l) => l.status !== 'skipped' && l.status !== 'withdrawn');
+  const lastNodeIdByLead = new Map(leads.map((l) => [l.id, getLastCompletedNodeId(companyId, l.id)]));
 
   const dueHere = new Map<string, number>();
-  for (const action of findDueActions()) {
+  for (const action of findDueActions(companyId)) {
     if (action.campaignId !== campaignId) continue;
     dueHere.set(action.stepId, (dueHere.get(action.stepId) ?? 0) + 1);
   }
@@ -138,7 +142,7 @@ export function getCampaignStepBreakdown(campaignId: string): StepBreakdown[] {
       }
     }
 
-    const actions = getActionsForStep(node.id);
+    const actions = getActionsForStep(companyId, node.id);
     const succeededLeadIds = new Set(actions.filter((a) => a.status === 'success' && a.leadId).map((a) => a.leadId as string));
     const completed = succeededLeadIds.size;
     const failedLeadIds = new Set(actions.filter((a) => a.status === 'error' && a.leadId).map((a) => a.leadId as string));
@@ -172,9 +176,9 @@ function dayKeyUtc(ms: number): string {
  * (every real send attempt, success or fail), not from lead status
  * snapshots, since a lead's current status only reflects its *latest*
  * state, not how many attempts happened on which days. */
-export function getDailyActivity(days = 30): DailyActivity[] {
+export function getDailyActivity(companyId: string, days = 30): DailyActivity[] {
   const since = Date.now() - days * 86_400_000;
-  const actions = getActionsSince(since);
+  const actions = getActionsSince(companyId, since);
   const byDay = new Map<string, DailyActivity>();
   for (const a of actions) {
     const key = dayKeyUtc(a.executedAt);

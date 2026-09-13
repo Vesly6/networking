@@ -152,7 +152,7 @@ function isSearchLockedPageText(text: string): boolean {
  * fallback that doesn't depend on LinkedIn's exact wording or which page
  * happens to be showing it. See recordSearchLockout()'s own doc comment
  * for what happens once either trips. */
-async function searchByNameAndNavigate(page: Page, name: string, profileUrl: string): Promise<boolean> {
+async function searchByNameAndNavigate(companyId: string, page: Page, name: string, profileUrl: string): Promise<boolean> {
   const targetPath = new URL(profileUrl).pathname.replace(/\/+$/, '');
   try {
     await page.goto('https://www.linkedin.com/feed/', { waitUntil: 'domcontentloaded' });
@@ -181,13 +181,13 @@ async function searchByNameAndNavigate(page: Page, name: string, profileUrl: str
         .evaluate(() => (globalThis as unknown as { document: { body: { innerText: string } } }).document.body.innerText)
         .catch(() => '');
       if (isSearchLockedPageText(bodyText)) {
-        recordSearchLockout('LinkedIn showed its own monthly search-limit message.');
-      } else if (recordSearchMiss() >= 2) {
-        recordSearchLockout('Two consecutive searches returned zero results — likely at the monthly cap even without seeing the exact message.');
+        recordSearchLockout(companyId, 'LinkedIn showed its own monthly search-limit message.');
+      } else if (recordSearchMiss(companyId) >= 2) {
+        recordSearchLockout(companyId, 'Two consecutive searches returned zero results — likely at the monthly cap even without seeing the exact message.');
       }
       return false;
     }
-    recordSearchHit();
+    recordSearchHit(companyId);
 
     let match: (typeof candidates)[number] | null = null;
     for (const candidate of candidates) {
@@ -241,11 +241,11 @@ interface BrowseResult {
   recentActivityDwellMs: number | null;
 }
 
-async function browseProfileBeforeConnect(page: Page, profileUrl: string): Promise<BrowseResult> {
+async function browseProfileBeforeConnect(companyId: string, page: Page, profileUrl: string): Promise<BrowseResult> {
   await page.mouse.wheel(0, 400 + Math.random() * 500);
   await humanDelay(600, 1500);
 
-  const settings = getSafetySettings();
+  const settings = getSafetySettings(companyId);
   if (Math.random() * 100 >= settings.browseActivityProbability) {
     await humanDelay(15_000, 60_000);
     return { visitedRecentActivity: false, recentActivityDwellMs: null };
@@ -331,7 +331,7 @@ export interface ConnectTiming {
  * void — a thrown LinkedInPageError on failure still carries no partial
  * timing, same as before this was added, since the caller's own
  * `responseTimeMs`/`executedAt` already covers the failure case. */
-export async function sendConnectionRequest(profileUrl: string, note?: string, leadName?: string | null): Promise<ConnectTiming> {
+export async function sendConnectionRequest(companyId: string, profileUrl: string, note?: string, leadName?: string | null): Promise<ConnectTiming> {
   const startedAt = Date.now();
   const page = await getLinkedInPage();
 
@@ -339,12 +339,12 @@ export async function sendConnectionRequest(profileUrl: string, note?: string, l
     throw new LinkedInPageError('LinkedIn is showing a checkpoint/verification page — resolve it manually first.');
   }
 
-  const settings = getSafetySettings();
+  const settings = getSafetySettings(companyId);
   let navigatedViaSearch = false;
-  if (leadName?.trim() && shouldUseSearchNavigation(settings)) {
-    navigatedViaSearch = await searchByNameAndNavigate(page, leadName.trim(), profileUrl);
+  if (leadName?.trim() && shouldUseSearchNavigation(companyId, settings)) {
+    navigatedViaSearch = await searchByNameAndNavigate(companyId, page, leadName.trim(), profileUrl);
     if (navigatedViaSearch) {
-      recordSearchUsed();
+      recordSearchUsed(companyId);
       console.log('[linkedin/connect] navigated via search-by-name for', JSON.stringify(leadName));
     }
   }
@@ -362,7 +362,7 @@ export async function sendConnectionRequest(profileUrl: string, note?: string, l
   }
   const loginConfirmedAt = Date.now();
 
-  const browseResult = await browseProfileBeforeConnect(page, profileUrl);
+  const browseResult = await browseProfileBeforeConnect(companyId, page, profileUrl);
 
   // The profile's own displayed name, captured now — before anything below
   // is clicked — so it can be cross-checked against the invite dialog's own

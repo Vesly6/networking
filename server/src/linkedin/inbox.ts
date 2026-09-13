@@ -3,7 +3,6 @@ import { listConversationThreads, scrapeThreadMessages } from './page.js';
 import { isPaused, getSafetySettings } from './safety.js';
 import { getLinkedInPage, withLinkedInBusyGuard } from './browser.js';
 import { getOrCreateTodaysVisitPlan, isWithinVisitWindow } from './visitSchedule.js';
-import { SINGLE_TENANT_PLAN_ID } from './scheduler.js';
 
 export interface InboxSyncResult {
   conversationsSynced: number;
@@ -48,11 +47,11 @@ export interface InboxSyncResult {
  * "auto-stop on reply" the TZ calls out as both ethically important and
  * a real signal the lead should be handled by a human from here, not the
  * Scheduler. */
-export async function syncInbox(isAutomatic = false): Promise<InboxSyncResult> {
+export async function syncInbox(companyId: string, isAutomatic = false): Promise<InboxSyncResult> {
   const result: InboxSyncResult = { conversationsSynced: 0, newMessages: 0, leadsPromoted: 0, leadsMarkedReplied: 0 };
 
   if (isAutomatic) {
-    if (isPaused()) {
+    if (isPaused(companyId)) {
       return { ...result, skippedReason: 'paused' };
     }
     // Visit windows (visitSchedule.ts): this function never opens or closes
@@ -62,9 +61,9 @@ export async function syncInbox(isAutomatic = false): Promise<InboxSyncResult> {
     // "arrived" if a window is currently active. This check just stops
     // this function from scraping while it's not supposed to be looking at
     // all, for the same reason it shouldn't run while paused.
-    const settings = getSafetySettings();
+    const settings = getSafetySettings(companyId);
     if (settings.visitWindowsEnabled) {
-      const visitPlan = await getOrCreateTodaysVisitPlan(settings, SINGLE_TENANT_PLAN_ID);
+      const visitPlan = await getOrCreateTodaysVisitPlan(settings, companyId);
       if (!isWithinVisitWindow(visitPlan)) {
         return { ...result, skippedReason: 'outsideVisitWindow' };
       }
@@ -81,7 +80,7 @@ export async function syncInbox(isAutomatic = false): Promise<InboxSyncResult> {
   await withLinkedInBusyGuard(async () => {
     const threads = await listConversationThreads();
     for (const thread of threads) {
-      const conversation = upsertConversation({
+      const conversation = upsertConversation(companyId, {
         participantUrl: thread.participantUrl,
         participantName: thread.participantName,
         lastMessageAt: Date.now(),
@@ -90,9 +89,9 @@ export async function syncInbox(isAutomatic = false): Promise<InboxSyncResult> {
       });
       result.conversationsSynced++;
 
-      const lead = findLeadByLinkedinUrl(thread.participantUrl);
+      const lead = findLeadByLinkedinUrl(companyId, thread.participantUrl);
       if (lead && lead.status === 'pending') {
-        updateLeadStatus(lead.id, 'connected' satisfies LeadStatus);
+        updateLeadStatus(companyId, lead.id, 'connected' satisfies LeadStatus);
         // Logged so there's an actual timestamp for "when did this lead
         // accept" — this promotion used to just flip status with no record
         // at all of when, which meant the campaign UI had no way to show or
@@ -101,7 +100,7 @@ export async function syncInbox(isAutomatic = false): Promise<InboxSyncResult> {
         // stepId is null since accepting a connection isn't itself a
         // sequence step — it's what the connect step's own outcome gets
         // detected as, asynchronously, by this sync.
-        logAction({
+        logAction(companyId, {
           leadId: lead.id,
           stepId: null,
           actionType: 'connection_accepted',
@@ -117,7 +116,7 @@ export async function syncInbox(isAutomatic = false): Promise<InboxSyncResult> {
       const messages = await scrapeThreadMessages(thread.threadUrl);
       let sawNewInbound = false;
       for (const msg of messages) {
-        const inserted = addMessageIfNew(conversation.id, lead?.id ?? null, msg.direction, msg.content, msg.timestamp);
+        const inserted = addMessageIfNew(companyId, conversation.id, lead?.id ?? null, msg.direction, msg.content, msg.timestamp);
         if (inserted) {
           result.newMessages++;
           if (msg.direction === 'in') sawNewInbound = true;
@@ -125,7 +124,7 @@ export async function syncInbox(isAutomatic = false): Promise<InboxSyncResult> {
       }
 
       if (sawNewInbound && lead && lead.status !== 'replied' && lead.status !== 'skipped') {
-        updateLeadStatus(lead.id, 'replied' satisfies LeadStatus);
+        updateLeadStatus(companyId, lead.id, 'replied' satisfies LeadStatus);
         result.leadsMarkedReplied++;
       }
     }

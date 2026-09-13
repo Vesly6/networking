@@ -20,15 +20,15 @@ import { withLinkedInBusyGuard } from './browser.js';
 
 const LAST_RUN_SETTING_KEY = 'humanize_last_run_at';
 
-function getLastRunAt(): number | null {
-  const raw = getSetting(LAST_RUN_SETTING_KEY);
+function getLastRunAt(companyId: string): number | null {
+  const raw = getSetting(companyId, LAST_RUN_SETTING_KEY);
   if (!raw) return null;
   const n = Number(raw);
   return Number.isFinite(n) ? n : null;
 }
 
-function recordRunNow(now: number): void {
-  setSetting(LAST_RUN_SETTING_KEY, String(now));
+function recordRunNow(companyId: string, now: number): void {
+  setSetting(companyId, LAST_RUN_SETTING_KEY, String(now));
 }
 
 export interface HumanizeResult {
@@ -45,15 +45,15 @@ export interface HumanizeResult {
  * actually likes something, so a meaningful share of eligible opportunities
  * still do zero likes, matching how a real person doesn't react to
  * something every single time they open the app. */
-export async function maybeRunHumanizePass(now = Date.now()): Promise<HumanizeResult> {
-  const settings = getSafetySettings();
+export async function maybeRunHumanizePass(companyId: string, now = Date.now()): Promise<HumanizeResult> {
+  const settings = getSafetySettings(companyId);
 
-  if (isPaused()) return { ran: false, liked: 0, skippedReason: 'paused' };
+  if (isPaused(companyId)) return { ran: false, liked: 0, skippedReason: 'paused' };
   if (!isWithinWorkHours(settings, new Date(now))) {
     return { ran: false, liked: 0, skippedReason: 'outsideWorkHours' };
   }
 
-  const lastRunAt = getLastRunAt();
+  const lastRunAt = getLastRunAt(companyId);
   const minGapMs = Math.max(0, settings.likesMinGapMinutes) * 60_000;
   if (lastRunAt !== null && now - lastRunAt < minGapMs) {
     return { ran: false, liked: 0, skippedReason: 'tooSoon' };
@@ -64,7 +64,7 @@ export async function maybeRunHumanizePass(now = Date.now()): Promise<HumanizeRe
   // `likesMinGapMinutes` out from now, not from whenever the probability
   // next happens to hit. Recorded before the roll so a crash/error further
   // down can't leave this stuck re-attempting every single tick.
-  recordRunNow(now);
+  recordRunNow(companyId, now);
 
   if (Math.random() * 100 >= settings.likesProbability) {
     return { ran: false, liked: 0, skippedReason: 'probabilityMiss' };
@@ -78,7 +78,7 @@ export async function maybeRunHumanizePass(now = Date.now()): Promise<HumanizeRe
   const startedAt = Date.now();
   try {
     const liked = await withLinkedInBusyGuard(() => likeRecentFeedPosts(maxLikes));
-    logAction({
+    logAction(companyId, {
       leadId: null,
       stepId: null,
       actionType: 'like',
@@ -91,7 +91,7 @@ export async function maybeRunHumanizePass(now = Date.now()): Promise<HumanizeRe
     return { ran: true, liked };
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to like feed posts';
-    logAction({
+    logAction(companyId, {
       leadId: null,
       stepId: null,
       actionType: 'like',

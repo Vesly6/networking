@@ -31,6 +31,9 @@ export const PERMISSIONS = {
   'integrations.openai.use': 'Naudoti OpenAI funkcijas',
   'integrations.anthropic.use': 'Naudoti el. laiškų generatorių',
   'integrations.elevenlabs.use': 'Naudoti balso atpažinimą',
+  // Deliberately NOT part of DEFAULT_NEW_COMPANY_KEYS below, unlike every
+  // other integration key — see that constant's own doc comment.
+  'integrations.linkedin.use': 'Naudoti LinkedIn automatizaciją',
   'api_keys.view': 'Matyti API raktus',
   'api_keys.edit': 'Redaguoti API raktus',
   'api_keys.set_mode': 'Keisti Shared/Individual režimą',
@@ -51,6 +54,23 @@ export const ALL_PERMISSION_KEYS = Object.keys(PERMISSIONS) as PermissionKey[];
 export function isPermissionKey(value: unknown): value is PermissionKey {
   return typeof value === 'string' && Object.prototype.hasOwnProperty.call(PERMISSIONS, value);
 }
+
+/** Keys a brand-new company must NOT receive by default, unlike every
+ * other key (accounts/db.ts's createCompany grants
+ * DEFAULT_NEW_COMPANY_KEYS below, not the full ALL_PERMISSION_KEYS list).
+ * Currently just LinkedIn: that feature is built around one single shared
+ * Chrome/browser session for the *entire deployment* (see linkedin/
+ * browser.ts — one module-level browser handle, one CDP connection), not
+ * one session per company. Auto-granting it to every new company the
+ * instant they register would let a second company's campaign trigger a
+ * real LinkedIn send from the FIRST company's own logged-in account — the
+ * platform grants this explicitly, per company, only once a real,
+ * dedicated browser/account setup actually exists for that company. */
+export const KEYS_EXCLUDED_FROM_NEW_COMPANY_DEFAULT: readonly PermissionKey[] = ['integrations.linkedin.use'];
+
+export const DEFAULT_NEW_COMPANY_KEYS: PermissionKey[] = ALL_PERMISSION_KEYS.filter(
+  (key) => !KEYS_EXCLUDED_FROM_NEW_COMPANY_DEFAULT.includes(key),
+);
 
 /** The 1:1 rename mapping from today's fixed UserPermissions booleans
  * (accounts/db.ts) onto the new registry keys — used exactly once, by the

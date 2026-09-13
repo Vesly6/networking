@@ -62,7 +62,7 @@ import {
   setWebhookUrl,
   setWebhookHooks,
 } from './zadarma.js';
-import { insertIncomingSms, listIncomingSms } from './smsInbox/db.js';
+import { insertIncomingSms, listIncomingSms, backfillSmsInboxCompanyId } from './smsInbox/db.js';
 import { TranscriptionError, transcribeFromUrl, transcribeFromBuffer } from './elevenlabs.js';
 import {
   ContactParseError,
@@ -132,7 +132,7 @@ import {
   issueImpersonationToken,
   issuePlatformImpersonationToken,
 } from './auth.js';
-import { can, effectivePermissions } from './permissions/effective.js';
+import { can, effectivePermissions, companyCeiling } from './permissions/effective.js';
 import { ALL_PERMISSION_KEYS, isPermissionKey, PERMISSIONS, type PermissionKey } from './permissions/registry.js';
 import { ApolloApiError, searchPeople, searchCompanies, enrichPerson, pollWebhookResult, getCreditUsageStats } from './apollo.js';
 import {
@@ -185,7 +185,7 @@ import {
 } from './importHistory/db.js';
 import { LinkedInBrowserError, humanDelay, withLinkedInBusyGuard } from './linkedin/browser.js';
 import { LinkedInPageError, getLinkedInStatus, sendConnectionRequest, replyInThread, searchLeads } from './linkedin/page.js';
-import { logAction, getRecentActions } from './linkedin/db.js';
+import { logAction, getRecentActions, backfillLinkedInCompanyId } from './linkedin/db.js';
 import {
   listCampaigns,
   createCampaign,
@@ -217,7 +217,7 @@ import {
   setPaused,
 } from './linkedin/safety.js';
 import { getOrCreateTodaysPlan, nextDueSlot } from './linkedin/dailyPlan.js';
-import { runSchedulerTick, findStaleInvites, withdrawInvite, SINGLE_TENANT_PLAN_ID } from './linkedin/scheduler.js';
+import { runSchedulerTick, findStaleInvites, withdrawInvite } from './linkedin/scheduler.js';
 import { syncInbox } from './linkedin/inbox.js';
 import { getOrCreateTodaysVisitPlan, isWithinVisitWindow, nextVisitWindowStart } from './linkedin/visitSchedule.js';
 import { getAnalyticsSummary, getCampaignStepBreakdown, getDailyActivity } from './linkedin/analytics.js';
@@ -744,7 +744,17 @@ app.post('/api/zadarma/sms-webhook', (req, res) => {
   const fromNumber = str(resultObj.caller_id) ?? str(body.caller_id) ?? str(body.from) ?? str(body.sender) ?? str(body.msisdn);
   const toNumber = str(resultObj.caller_did) ?? str(body.called_did) ?? str(body.to) ?? str(body.destination);
   const message = str(resultObj.text) ?? str(body.text) ?? str(body.message) ?? str(body.sms);
+  // Legacy, company-less URL — see the per-company routes right below for
+  // the real fix (multi-tenant isolation). Kept alive as a safety-net
+  // fallback so a company that registered this URl before that fix
+  // shipped doesn't silently stop recording SMS on deploy day; attributed
+  // to firstCompanyId (the one deployment that's actually used this
+  // feature to date) as the least-surprising default — the closure here
+  // only ever runs after the boot sequence further down has already
+  // assigned it, same as every other firstCompanyId reference in this
+  // file (e.g. the LinkedIn scheduler interval).
   insertIncomingSms({
+    companyId: firstCompanyId,
     event: str(body.event),
     fromNumber,
     toNumber,
@@ -752,7 +762,59 @@ app.post('/api/zadarma/sms-webhook', (req, res) => {
     rawPayload: JSON.stringify(body),
     signature: str(req.headers['signature']),
   });
-  console.log('[sms-webhook] saved to incoming_sms', { fromNumber, toNumber, message });
+  console.log('[sms-webhook] saved to incoming_sms (legacy, company-less URL)', { fromNumber, toNumber, message });
+  res.status(200).json({ ok: true });
+});
+
+// The real per-company fix, mirroring the existing Instantly webhook's own
+// solution to the identical problem (POST /api/instantly/webhook/:companyId,
+// see its own doc comment): Zadarma's SMS payload has no field of its own
+// to route by, so the company id goes in the URL path itself — this
+// company's own Zadarma account is what's actually configured (via POST
+// /api/zadarma/setup-sms-webhook below) to call back to this exact URL.
+// req.params.companyId is trusted as-is, same reasoning as the Instantly
+// route: it's this company's own id, already an unguessable UUID, never
+// user-suppliable content.
+app.get('/api/zadarma/sms-webhook/:companyId', (req, res) => {
+  console.log('[sms-webhook] GET verification hit', { companyId: req.params.companyId, query: req.query, ip: req.ip });
+  const echo = req.query.zd_echo;
+  if (typeof echo === 'string') {
+    res.status(200).send(echo);
+    return;
+  }
+  res.status(200).send('ok');
+});
+
+app.post('/api/zadarma/sms-webhook/:companyId', (req, res) => {
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  console.log('[sms-webhook] POST received', {
+    companyId: req.params.companyId,
+    contentType: req.headers['content-type'],
+    body,
+  });
+  const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : null);
+  let resultObj: Record<string, unknown> = {};
+  if (typeof body.result === 'string') {
+    try {
+      resultObj = JSON.parse(body.result);
+    } catch {
+      // Malformed/unexpected result string — falls through to the
+      // top-level fallbacks below, same behavior as before this fix.
+    }
+  }
+  const fromNumber = str(resultObj.caller_id) ?? str(body.caller_id) ?? str(body.from) ?? str(body.sender) ?? str(body.msisdn);
+  const toNumber = str(resultObj.caller_did) ?? str(body.called_did) ?? str(body.to) ?? str(body.destination);
+  const message = str(resultObj.text) ?? str(body.text) ?? str(body.message) ?? str(body.sms);
+  insertIncomingSms({
+    companyId: req.params.companyId,
+    event: str(body.event),
+    fromNumber,
+    toNumber,
+    message,
+    rawPayload: JSON.stringify(body),
+    signature: str(req.headers['signature']),
+  });
+  console.log('[sms-webhook] saved to incoming_sms', { companyId: req.params.companyId, fromNumber, toNumber, message });
   res.status(200).json({ ok: true });
 });
 
@@ -2222,19 +2284,29 @@ app.post(
       return;
     }
     const creds = requireZadarmaCreds(req);
-    await setWebhookUrl(`${base}/api/zadarma/sms-webhook`, creds);
+    // Company id in the URL itself — see the per-company receiver routes'
+    // own doc comment (above requireAuth) for why, mirroring the existing
+    // Instantly webhook's identical fix.
+    const webhookUrl = `${base}/api/zadarma/sms-webhook/${req.auth!.companyId}`;
+    await setWebhookUrl(webhookUrl, creds);
     await setWebhookHooks({ sms: true }, creds);
-    res.json({ ok: true, url: `${base}/api/zadarma/sms-webhook` });
+    res.json({ ok: true, url: webhookUrl });
   }),
 );
 
 // Read side for the SMS inbox below — the frontend polls/loads this like
 // any other list endpoint. See the public receiver route (above
-// requireAuth) for why storage happens there instead of here.
+// requireAuth) for why storage happens there instead of here. Gated the
+// same as every other Zadarma-backed route (requireZadarmaCreds's own
+// helpers) — this route had no permission check at all before, unlike
+// POST /api/sms/send.
 app.get(
   '/api/sms-inbox',
-  asyncHandler(async (_req, res) => {
-    res.json({ messages: listIncomingSms() });
+  asyncHandler(async (req, res) => {
+    if (!integrationPermissionGranted(req, 'integrations.zadarma.use')) {
+      throw new IntegrationNotConfiguredError();
+    }
+    res.json({ messages: listIncomingSms(req.auth!.companyId) });
   }),
 );
 
@@ -3131,6 +3203,27 @@ app.post(
 // CellHoverEditor's SMS-send/contact-delete confirmDialog() for the
 // established pattern this follows.
 
+// Hard backend gate on the entire feature — closes a real gap found during
+// the company-scoping audit: before this, every /api/linkedin/* route sat
+// behind only the generic requireAuth (any authenticated user of ANY
+// company), with the frontend's enabledFeatures-driven nav tab as the only
+// thing hiding it — never independently enforced server-side. Reuses the
+// same integrationPermissionGranted() helper the six requireXKey() helpers
+// already use for the other integrations (so impersonation resolves
+// correctly for free), gating on the new integrations.linkedin.use key —
+// deliberately NOT granted to a new company by default (see that key's own
+// registry doc comment) since the browser session behind this feature is
+// still single-tenant. One line covers every route below since they all
+// share this one path prefix.
+function requireLinkedInAccess(req: Request, res: Response, next: NextFunction) {
+  if (!integrationPermissionGranted(req, 'integrations.linkedin.use')) {
+    res.status(403).json({ error: 'Neturite teisės naudoti LinkedIn automatizacijos' });
+    return;
+  }
+  next();
+}
+app.use('/api/linkedin', requireLinkedInAccess);
+
 app.get(
   '/api/linkedin/status',
   asyncHandler(async (_req, res) => {
@@ -3143,7 +3236,7 @@ app.get(
   '/api/linkedin/actions',
   asyncHandler(async (req, res) => {
     const limit = req.query.limit ? Number(req.query.limit) : undefined;
-    res.json({ actions: getRecentActions(limit) });
+    res.json({ actions: getRecentActions(req.auth!.companyId, limit) });
   }),
 );
 
@@ -3165,16 +3258,16 @@ app.post(
       res.status(400).json({ error: 'Missing "profileUrl"' });
       return;
     }
-    const safetyCheck = canSendConnect();
+    const safetyCheck = canSendConnect(req.auth!.companyId);
     if (!safetyCheck.allowed) {
       res.status(429).json({ error: safetyCheck.reason ?? 'Blocked by the Safety Engine' });
       return;
     }
     const startedAt = Date.now();
     try {
-      const timing = await withLinkedInBusyGuard(() => sendConnectionRequest(profileUrl, note));
-      recordConnectSent();
-      logAction({
+      const timing = await withLinkedInBusyGuard(() => sendConnectionRequest(req.auth!.companyId, profileUrl, note));
+      recordConnectSent(req.auth!.companyId);
+      logAction(req.auth!.companyId, {
         leadId: null,
         stepId: null,
         actionType: 'connect',
@@ -3188,7 +3281,7 @@ app.post(
       res.json({ ok: true });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to send connection request';
-      logAction({
+      logAction(req.auth!.companyId, {
         leadId: null,
         stepId: null,
         actionType: 'connect',
@@ -3236,16 +3329,16 @@ app.post(
     const results: Array<{ profileUrl: string; status: 'success' | 'error' | 'skipped'; detail: string | null }> = [];
     for (let i = 0; i < profileUrls.length; i++) {
       const profileUrl = profileUrls[i];
-      const safetyCheck = canSendConnect();
+      const safetyCheck = canSendConnect(req.auth!.companyId);
       if (!safetyCheck.allowed) {
         results.push({ profileUrl, status: 'skipped', detail: safetyCheck.reason ?? 'Blocked by the Safety Engine' });
         break;
       }
       const startedAt = Date.now();
       try {
-        const timing = await withLinkedInBusyGuard(() => sendConnectionRequest(profileUrl));
-        recordConnectSent();
-        logAction({
+        const timing = await withLinkedInBusyGuard(() => sendConnectionRequest(req.auth!.companyId, profileUrl));
+        recordConnectSent(req.auth!.companyId);
+        logAction(req.auth!.companyId, {
           leadId: null,
           stepId: null,
           actionType: 'connect',
@@ -3259,7 +3352,7 @@ app.post(
         results.push({ profileUrl, status: 'success', detail: null });
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Failed to send connection request';
-        logAction({
+        logAction(req.auth!.companyId, {
           leadId: null,
           stepId: null,
           actionType: 'connect',
@@ -3284,8 +3377,8 @@ app.post(
 // caps, the pause state, and the raw settings themselves.
 app.get(
   '/api/linkedin/safety',
-  asyncHandler(async (_req, res) => {
-    res.json(getSafetySnapshot());
+  asyncHandler(async (req, res) => {
+    res.json(getSafetySnapshot(req.auth!.companyId));
   }),
 );
 
@@ -3298,8 +3391,8 @@ app.get(
 app.get(
   '/api/linkedin/plan/today',
   asyncHandler(async (req, res) => {
-    const settings = getSafetySettings();
-    const snapshot = getSafetySnapshot();
+    const settings = getSafetySettings(req.auth!.companyId);
+    const snapshot = getSafetySnapshot(req.auth!.companyId);
     const plan = await getOrCreateTodaysPlan(settings, snapshot.effectiveDailyCap, req.auth!.companyId);
     const firedCount = Math.min(snapshot.connectsToday, plan.targetCount);
     const nextSlot = nextDueSlot(plan, Date.now(), snapshot.connectsToday);
@@ -3318,8 +3411,8 @@ app.get(
 
 app.get(
   '/api/linkedin/visit-plan/today',
-  asyncHandler(async (_req, res) => {
-    const settings = getSafetySettings();
+  asyncHandler(async (req, res) => {
+    const settings = getSafetySettings(req.auth!.companyId);
     // Short-circuits without ever touching visit_schedule when the
     // feature is off, so a company that's never turned this on doesn't
     // grow a visit_schedule row every single day purely from the
@@ -3328,7 +3421,7 @@ app.get(
       res.json({ enabled: false, date: null, windows: [], currentlyOnline: true, nextWindowStart: null });
       return;
     }
-    const plan = await getOrCreateTodaysVisitPlan(settings, SINGLE_TENANT_PLAN_ID);
+    const plan = await getOrCreateTodaysVisitPlan(settings, req.auth!.companyId);
     const now = Date.now();
     res.json({
       enabled: true,
@@ -3346,8 +3439,8 @@ app.get(
 app.post(
   '/api/linkedin/safety/settings',
   asyncHandler(async (req, res) => {
-    updateSafetySettings(req.body ?? {});
-    res.json(getSafetySnapshot());
+    updateSafetySettings(req.auth!.companyId, req.body ?? {});
+    res.json(getSafetySnapshot(req.auth!.companyId));
   }),
 );
 
@@ -3361,8 +3454,8 @@ app.post(
   '/api/linkedin/pause',
   asyncHandler(async (req, res) => {
     const paused = req.body?.paused !== false;
-    setPaused(paused);
-    res.json(getSafetySnapshot());
+    setPaused(req.auth!.companyId, paused);
+    res.json(getSafetySnapshot(req.auth!.companyId));
   }),
 );
 
@@ -3373,8 +3466,8 @@ app.post(
 // deleting a table in this app's own main Table view.
 app.get(
   '/api/linkedin/campaigns',
-  asyncHandler(async (_req, res) => {
-    res.json({ campaigns: listCampaigns() });
+  asyncHandler(async (req, res) => {
+    res.json({ campaigns: listCampaigns(req.auth!.companyId) });
   }),
 );
 
@@ -3386,14 +3479,14 @@ app.post(
       res.status(400).json({ error: 'Missing "name"' });
       return;
     }
-    res.json(createCampaign(name));
+    res.json(createCampaign(req.auth!.companyId, name));
   }),
 );
 
 app.get(
   '/api/linkedin/campaigns/:id',
   asyncHandler(async (req, res) => {
-    const campaign = getCampaign(req.params.id);
+    const campaign = getCampaign(req.auth!.companyId, req.params.id);
     if (!campaign) {
       res.status(404).json({ error: 'Campaign not found' });
       return;
@@ -3410,8 +3503,8 @@ app.patch(
       res.status(400).json({ error: 'Invalid "status"' });
       return;
     }
-    updateCampaignStatus(req.params.id, status);
-    const campaign = getCampaign(req.params.id);
+    updateCampaignStatus(req.auth!.companyId, req.params.id, status);
+    const campaign = getCampaign(req.auth!.companyId, req.params.id);
     if (!campaign) {
       res.status(404).json({ error: 'Campaign not found' });
       return;
@@ -3423,7 +3516,7 @@ app.patch(
 app.delete(
   '/api/linkedin/campaigns/:id',
   asyncHandler(async (req, res) => {
-    deleteCampaign(req.params.id);
+    deleteCampaign(req.auth!.companyId, req.params.id);
     res.json({ ok: true });
   }),
 );
@@ -3431,7 +3524,7 @@ app.delete(
 app.get(
   '/api/linkedin/campaigns/:id/leads',
   asyncHandler(async (req, res) => {
-    res.json({ leads: listLeadsForCampaign(req.params.id) });
+    res.json({ leads: listLeadsForCampaign(req.auth!.companyId, req.params.id) });
   }),
 );
 
@@ -3444,7 +3537,7 @@ app.post(
   '/api/linkedin/campaigns/:id/leads',
   asyncHandler(async (req, res) => {
     const leads = Array.isArray(req.body?.leads) ? req.body.leads : [];
-    const inserted = addLeads(req.params.id, leads);
+    const inserted = addLeads(req.auth!.companyId, req.params.id, leads);
     res.json({ inserted });
   }),
 );
@@ -3452,7 +3545,7 @@ app.post(
 app.delete(
   '/api/linkedin/leads/:id',
   asyncHandler(async (req, res) => {
-    deleteLead(req.params.id);
+    deleteLead(req.auth!.companyId, req.params.id);
     res.json({ ok: true });
   }),
 );
@@ -3490,7 +3583,7 @@ app.patch(
       res.status(400).json({ error: 'Invalid "status"' });
       return;
     }
-    updateLeadStatus(req.params.id, status);
+    updateLeadStatus(req.auth!.companyId, req.params.id, status);
     res.json({ ok: true });
   }),
 );
@@ -3511,7 +3604,7 @@ const SEQUENCE_EDGE_BRANCHES = new Set(['default', 'yes', 'no']);
 app.get(
   '/api/linkedin/campaigns/:id/graph',
   asyncHandler(async (req, res) => {
-    res.json(getCampaignGraph(req.params.id));
+    res.json(getCampaignGraph(req.auth!.companyId, req.params.id));
   }),
 );
 
@@ -3563,7 +3656,7 @@ app.put(
       }
       edges.push({ fromNodeId, toNodeId: e.toNodeId, branch: e.branch });
     }
-    saveCampaignGraph(req.params.id, nodes, edges);
+    saveCampaignGraph(req.auth!.companyId, req.params.id, nodes, edges);
     res.json({ ok: true });
   }),
 );
@@ -3572,13 +3665,13 @@ app.put(
 // configured OpenAI key (if any) is resolved here from the authenticated
 // request and passed through for the optional auto-personalize step
 // (safety.ts's auto_personalize_enabled) — scheduler.ts itself stays
-// company-agnostic (see its own doc comment on why) and never looks this
-// up on its own.
+// otherwise agnostic to which company it's serving (it just reads whatever
+// companyId it's given) and never looks this up on its own.
 app.post(
   '/api/linkedin/scheduler/run',
   asyncHandler(async (req, res) => {
     const openaiApiKey = getCompanyIntegrations(req.auth!.companyId)?.openaiApiKey ?? undefined;
-    res.json(await runSchedulerTick(false, openaiApiKey));
+    res.json(await runSchedulerTick(req.auth!.companyId, false, openaiApiKey));
   }),
 );
 
@@ -3590,7 +3683,7 @@ app.get(
   '/api/linkedin/stale-invites',
   asyncHandler(async (req, res) => {
     const days = Number(req.query.days);
-    res.json({ stale: findStaleInvites(Number.isFinite(days) && days >= 0 ? days : 14) });
+    res.json({ stale: findStaleInvites(req.auth!.companyId, Number.isFinite(days) && days >= 0 ? days : 14) });
   }),
 );
 
@@ -3605,7 +3698,7 @@ app.post(
       res.status(400).json({ error: 'Missing "leadId"' });
       return;
     }
-    res.json(await withdrawInvite(leadId));
+    res.json(await withdrawInvite(req.auth!.companyId, leadId));
   }),
 );
 
@@ -3618,21 +3711,21 @@ app.post(
 
 app.get(
   '/api/linkedin/inbox',
-  asyncHandler(async (_req, res) => {
-    res.json({ conversations: listConversations() });
+  asyncHandler(async (req, res) => {
+    res.json({ conversations: listConversations(req.auth!.companyId) });
   }),
 );
 
 app.get(
   '/api/linkedin/inbox/:id/messages',
   asyncHandler(async (req, res) => {
-    const conversation = getConversation(req.params.id);
+    const conversation = getConversation(req.auth!.companyId, req.params.id);
     if (!conversation) {
       res.status(404).json({ error: 'Conversation not found' });
       return;
     }
-    markConversationRead(req.params.id);
-    res.json({ conversation, messages: listMessagesForConversation(req.params.id) });
+    markConversationRead(req.auth!.companyId, req.params.id);
+    res.json({ conversation, messages: listMessagesForConversation(req.auth!.companyId, req.params.id) });
   }),
 );
 
@@ -3642,7 +3735,7 @@ app.get(
 app.post(
   '/api/linkedin/inbox/:id/reply',
   asyncHandler(async (req, res) => {
-    const conversation = getConversation(req.params.id);
+    const conversation = getConversation(req.auth!.companyId, req.params.id);
     if (!conversation) {
       res.status(404).json({ error: 'Conversation not found' });
       return;
@@ -3652,7 +3745,7 @@ app.post(
       res.status(400).json({ error: 'Missing "text"' });
       return;
     }
-    const check = canSendMessage();
+    const check = canSendMessage(req.auth!.companyId);
     if (!check.allowed) {
       res.status(429).json({ error: check.reason });
       return;
@@ -3660,9 +3753,9 @@ app.post(
     const startedAt = Date.now();
     try {
       await replyInThread(conversation.participantUrl, text);
-      recordMessageSent();
-      addMessageIfNew(conversation.id, conversation.leadId, 'out', text, startedAt);
-      logAction({
+      recordMessageSent(req.auth!.companyId);
+      addMessageIfNew(req.auth!.companyId, conversation.id, conversation.leadId, 'out', text, startedAt);
+      logAction(req.auth!.companyId, {
         leadId: conversation.leadId,
         stepId: null,
         actionType: 'reply',
@@ -3675,7 +3768,7 @@ app.post(
       res.json({ ok: true });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to send reply';
-      logAction({
+      logAction(req.auth!.companyId, {
         leadId: conversation.leadId,
         stepId: null,
         actionType: 'reply',
@@ -3694,8 +3787,8 @@ app.post(
 // runs automatically on an interval (see the bottom of this file).
 app.post(
   '/api/linkedin/inbox/sync',
-  asyncHandler(async (_req, res) => {
-    res.json(await syncInbox());
+  asyncHandler(async (req, res) => {
+    res.json(await syncInbox(req.auth!.companyId));
   }),
 );
 
@@ -3706,12 +3799,12 @@ app.post(
 app.post(
   '/api/linkedin/inbox/:id/suggest-reply',
   asyncHandler(async (req, res) => {
-    const conversation = getConversation(req.params.id);
+    const conversation = getConversation(req.auth!.companyId, req.params.id);
     if (!conversation) {
       res.status(404).json({ error: 'Conversation not found' });
       return;
     }
-    const messages = listMessagesForConversation(req.params.id);
+    const messages = listMessagesForConversation(req.auth!.companyId, req.params.id);
     const result = await suggestLinkedInReply(
       conversation.participantName,
       messages.map((m) => ({ direction: m.direction, content: m.content })),
@@ -3725,15 +3818,15 @@ app.post(
 
 app.get(
   '/api/linkedin/analytics',
-  asyncHandler(async (_req, res) => {
-    res.json(getAnalyticsSummary());
+  asyncHandler(async (req, res) => {
+    res.json(getAnalyticsSummary(req.auth!.companyId));
   }),
 );
 
 app.get(
   '/api/linkedin/campaigns/:id/analytics/steps',
   asyncHandler(async (req, res) => {
-    res.json({ steps: getCampaignStepBreakdown(req.params.id) });
+    res.json({ steps: getCampaignStepBreakdown(req.auth!.companyId, req.params.id) });
   }),
 );
 
@@ -3741,7 +3834,7 @@ app.get(
   '/api/linkedin/analytics/daily',
   asyncHandler(async (req, res) => {
     const days = Number(req.query.days);
-    res.json({ days: getDailyActivity(Number.isFinite(days) && days > 0 ? days : 30) });
+    res.json({ days: getDailyActivity(req.auth!.companyId, Number.isFinite(days) && days > 0 ? days : 30) });
   }),
 );
 
@@ -4545,6 +4638,32 @@ backfillTableOwners();
 // can()/requirePermission2() check.
 migratePermissionsIfNeeded();
 
+// LinkedIn/SMS company-scoping fast-follow (see linkedin/db.ts's
+// backfillLinkedInCompanyId and smsInbox/db.ts's backfillSmsInboxCompanyId
+// for the exact mechanism — same "UPDATE ... WHERE company_id = ''"
+// idempotent shape as tableData/db.ts's own backfillCompanyId above,
+// harmless to run every boot). Assigns every pre-existing row in both
+// features to firstCompanyId — the one deployment that's actually used
+// LinkedIn/SMS to date — so nothing already recorded goes missing under
+// the new per-company scoping.
+backfillLinkedInCompanyId(firstCompanyId);
+backfillSmsInboxCompanyId(firstCompanyId);
+
+// One-time seed for the new integrations.linkedin.use permission, which
+// didn't exist when migratePermissionsIfNeeded() above originally ran (and
+// that migration is now permanently marked done, so it won't pick this up
+// on its own) — granted ONLY to firstCompanyId, deliberately not to every
+// company the way the rest of the registry is, since the LinkedIn feature
+// is still built around one shared browser session for the whole
+// deployment (see that permission's own registry doc comment). Guarded so
+// it's a no-op on every later boot once the grant already exists.
+{
+  const existingGrants = listGrantedKeys('company', firstCompanyId);
+  if (!existingGrants.includes('integrations.linkedin.use')) {
+    setGrantedKeys('company', firstCompanyId, [...existingGrants, 'integrations.linkedin.use'], 'platform');
+  }
+}
+
 // One-time seed, same "idempotent, real on the very first boot after this
 // shipped, a no-op forever after" shape as backfillCompanyId above — moves
 // the first company's own already-working credentials (today's
@@ -4637,31 +4756,51 @@ app.listen(PORT, HOST, () => {
 // /api/linkedin/scheduler/run, POST /api/linkedin/inbox/sync) are
 // unchanged and still work exactly as before for an explicit click — only
 // the *automatic* path is new.
+// Loops over every company currently holding integrations.linkedin.use
+// (checked fresh each tick via companyCeiling — a company's own ceiling IS
+// its super_admin's effective set, and a worker can never hold more than
+// that) rather than a single hardcoded company, same shape as the daily
+// backup tick just below (`for (const table of listBackupFlaggedTables())`,
+// each entry carrying its own companyId). In practice this loop's body
+// runs at most once today (only one company is ever granted this key — see
+// the registry's own doc comment on why it isn't a default grant), but it
+// no longer has to assume that: a second company being granted access
+// later needs no code change here.
 const SCHEDULER_TICK_INTERVAL_MS = 5 * 60 * 1000;
 const INBOX_SYNC_INTERVAL_MS = 10 * 60 * 1000;
 
+function companiesWithLinkedInAccess(): string[] {
+  return listCompanies()
+    .filter((c) => companyCeiling(c.id).has('integrations.linkedin.use'))
+    .map((c) => c.id);
+}
+
 setInterval(() => {
-  // Resolved fresh on every tick, not captured once at startup — lets a
-  // key added/changed later via the Integrations UI take effect on the
-  // very next automatic tick rather than needing a server restart.
-  const openaiApiKey = getCompanyIntegrations(firstCompanyId)?.openaiApiKey ?? undefined;
-  runSchedulerTick(true, openaiApiKey)
-    .then((result) => {
-      if (result.autoExecuted > 0 || result.circuitBreakerTripped || result.errors > 0) {
-        console.log('[linkedin/scheduler] automatic tick:', result);
-      }
-    })
-    .catch((err) => console.error('[linkedin/scheduler] automatic tick failed:', err));
+  for (const companyId of companiesWithLinkedInAccess()) {
+    // Resolved fresh on every tick, not captured once at startup — lets a
+    // key added/changed later via the Integrations UI take effect on the
+    // very next automatic tick rather than needing a server restart.
+    const openaiApiKey = getCompanyIntegrations(companyId)?.openaiApiKey ?? undefined;
+    runSchedulerTick(companyId, true, openaiApiKey)
+      .then((result) => {
+        if (result.autoExecuted > 0 || result.circuitBreakerTripped || result.errors > 0) {
+          console.log('[linkedin/scheduler] automatic tick for company', companyId, ':', result);
+        }
+      })
+      .catch((err) => console.error('[linkedin/scheduler] automatic tick failed for company', companyId, ':', err));
+  }
 }, SCHEDULER_TICK_INTERVAL_MS);
 
 setInterval(() => {
-  syncInbox(true)
-    .then((result) => {
-      if (result.newMessages > 0 || result.leadsPromoted > 0 || result.leadsMarkedReplied > 0) {
-        console.log('[linkedin/inbox] automatic sync:', result);
-      }
-    })
-    .catch((err) => console.error('[linkedin/inbox] automatic sync failed:', err));
+  for (const companyId of companiesWithLinkedInAccess()) {
+    syncInbox(companyId, true)
+      .then((result) => {
+        if (result.newMessages > 0 || result.leadsPromoted > 0 || result.leadsMarkedReplied > 0) {
+          console.log('[linkedin/inbox] automatic sync for company', companyId, ':', result);
+        }
+      })
+      .catch((err) => console.error('[linkedin/inbox] automatic sync failed for company', companyId, ':', err));
+  }
 }, INBOX_SYNC_INTERVAL_MS);
 
 // Daily table backups (see tableData/db.ts's own doc comments on the

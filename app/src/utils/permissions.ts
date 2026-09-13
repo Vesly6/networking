@@ -24,6 +24,11 @@ export const PERMISSIONS = {
   'integrations.openai.use': 'Naudoti OpenAI funkcijas',
   'integrations.anthropic.use': 'Naudoti el. laiškų generatorių',
   'integrations.elevenlabs.use': 'Naudoti balso atpažinimą',
+  // Deliberately not granted to a new company by default server-side (see
+  // server/src/permissions/registry.ts's DEFAULT_NEW_COMPANY_KEYS) — the
+  // feature is built around one single shared LinkedIn/Chrome session for
+  // the whole deployment, not one per company.
+  'integrations.linkedin.use': 'Naudoti LinkedIn automatizaciją',
   'api_keys.view': 'Matyti API raktus',
   'api_keys.edit': 'Redaguoti API raktus',
   'api_keys.set_mode': 'Keisti Shared/Individual režimą',
@@ -55,6 +60,7 @@ export const PERMISSION_GROUPS: { title: string; keys: PermissionKey[] }[] = [
       'integrations.openai.use',
       'integrations.anthropic.use',
       'integrations.elevenlabs.use',
+      'integrations.linkedin.use',
     ],
   },
   { title: 'API raktai', keys: ['api_keys.view', 'api_keys.edit', 'api_keys.set_mode'] },

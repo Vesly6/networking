@@ -136,8 +136,8 @@ function generateWeekendMinutes(startMin: number, endMin: number, targetCount: n
  * add/subtract-a-day-in-zone helper this codebase doesn't have yet) — a
  * rolling lookback window is just as useful as reference material and
  * needs no new date arithmetic. */
-function getRecentActualMinutes(timeZone: string, now: number, lookbackMs = 2 * DAY_MS): number[] {
-  const actions = getActionsSince(now - lookbackMs);
+function getRecentActualMinutes(companyId: string, timeZone: string, now: number, lookbackMs = 2 * DAY_MS): number[] {
+  const actions = getActionsSince(companyId, now - lookbackMs);
   return actions
     .filter((a) => a.actionType === 'connect' && a.status === 'success')
     .map((a) => {
@@ -189,7 +189,7 @@ function validateAiMinutes(raw: number[], startMin: number, endMin: number, targ
  * regardless of AI availability. */
 export async function getOrCreateTodaysPlan(settings: SafetySettings, effectiveDailyCap: number, companyId: string, now = Date.now()): Promise<DailyPlan> {
   const { dateStr, weekday } = getZonedDateParts(settings.workHoursTimezone, new Date(now));
-  const existing = getDailySchedule(dateStr);
+  const existing = getDailySchedule(companyId, dateStr);
   if (existing) return existing;
 
   const isWeekend = WEEKEND_DAYS.has(weekday);
@@ -220,7 +220,7 @@ export async function getOrCreateTodaysPlan(settings: SafetySettings, effectiveD
           startMin,
           endMin,
           isWeekend,
-          recentActualMinutes: getRecentActualMinutes(settings.workHoursTimezone, now),
+          recentActualMinutes: getRecentActualMinutes(companyId, settings.workHoursTimezone, now),
         },
         apiKey,
       );
@@ -247,13 +247,13 @@ export async function getOrCreateTodaysPlan(settings: SafetySettings, effectiveD
     isWeekend,
     generatedAt: Date.now(),
   };
-  saveDailySchedule(plan);
+  saveDailySchedule(companyId, plan);
   // saveDailySchedule is `INSERT ... ON CONFLICT DO NOTHING` — re-read
   // rather than trust `plan` as the final truth, in case a concurrent
   // caller won the race and inserted first (same "the DB is the source of
   // truth, not whatever this call happened to compute" caution as this
   // codebase's other idempotent-create functions).
-  return getDailySchedule(dateStr) ?? plan;
+  return getDailySchedule(companyId, dateStr) ?? plan;
 }
 
 /** The earliest still-unfired planned slot that's already due, or `null`
