@@ -124,6 +124,12 @@ interface TableState {
   setColumnsHidden: (ids: string[], hidden: boolean) => void;
   setColumnType: (id: string, type: ColumnType) => void;
   setDropdownOptions: (id: string, options: string[]) => void;
+  /** Creates several columns at once with a full name/type/options/
+   * optionColors each (unlike addColumn, which is one blank column at a
+   * time and doesn't return an id) — used by TableView.tsx's cross-table
+   * name-matched paste to recreate a source table's missing columns in a
+   * single undo step, then immediately know their new ids to paste into. */
+  addColumnsFromDefs: (defs: { name: string; type: ColumnType; options?: string[]; optionColors?: Record<string, string> }[]) => string[];
   setOptionColor: (columnId: string, option: string, color: string | null) => void;
   setColumnWidth: (id: string, width: number) => void;
   setNextActionDateColumn: (id: string) => void;
@@ -409,6 +415,22 @@ export const useTableStore = create<TableState>((set, get) => {
       const columns = [...get().columns, column];
       set({ columns });
       persistColumns(columns);
+    },
+
+    addColumnsFromDefs: (defs) => {
+      snapshot();
+      const newColumns: Column[] = defs.map((d) => ({
+        id: randomUUID(),
+        name: d.name.trim() || 'Stulpelis',
+        type: d.type,
+        ...(d.type === 'date' ? { width: 260 } : {}),
+        ...(d.options ? { options: d.options } : {}),
+        ...(d.optionColors ? { optionColors: d.optionColors } : {}),
+      }));
+      const columns = [...get().columns, ...newColumns];
+      set({ columns });
+      persistColumns(columns);
+      return newColumns.map((c) => c.id);
     },
 
     insertColumns: (beforeColumnId, count) => {

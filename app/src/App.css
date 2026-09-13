@@ -1031,7 +1031,16 @@ tr.letters-row th {
   gap: 0.2em;
   height: 100%;
 }
-tr.letters-row th.letter-cell-selected {
+/* Applies to both header rows — the letters row (A/B/C) and the row
+   showing each column's real name — so selecting a column via its letter
+   highlights the whole header, not just the letter itself (a real,
+   reported gap: the name row stayed unhighlighted, unlike every selected
+   data cell in that column below it). Needs the same `table.sheet thead
+   th` prefix as the base header rule above (not just `th.letter-cell-
+   selected` alone) to actually outrank it — that base rule's own
+   specificity (one class, three type selectors) otherwise beats a bare
+   class+type selector despite coming first in the file. */
+table.sheet thead th.letter-cell-selected {
   background: var(--today-bg);
   color: var(--accent);
 }

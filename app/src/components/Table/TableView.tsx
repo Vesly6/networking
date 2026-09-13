@@ -95,6 +95,30 @@ interface CellPos {
   c: number;
 }
 
+// A second, custom clipboard MIME type written alongside the plain
+// text/plain TSV on every copy (see handleCopy) — invisible to anything
+// outside this app (Excel/Notepad only ever see the plain text), but lets
+// a paste into a *different* MyDesk table (handlePaste) match cells to
+// the right column by name instead of by position, on explicit request
+// ("чтобы значения попадали в правильные колонки по имени, а не по
+// позиции"). `columnDefs` (name+type+options+optionColors) is only
+// included when the copied range came from a whole-column selection (see
+// handleColLetterMouseDown) — that's the "copy everything, recreate
+// missing columns" mode; a plain cell-range copy only tags column names,
+// so a paste into a table missing that column just skips it, same as
+// pasting extra columns into a smaller table already does.
+const MYDESK_CLIPBOARD_MIME = 'application/x-mydesk-columns';
+interface MyDeskClipboardPayload {
+  sourceTableId: string | null;
+  columnNames: string[];
+  columnDefs?: { name: string; type: Column['type']; options?: string[]; optionColors?: Record<string, string> }[];
+  // True only for a copy of the header itself (see headerRowSelected) —
+  // its text/plain is just the tab-joined column names, not a data row,
+  // so a paste of this payload must only create/match columns and never
+  // write those names into a cell as if they were real row data.
+  headerOnly?: boolean;
+}
+
 // Below this many digits, a numeric search query is treated as plain text
 // only (not also matched against phone-digit substrings) — otherwise a
 // short numeric search (a year, a single digit) would start matching every
@@ -397,6 +421,7 @@ export function TableView({
   const updateCells = useTableStore((s) => s.updateCells);
   const setCellColors = useTableStore((s) => s.setCellColors);
   const setDropdownOptions = useTableStore((s) => s.setDropdownOptions);
+  const addColumnsFromDefs = useTableStore((s) => s.addColumnsFromDefs);
   const moveColumns = useTableStore((s) => s.moveColumns);
   const moveRows = useTableStore((s) => s.moveRows);
   const applySortOrder = useTableStore((s) => s.applySortOrder);
@@ -650,6 +675,21 @@ export function TableView({
   const [dragRowIds, setDragRowIds] = useState<string[] | null>(null);
   const [dragOverRowId, setDragOverRowId] = useState<string | null>(null);
   const [dragOverAfter, setDragOverAfter] = useState(false);
+
+  // The header itself, selected as its own unit (click the gutter corner
+  // above the row numbers) — on explicit request ("шапку... эту строку
+  // можно скопировать"): the header is visually frozen/sticky, but that's
+  // only a scroll/view behavior, not a reason it shouldn't be selectable
+  // and copyable the same way a data row is. Copying with this set builds
+  // a column-defs-only clipboard payload (see handleCopy/
+  // MyDeskClipboardPayload) — pasting it into a *different* table
+  // recreates any of its columns that table doesn't already have, by
+  // name, with the same type/options/colors; it never touches row data,
+  // so a normal row-copy (already name-matched on cross-table paste — see
+  // applyNameMatchedPaste) is the second, separate step for the data
+  // itself. Mutually exclusive with every other selection kind, same as
+  // rowRangeAnchor/colRangeAnchor already are with each other.
+  const [headerRowSelected, setHeaderRowSelected] = useState(false);
 
   // Column-header selection (for multi-column drag-reorder)
   const [colRangeAnchor, setColRangeAnchor] = useState<number | null>(null);
@@ -1251,6 +1291,7 @@ export function TableView({
   // selection had been made, so e.g. "Color" would silently repaint just
   // whatever single cell was last clicked instead of the selected rows.
   const handleRowNumberMouseDown = (index: number, extend: boolean, clientX: number, clientY: number) => {
+    setHeaderRowSelected(false);
     const anchorIndex = extend && rowRangeAnchor !== null ? rowRangeAnchor : index;
     if (extend && rowRangeAnchor !== null) setRowRangeFocus(index);
     else {
@@ -1283,6 +1324,7 @@ export function TableView({
 
   // Same reasoning as handleRowNumberMouseDown above, mirrored for columns.
   const handleColLetterMouseDown = (index: number, extend: boolean, clientX: number, clientY: number) => {
+    setHeaderRowSelected(false);
     const anchorIndex = extend && colRangeAnchor !== null ? colRangeAnchor : index;
     if (extend && colRangeAnchor !== null) setColRangeFocus(index);
     else {
@@ -1523,6 +1565,7 @@ export function TableView({
     setRowRangeFocus(null);
     setColRangeAnchor(null);
     setColRangeFocus(null);
+    setHeaderRowSelected(false);
     // Any explicit click elsewhere closes a currently-open note/contact
     // editor; DataCell's note/contact branch re-opens it on the same click
     // if that's the cell that was actually clicked (see onOpenEditor below).
@@ -1662,7 +1705,18 @@ export function TableView({
     return { tsv: buildTsv(grid), cellCount };
   };
 
-  const applyPastedGrid = (grid: string[][], anchor: CellPos, focus: CellPos) => {
+  const applyPastedGrid = (
+    grid: string[][],
+    anchor: CellPos,
+    focus: CellPos,
+    // Explicit per-pasted-column destination column id (or null to skip
+    // that column), keyed by offset within `grid` — used instead of the
+    // normal anchor.c-relative positional lookup by applyNameMatchedPaste
+    // below, for a cross-table paste matched by column name rather than
+    // position. Row placement (anchor.r-relative, including the batched
+    // row-creation logic right below) is unaffected either way.
+    columnIdsOverride?: (string | null)[],
+  ) => {
     if (grid.length === 0) return;
     const spansMultiple = anchor.r !== focus.r || anchor.c !== focus.c;
     const singleValue = grid.length === 1 && grid[0].length === 1 ? grid[0][0] : null;
@@ -1716,21 +1770,32 @@ export function TableView({
       return isCellLockedForWorker(column, filteredSortedRows[r].cells[column.id] ?? '', currentUser);
     };
 
+    // Reads the store's *current* columns, not the `columns` closure
+    // captured at render time, whenever a column-id override is in play —
+    // applyNameMatchedPaste may have just created some of these columns
+    // via addColumnsFromDefs earlier in this same synchronous call, and
+    // the closure's own `columns` array is a stale pre-creation snapshot
+    // that would never contain them (same reasoning the row-creation code
+    // above already applies via useTableStore.getState().rows for
+    // freshly-inserted rows). The plain positional path never creates
+    // columns mid-paste, so it keeps using the closure value as before.
+    const currentColumns = columnIdsOverride ? useTableStore.getState().columns : columns;
+
     if (singleValue !== null && spansMultiple) {
       const maxR = Math.max(anchor.r, focus.r);
       const maxC = Math.max(anchor.c, focus.c);
       for (let r = minR; r <= maxR; r++) {
         const rowId = rowIdAt(r);
         for (let c = minC; c <= maxC; c++) {
-          if (c >= columns.length) {
+          if (c >= currentColumns.length) {
             skippedColumns = true;
             continue;
           }
-          if (lockedFor(r, columns[c])) {
+          if (lockedFor(r, currentColumns[c])) {
             skippedLocked++;
             continue;
           }
-          updates.push({ rowId, columnId: columns[c].id, value: singleValue });
+          updates.push({ rowId, columnId: currentColumns[c].id, value: singleValue });
         }
       }
     } else {
@@ -1738,16 +1803,21 @@ export function TableView({
         const r = minR + i;
         const rowId = rowIdAt(r);
         rowValues.forEach((value, j) => {
-          const c = minC + j;
-          if (c >= columns.length) {
+          const column = columnIdsOverride
+            ? (() => {
+                const columnId = columnIdsOverride[j];
+                return columnId ? currentColumns.find((c) => c.id === columnId) : undefined;
+              })()
+            : currentColumns[minC + j];
+          if (!column) {
             skippedColumns = true;
             return;
           }
-          if (lockedFor(r, columns[c])) {
+          if (lockedFor(r, column)) {
             skippedLocked++;
             return;
           }
-          updates.push({ rowId, columnId: columns[c].id, value });
+          updates.push({ rowId, columnId: column.id, value });
         });
       });
     }
@@ -1756,7 +1826,7 @@ export function TableView({
     // instead of silently dropping the data.
     const extrasByColumn = new Map<string, Set<string>>();
     for (const u of updates) {
-      const col = columns.find((c) => c.id === u.columnId);
+      const col = currentColumns.find((c) => c.id === u.columnId);
       if (col?.type === 'dropdown' && u.value && !(col.options ?? []).includes(u.value)) {
         const set = extrasByColumn.get(col.id) ?? new Set<string>();
         set.add(u.value);
@@ -1764,7 +1834,7 @@ export function TableView({
       }
     }
     for (const [columnId, extras] of extrasByColumn) {
-      const col = columns.find((c) => c.id === columnId)!;
+      const col = currentColumns.find((c) => c.id === columnId)!;
       setDropdownOptions(columnId, [...(col.options ?? []), ...extras]);
     }
 
@@ -1774,6 +1844,41 @@ export function TableView({
     if (skippedColumns) parts.push('papildomi stulpeliai, nesantys lentelėje, praleisti');
     if (skippedLocked > 0) parts.push(`negalima keisti: ${skippedLocked}`);
     showToast(parts.join(' · '));
+  };
+
+  // A paste whose clipboard payload (MYDESK_CLIPBOARD_MIME) names a
+  // *different* source table — matches each copied column to this
+  // table's column of the same name (trimmed, case-insensitive, same
+  // matching rule CSV import already uses) instead of by position.
+  // `payload.columnDefs` being present means the copy came from a
+  // whole-column selection (see handleColLetterMouseDown/handleCopy) —
+  // any named column missing here gets created fresh, with the source's
+  // type/options/colors, in one undo step; without columnDefs (a plain
+  // cell-range copy), a missing name is just skipped, same as pasting
+  // extra columns into a smaller table already does. Row placement still
+  // goes through the normal applyPastedGrid (batched row creation,
+  // worker-lock checks, dropdown-option extension) via its
+  // columnIdsOverride parameter — this function only resolves *which*
+  // column each pasted column lands in.
+  const applyNameMatchedPaste = (grid: string[][], payload: MyDeskClipboardPayload, startRow: number) => {
+    const key = (name: string) => name.trim().toLowerCase();
+    const idByName = new Map(columns.map((c) => [key(c.name), c.id]));
+    const missingDefs = (payload.columnDefs ?? []).filter((d) => !idByName.has(key(d.name)));
+    if (missingDefs.length > 0) {
+      const newIds = addColumnsFromDefs(missingDefs);
+      missingDefs.forEach((d, i) => idByName.set(key(d.name), newIds[i]));
+    }
+    // A header-only copy (see headerRowSelected/handleCopy) only ever
+    // creates/matches columns — its `grid` is just the tab-joined column
+    // names themselves, not real row data, so writing it into a row via
+    // applyPastedGrid would incorrectly overwrite a real row's cells with
+    // literal column-name text.
+    if (payload.headerOnly) {
+      showToast(missingDefs.length > 0 ? `Sukurta stulpelių: ${missingDefs.length}` : 'Visi stulpeliai jau egzistavo — nieko nekurta');
+      return;
+    }
+    const columnIds = payload.columnNames.map((name) => idByName.get(key(name)) ?? null);
+    applyPastedGrid(grid, { r: startRow, c: 0 }, { r: startRow, c: 0 }, columnIds);
   };
 
   // Row/column header menus' Copy — deliberately independent of rangeBounds:
@@ -1900,7 +2005,29 @@ export function TableView({
 
   useEffect(() => {
     const handleCopy = (e: ClipboardEvent) => {
-      if (!withinTableFocus() || !rangeBounds || hasActiveTextSelection()) return;
+      if (!withinTableFocus() || hasActiveTextSelection()) return;
+      // The header, selected as its own unit (click the gutter corner) —
+      // independent of rangeBounds/rangeAnchor entirely, since the header
+      // isn't a row in filteredSortedRows at all. Copies every column's
+      // full definition (name/type/options/colors), not scoped to
+      // whatever cell range happened to be selected before. text/plain is
+      // just the tab-joined names, so pasting into Excel gives a sensible
+      // header row; the actual type/options recreation only happens
+      // pasting back into a different MyDesk table (see handlePaste).
+      if (headerRowSelected) {
+        e.preventDefault();
+        e.clipboardData?.setData('text/plain', buildTsv([columns.map((c) => c.name)]));
+        const payload: MyDeskClipboardPayload = {
+          sourceTableId: tableId,
+          columnNames: columns.map((c) => c.name),
+          columnDefs: columns.map((c) => ({ name: c.name, type: c.type, options: c.options, optionColors: c.optionColors })),
+          headerOnly: true,
+        };
+        e.clipboardData?.setData(MYDESK_CLIPBOARD_MIME, JSON.stringify(payload));
+        showToast(`Nukopijuota antraštė: ${columns.length} stulpelis(-iai)`);
+        return;
+      }
+      if (!rangeBounds) return;
       const { minR, maxR, minC, maxC } = rangeBounds;
       if (minR >= filteredSortedRows.length || minC >= columns.length) return;
       e.preventDefault();
@@ -1908,6 +2035,21 @@ export function TableView({
       const colList = columns.slice(minC, Math.min(maxC, columns.length - 1) + 1);
       const { tsv, cellCount } = buildGridTsv(rowList, colList);
       e.clipboardData?.setData('text/plain', tsv);
+      // See MyDeskClipboardPayload's own doc comment above — colRangeAnchor
+      // non-null means this range came from a whole-column selection (the
+      // column-letter click/drag sets rangeAnchor/rangeFocus to span every
+      // row — see handleColLetterMouseDown), so include full column defs
+      // for cross-table recreate-if-missing; a plain cell-range drag only
+      // tags names.
+      const payload: MyDeskClipboardPayload = {
+        sourceTableId: tableId,
+        columnNames: colList.map((c) => c.name),
+        columnDefs:
+          colRangeAnchor !== null
+            ? colList.map((c) => ({ name: c.name, type: c.type, options: c.options, optionColors: c.optionColors }))
+            : undefined,
+      };
+      e.clipboardData?.setData(MYDESK_CLIPBOARD_MIME, JSON.stringify(payload));
       showToast(`Nukopijuota langelių: ${cellCount}`);
     };
 
@@ -1916,7 +2058,22 @@ export function TableView({
       const text = e.clipboardData?.getData('text/plain');
       if (!text) return;
       e.preventDefault();
-      applyPastedGrid(parseTsv(text), rangeAnchor ?? rangeFocus, rangeFocus);
+      const grid = parseTsv(text);
+      const startRow = (rangeAnchor ?? rangeFocus).r;
+      const richRaw = e.clipboardData?.getData(MYDESK_CLIPBOARD_MIME);
+      if (richRaw) {
+        try {
+          const payload: MyDeskClipboardPayload = JSON.parse(richRaw);
+          if (payload.sourceTableId && payload.sourceTableId !== tableId) {
+            applyNameMatchedPaste(grid, payload, startRow);
+            return;
+          }
+        } catch {
+          // Malformed/unexpected payload — fall through to the normal
+          // positional paste below rather than failing the paste outright.
+        }
+      }
+      applyPastedGrid(grid, rangeAnchor ?? rangeFocus, rangeFocus);
     };
 
     document.addEventListener('copy', handleCopy);
@@ -1925,16 +2082,41 @@ export function TableView({
       document.removeEventListener('copy', handleCopy);
       document.removeEventListener('paste', handlePaste);
     };
-    // applyPastedGrid is deliberately omitted below: it's a plain,
-    // unmemoized closure recreated every render (matching how this file
-    // handles helper functions elsewhere), and every reactive value it
-    // reads from — filteredSortedRows, columns, addRow, updateCells,
-    // setDropdownOptions, showToast — is already listed, so there's no
-    // actual staleness risk; adding it here would just make this effect
-    // tear down and resubscribe its listeners on every render instead of
-    // only when something it actually depends on changes.
+    // applyPastedGrid/applyNameMatchedPaste are deliberately omitted below:
+    // both are plain, unmemoized closures recreated every render (matching
+    // how this file handles helper functions elsewhere), and every
+    // reactive value either one reads is already listed here, so there's
+    // no actual staleness risk; adding them here would just make this
+    // effect tear down and resubscribe its listeners on every render
+    // instead of only when something it actually depends on changes.
+    //
+    // headerRowSelected/colRangeAnchor/tableId/addColumnsFromDefs were a
+    // real, reproduced bug when first added (for the header-copy and
+    // cross-table name-matched paste features): this effect's listeners
+    // are registered once per dependency-array change, not per render, so
+    // handleCopy's own closure kept reading whatever these were at the
+    // *last* re-subscription — clicking the header-select corner (which
+    // touches none of the other listed dependencies) updated the state
+    // but the still-subscribed, stale handleCopy never saw it, silently
+    // copying nothing. addColumnsFromDefs is a Zustand action, referentially
+    // stable across renders like addRow/updateCells/setDropdownOptions
+    // above, so listing it doesn't cause extra resubscriptions.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rangeBounds, rangeAnchor, rangeFocus, filteredSortedRows, columns, addRow, updateCells, setDropdownOptions, showToast]);
+  }, [
+    rangeBounds,
+    rangeAnchor,
+    rangeFocus,
+    filteredSortedRows,
+    columns,
+    addRow,
+    updateCells,
+    setDropdownOptions,
+    showToast,
+    headerRowSelected,
+    colRangeAnchor,
+    tableId,
+    addColumnsFromDefs,
+  ]);
 
   // Delete/Backspace on a selected cell (or range) clears its contents
   // immediately — no need to double-click in, select-all, then delete
@@ -2625,6 +2807,7 @@ export function TableView({
       setRowRangeFocus(null);
       setColRangeAnchor(null);
       setColRangeFocus(null);
+      setHeaderRowSelected(false);
     }
   };
 
@@ -3110,7 +3293,28 @@ export function TableView({
             </colgroup>
             <thead>
               <tr className="letters-row">
-                <th className="gutter-header" />
+                <th
+                  className={headerRowSelected ? 'gutter-header letter-cell-selected' : 'gutter-header'}
+                  title="Spustelėkite, kad pasirinktumėte antraštės eilutę (pavadinimus, tipus, sąrašo nustatymus) kopijavimui į kitą lentelę"
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    // Same class of bug already documented elsewhere in
+                    // this file (the "+ Add column" trigger, the empty-
+                    // state add-column button): without stopping this
+                    // click's own propagation, it bubbles to
+                    // .table-view's document-level 'click' listener
+                    // (closePopovers), which clears headerRowSelected
+                    // right back to false in the same gesture that just
+                    // set it true — a real, reproduced bug, not a
+                    // hypothetical one.
+                    e.stopPropagation();
+                    setHeaderRowSelected((prev) => !prev);
+                    setRowRangeAnchor(null);
+                    setRowRangeFocus(null);
+                    setColRangeAnchor(null);
+                    setColRangeFocus(null);
+                  }}
+                />
                 {columns.map((col, index) => (
                   <th
                     key={col.id}
@@ -3167,9 +3371,25 @@ export function TableView({
                 </th>
               </tr>
               <tr>
-                <th className="gutter-header" />
+                <th
+                  className={headerRowSelected ? 'gutter-header letter-cell-selected' : 'gutter-header'}
+                  title="Spustelėkite, kad pasirinktumėte antraštės eilutę (pavadinimus, tipus, sąrašo nustatymus) kopijavimui į kitą lentelę"
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setHeaderRowSelected((prev) => !prev);
+                    setRowRangeAnchor(null);
+                    setRowRangeFocus(null);
+                    setColRangeAnchor(null);
+                    setColRangeFocus(null);
+                  }}
+                />
                 {columns.map((col) => (
-                  <th key={col.id} onContextMenu={(e) => handleColumnContextMenu(e, col, columns.indexOf(col))}>
+                  <th
+                    key={col.id}
+                    className={selectedColumnIds.has(col.id) ? 'letter-cell-selected' : undefined}
+                    onContextMenu={(e) => handleColumnContextMenu(e, col, columns.indexOf(col))}
+                  >
                     <div className="th-content">
                       <button
                         type="button"
