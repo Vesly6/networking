@@ -5,6 +5,7 @@ import { DemoDataCell } from './DemoDataCell';
 import { DemoToolbar } from './DemoToolbar';
 import { DemoFormulaBar } from './DemoFormulaBar';
 import { DemoColumnHeaderMenu } from './DemoColumnHeaderMenu';
+import { DemoRowHeaderMenu } from './DemoRowHeaderMenu';
 import { Popover } from './Popover';
 import { ColorInput } from './ColorInput';
 import { parseCellRef, formatCellRef } from '../utils/spreadsheet';
@@ -58,6 +59,7 @@ export function DemoTableView({ table, focusRowId, onFocusHandled }: DemoTableVi
   const [expandedCell, setExpandedCell] = useState<{ rowId: string; columnId: string } | null>(null);
   const [selectedRowIds, setSelectedRowIds] = useState<string[]>([]);
   const [columnMenu, setColumnMenu] = useState<{ x: number; y: number; columnId: string } | null>(null);
+  const [rowMenu, setRowMenu] = useState<{ x: number; y: number; rowId: string } | null>(null);
   const [colorPickerAnchor, setColorPickerAnchor] = useState<HTMLElement | null>(null);
   const [flashRowId, setFlashRowId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -187,7 +189,14 @@ export function DemoTableView({ table, focusRowId, onFocusHandled }: DemoTableVi
         </Popover>
       )}
       <DemoFormulaBar tableId={table.id} selection={activeCell} columns={table.columns} rows={rows} />
-      <div className="demo-table-scroll" ref={scrollRef} onClick={() => setColumnMenu(null)}>
+      <div
+        className="demo-table-scroll"
+        ref={scrollRef}
+        onClick={() => {
+          setColumnMenu(null);
+          setRowMenu(null);
+        }}
+      >
         <table className="demo-sheet">
           <colgroup>
             <col className="demo-col-gutter" />
@@ -236,7 +245,14 @@ export function DemoTableView({ table, focusRowId, onFocusHandled }: DemoTableVi
                 data-row-id={row.id}
                 className={`${selectedRowIds.includes(row.id) ? 'demo-row-selected' : ''} ${flashRowId === row.id ? 'demo-row-flash' : ''}`}
               >
-                <td className="demo-row-gutter">
+                <td
+                  className="demo-row-gutter"
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setRowMenu({ x: e.clientX, y: e.clientY, rowId: row.id });
+                  }}
+                >
                   <button type="button" className="demo-row-number" onClick={() => toggleRowSelected(row.id)}>
                     {rowIndex + 1}
                   </button>
@@ -301,6 +317,9 @@ export function DemoTableView({ table, focusRowId, onFocusHandled }: DemoTableVi
           onSort={(direction) => setSort({ columnId: columnMenu.columnId, direction })}
           onClose={() => setColumnMenu(null)}
         />
+      )}
+      {rowMenu && (
+        <DemoRowHeaderMenu tableId={table.id} x={rowMenu.x} y={rowMenu.y} rows={rows} rowId={rowMenu.rowId} onClose={() => setRowMenu(null)} />
       )}
     </div>
   );
