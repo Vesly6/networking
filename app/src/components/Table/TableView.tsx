@@ -1310,6 +1310,20 @@ export function TableView({
     setRowRangeFocus(index);
     setRangeFocus({ r: index, c: Math.max(0, columns.length - 1) });
   };
+  // Dragging a row-number selection up past row 1, into the header's own
+  // gutter cell, extends that same selection to include the header too —
+  // on explicit request ("шапку... я хочу пометить со строки", not only
+  // via a separate standalone click on the corner). rowRangeFocus itself
+  // is deliberately left wherever the last *real* row hovered was (there's
+  // no row index for the header to move it to) — headerRowSelected is
+  // what actually carries "and the header too" from here into handleCopy.
+  // The mouseup handler's justFinishedHeaderDragRef already protects this
+  // from being cleared by the synthetic click a cross-element drag fires
+  // on release (see that ref's own doc comment) — no separate guard needed.
+  const handleHeaderMouseEnter = () => {
+    if (!isRowRangeDragging || rowRangeAnchor === null || !hasDraggedPastThresholdRef.current) return;
+    setHeaderRowSelected(true);
+  };
 
   // --- Column-header (letter) range selection: click / shift+click / drag ---
   const selectedColumnIds = useMemo(() => {
@@ -2006,21 +2020,48 @@ export function TableView({
   useEffect(() => {
     const handleCopy = (e: ClipboardEvent) => {
       if (!withinTableFocus() || hasActiveTextSelection()) return;
-      // The header, selected as its own unit (click the gutter corner) —
-      // independent of rangeBounds/rangeAnchor entirely, since the header
-      // isn't a row in filteredSortedRows at all. Copies every column's
-      // full definition (name/type/options/colors), not scoped to
-      // whatever cell range happened to be selected before. text/plain is
-      // just the tab-joined names, so pasting into Excel gives a sensible
-      // header row; the actual type/options recreation only happens
-      // pasting back into a different MyDesk table (see handlePaste).
+      // The header, selected as its own unit — either standalone (click the
+      // gutter corner, rowRangeAnchor stays null since that click clears
+      // it) or extended into an active row-number drag (drag up from a row
+      // number, into the header's own gutter cell — see
+      // handleHeaderMouseEnter — rowRangeAnchor stays set to whatever rows
+      // were dragged through). Either way this always copies every
+      // column's full definition (name/type/options/colors); when rows
+      // were *also* dragged through, their actual data rides along too
+      // (full column width, not just the columns a plain cell-range would
+      // have spanned) — pasting into a different table both recreates any
+      // missing columns *and* fills in that data in one step, matching
+      // "копирую вместе с шапкой все настройки и вставляю всё" (the other,
+      // simpler "just click the corner" case only ever creates columns —
+      // there's no row data to carry, hence headerOnly).
       if (headerRowSelected) {
         e.preventDefault();
+        const columnDefs = columns.map((c) => ({ name: c.name, type: c.type, options: c.options, optionColors: c.optionColors }));
+        if (rowRangeAnchor !== null) {
+          const focus = rowRangeFocus ?? rowRangeAnchor;
+          const minR = Math.max(0, Math.min(rowRangeAnchor, focus));
+          const maxR = Math.min(filteredSortedRows.length - 1, Math.max(rowRangeAnchor, focus));
+          const rowList = filteredSortedRows.slice(minR, maxR + 1);
+          const { tsv, cellCount } = buildGridTsv(rowList, columns);
+          e.clipboardData?.setData('text/plain', tsv);
+          const payload: MyDeskClipboardPayload = {
+            sourceTableId: tableId,
+            columnNames: columns.map((c) => c.name),
+            columnDefs,
+          };
+          e.clipboardData?.setData(MYDESK_CLIPBOARD_MIME, JSON.stringify(payload));
+          showToast(`Nukopijuota antraštė ir eilučių: ${cellCount === 0 ? 0 : rowList.length}`);
+          return;
+        }
+        // Standalone — text/plain is just the tab-joined names, so pasting
+        // into Excel still gives a sensible header row; the actual
+        // type/options recreation only happens pasting back into a
+        // different MyDesk table (see handlePaste/applyNameMatchedPaste).
         e.clipboardData?.setData('text/plain', buildTsv([columns.map((c) => c.name)]));
         const payload: MyDeskClipboardPayload = {
           sourceTableId: tableId,
           columnNames: columns.map((c) => c.name),
-          columnDefs: columns.map((c) => ({ name: c.name, type: c.type, options: c.options, optionColors: c.optionColors })),
+          columnDefs,
           headerOnly: true,
         };
         e.clipboardData?.setData(MYDESK_CLIPBOARD_MIME, JSON.stringify(payload));
@@ -2113,6 +2154,8 @@ export function TableView({
     setDropdownOptions,
     showToast,
     headerRowSelected,
+    rowRangeAnchor,
+    rowRangeFocus,
     colRangeAnchor,
     tableId,
     addColumnsFromDefs,
@@ -3295,8 +3338,9 @@ export function TableView({
               <tr className="letters-row">
                 <th
                   className={headerRowSelected ? 'gutter-header letter-cell-selected' : 'gutter-header'}
-                  title="Spustelėkite, kad pasirinktumėte antraštės eilutę (pavadinimus, tipus, sąrašo nustatymus) kopijavimui į kitą lentelę"
+                  title="Spustelėkite, kad pasirinktumėte antraštės eilutę (pavadinimus, tipus, sąrašo nustatymus) kopijavimui į kitą lentelę, arba vilkite iš eilučių numerių į viršų"
                   onMouseDown={(e) => e.stopPropagation()}
+                  onMouseEnter={handleHeaderMouseEnter}
                   onClick={(e) => {
                     // Same class of bug already documented elsewhere in
                     // this file (the "+ Add column" trigger, the empty-
@@ -3373,8 +3417,9 @@ export function TableView({
               <tr>
                 <th
                   className={headerRowSelected ? 'gutter-header letter-cell-selected' : 'gutter-header'}
-                  title="Spustelėkite, kad pasirinktumėte antraštės eilutę (pavadinimus, tipus, sąrašo nustatymus) kopijavimui į kitą lentelę"
+                  title="Spustelėkite, kad pasirinktumėte antraštės eilutę (pavadinimus, tipus, sąrašo nustatymus) kopijavimui į kitą lentelę, arba vilkite iš eilučių numerių į viršų"
                   onMouseDown={(e) => e.stopPropagation()}
+                  onMouseEnter={handleHeaderMouseEnter}
                   onClick={(e) => {
                     e.stopPropagation();
                     setHeaderRowSelected((prev) => !prev);
