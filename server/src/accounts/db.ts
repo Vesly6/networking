@@ -205,6 +205,24 @@ function migrate(database: Database.Database): void {
       id INTEGER PRIMARY KEY CHECK (id = 1),
       done_at INTEGER NOT NULL
     );
+
+    -- Tracks which *individually* backfilled registry keys have already
+    -- been seeded onto every pre-existing company's ceiling — for a new
+    -- ordinary key added to the registry well after
+    -- migratePermissionsIfNeeded() already ran once (e.g. export.execute/
+    -- export.contacts), so an already-migrated company still gets it by
+    -- default rather than being frozen at whatever the one-time migration
+    -- happened to snapshot. Keyed by permission_key, not a single flag, so
+    -- each newly-added key gets backfilled exactly once, independently —
+    -- see backfillNewPermissionKeyForExistingCompanies() below. A company
+    -- that already existed and had this key explicitly revoked would look
+    -- identical to "never backfilled" under a derived check, same reason
+    -- permission_migration_done itself is a real marker table, not a
+    -- heuristic.
+    CREATE TABLE IF NOT EXISTS permission_key_backfills (
+      permission_key TEXT PRIMARY KEY,
+      done_at INTEGER NOT NULL
+    );
   `);
   // Additive migration for databases created before these four existed —
   // CREATE TABLE IF NOT EXISTS above is a no-op against an already-existing
@@ -1679,6 +1697,34 @@ export function migratePermissionsIfNeeded(): void {
       setGrantedKeys('user', user.id, keys, 'platform');
     }
     markPermissionMigrationDone();
+  });
+  tx();
+}
+
+/** Grants `key` to every existing company's ceiling that doesn't already
+ * have it — for an ordinary registry key added after
+ * migratePermissionsIfNeeded() already ran once for this install (that
+ * migration is a strict one-time snapshot, see its own doc comment, so it
+ * never sees a key added later). Guarded per-key by
+ * permission_key_backfills so a company that had this exact key explicitly
+ * revoked afterward stays revoked across a restart, rather than being
+ * silently re-granted every boot. Only appends — never touches a
+ * company's other granted keys — so this is safe to call for any number
+ * of newly-added keys without disturbing anything else about a company's
+ * existing ceiling. Not for a key like integrations.linkedin.use that must
+ * NOT be broadly granted — that one is seeded onto a single specific
+ * company by name instead (see index.ts's boot sequence). */
+export function backfillNewPermissionKeyForExistingCompanies(key: PermissionKey): void {
+  const database = getDb();
+  const already = database.prepare(`SELECT 1 FROM permission_key_backfills WHERE permission_key = ?`).get(key);
+  if (already) return;
+  const tx = database.transaction(() => {
+    const companies = database.prepare(`SELECT id FROM companies`).all() as { id: string }[];
+    for (const { id } of companies) {
+      const current = listGrantedKeys('company', id);
+      if (!current.includes(key)) setGrantedKeys('company', id, [...current, key], 'platform');
+    }
+    database.prepare(`INSERT OR IGNORE INTO permission_key_backfills (permission_key, done_at) VALUES (?, ?)`).run(key, Date.now());
   });
   tx();
 }

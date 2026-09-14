@@ -61,9 +61,12 @@ export function exportRowsToCsv(columns: Column[], rows: Row[]): string {
   return Papa.unparse({ fields, data });
 }
 
-export function downloadCsv(filename: string, csvContent: string): void {
-  // BOM so Excel opens UTF-8 (Cyrillic) content without mangling it.
-  const blob = new Blob(['﻿' + csvContent], { type: 'text/csv;charset=utf-8;' });
+/** Shared by every client-side file download in this app — plain
+ * object-URL + anchor-click mechanics, no server round trip. Extracted out
+ * of downloadCsv() so a binary (XLSX) or server-fetched Blob can reuse the
+ * exact same download mechanism (see utils/exportTableApi.ts /
+ * exportTableDemo.ts) without duplicating it. */
+export function downloadBlob(filename: string, blob: Blob): void {
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
@@ -72,6 +75,11 @@ export function downloadCsv(filename: string, csvContent: string): void {
   link.click();
   document.body.removeChild(link);
   URL.revokeObjectURL(url);
+}
+
+export function downloadCsv(filename: string, csvContent: string): void {
+  // BOM so Excel opens UTF-8 (Cyrillic) content without mangling it.
+  downloadBlob(filename, new Blob(['﻿' + csvContent], { type: 'text/csv;charset=utf-8;' }));
 }
 
 /** A table/folder name is free-text (can hold quotes, slashes, emoji,

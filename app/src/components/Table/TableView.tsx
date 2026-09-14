@@ -37,7 +37,9 @@ import { ColumnColorFilterPopover, NO_COLOR_FILTER_VALUE } from './ColumnColorFi
 import { ColumnReplyStatusFilterPopover, ANY_REPLY_FILTER_VALUE } from './ColumnReplyStatusFilterPopover';
 import { FormulaBar } from '../FormulaBar';
 import { Popover } from '../Popover';
-import { parseCsvFile, exportRowsToCsv, downloadCsv } from '../../utils/csv';
+import { parseCsvFile } from '../../utils/csv';
+import { ExportDialog } from './ExportDialog';
+import { can } from '../../utils/permissions';
 import { parseTsv, buildTsv } from '../../utils/tsv';
 import { addNoteEntry, updateNoteEntry, removeNoteEntry, parseNoteHistory } from '../../utils/noteHistory';
 import { addContact, updateContact, removeContact, markSocialLookupNotFound } from '../../utils/contacts';
@@ -401,6 +403,12 @@ export function TableView({
   // permission the CSV import/export buttons already gate on, since this
   // is semantically the same class of bulk import/export action.
   const canExportImport = currentUser?.role !== 'worker' || currentUser.permissions.canExportImport;
+  // The new Export dialog is gated on its own registry permissions, not
+  // canExportImport above — that one now governs CSV *import* only (see
+  // permissions/registry.ts's own comment on why export got split out into
+  // its own, more granular pair of keys).
+  const canExportExecute = useAuthStore((s) => can(s.user?.permissionKeys, 'export.execute'));
+  const canExportContacts = useAuthStore((s) => can(s.user?.permissionKeys, 'export.contacts'));
   // The (⋮) column menu (ColumnMenu.tsx) is a hard block for every worker,
   // not gated per-field — on explicit request ("nenoriu, kad jis isvis
   // turėtų galimybę užeiti į (⋮)"). ColumnMenu itself already disables the
@@ -518,6 +526,7 @@ export function TableView({
     );
   };
   const [addColumnAnchor, setAddColumnAnchor] = useState<HTMLElement | null>(null);
+  const [exportDialogOpen, setExportDialogOpen] = useState(false);
   // Set while MergeContactsModal is open — see handleConfirmMerge below.
   // Distinct from pendingImport: that one imports a fresh CSV into new
   // columns; this one merges a second CSV's contacts into the already-open
@@ -2807,12 +2816,6 @@ export function TableView({
     showToast(parts.join(' · '));
   };
 
-  const handleExport = () => {
-    const csv = exportRowsToCsv(columns, rows);
-    const date = new Date().toISOString().slice(0, 10);
-    downloadCsv(`companies-${date}.csv`, csv);
-  };
-
   const handleAddRow = () => {
     const id = addRow();
     // The new row only exists in `rows`/`filteredSortedRows` starting next
@@ -3046,9 +3049,15 @@ export function TableView({
               Importuoti CSV
             </button>
             <input ref={fileInputRef} type="file" accept=".csv,text/csv" hidden onChange={handleFileChange} />
-            <button type="button" onClick={handleExport}>
-              Eksportuoti CSV
-            </button>
+          </>
+        )}
+        {canExportExecute && (
+          <button type="button" onClick={() => setExportDialogOpen(true)}>
+            Eksportuoti
+          </button>
+        )}
+        {canExportImport && (
+          <>
             {contactColumn && (
               <button type="button" title="Pridėti kontaktus iš antro CSV failo, pagal svetainę" onClick={() => setMergeContactsOpen(true)}>
                 <UserPlus className="icon" size={14} /> Pridėti kontaktus
@@ -3069,6 +3078,24 @@ export function TableView({
               <Mail className="icon" size={14} /> Pridėti siuntėją
             </button>
           </>
+        )}
+        {exportDialogOpen && tableId && (
+          <ExportDialog
+            tableId={tableId}
+            columns={columns}
+            allRows={rows}
+            filteredSortedRows={filteredSortedRows}
+            selectedRowIds={selectedRowIds}
+            isFilterActive={
+              !!search.trim() ||
+              searchTags.length > 0 ||
+              Object.keys(numericFilters).length > 0 ||
+              Object.keys(colorFilters).length > 0 ||
+              Object.values(replyStatusFilters).some((v) => v.length > 0)
+            }
+            canExportContacts={canExportContacts}
+            onClose={() => setExportDialogOpen(false)}
+          />
         )}
         {pendingImport && (
           <CsvImportMapping

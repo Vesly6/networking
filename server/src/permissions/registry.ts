@@ -45,6 +45,14 @@ export const PERMISSIONS = {
   'workers.manage': 'Valdyti darbuotojus',
   'tables.manage': 'Valdyti lenteles (kurti/trinti/pervadinti)',
   'backups.manage': 'Valdyti atsargines kopijas',
+  // Separate from the legacy 'data.export_import' (which now governs CSV
+  // *import* only, see LEGACY_BOOLEAN_PERMISSION_MAP below) — exporting a
+  // company's full contact/email list is a materially more sensitive
+  // action than importing rows, per the account owner's own spec, so it
+  // gets its own two-key split rather than reusing the one flag both used
+  // to share.
+  'export.execute': 'Eksportuoti duomenis (CSV/XLSX)',
+  'export.contacts': 'Eksportuoti su kontaktais (kontaktų/el. pašto duomenimis)',
 } as const;
 
 export type PermissionKey = keyof typeof PERMISSIONS;

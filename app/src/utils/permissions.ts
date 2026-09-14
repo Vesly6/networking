@@ -35,6 +35,11 @@ export const PERMISSIONS = {
   'workers.manage': 'Valdyti darbuotojus',
   'tables.manage': 'Valdyti lenteles (kurti/trinti/pervadinti)',
   'backups.manage': 'Valdyti atsargines kopijas',
+  // Separate from 'data.export_import' (CSV import only, see that key's own
+  // group below) — exporting a company's full contact/email list is a
+  // materially more sensitive action than importing rows.
+  'export.execute': 'Eksportuoti duomenis (CSV/XLSX)',
+  'export.contacts': 'Eksportuoti su kontaktais (kontaktų/el. pašto duomenimis)',
 } as const;
 
 export type PermissionKey = keyof typeof PERMISSIONS;
@@ -65,6 +70,7 @@ export const PERMISSION_GROUPS: { title: string; keys: PermissionKey[] }[] = [
   },
   { title: 'API raktai', keys: ['api_keys.view', 'api_keys.edit', 'api_keys.set_mode'] },
   { title: 'Administravimas', keys: ['workers.manage', 'tables.manage', 'backups.manage'] },
+  { title: 'Eksportas', keys: ['export.execute', 'export.contacts'] },
 ];
 
 /** `permissionKeys` is undefined for a not-yet-loaded user (App.tsx's

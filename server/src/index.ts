@@ -32,6 +32,7 @@ import {
   appendAuditLog,
   listAuditLog,
   migratePermissionsIfNeeded,
+  backfillNewPermissionKeyForExistingCompanies,
   recordLogin,
   listLoginLog,
   listNewsTopics,
@@ -134,6 +135,8 @@ import {
 } from './auth.js';
 import { can, effectivePermissions, companyCeiling } from './permissions/effective.js';
 import { ALL_PERMISSION_KEYS, isPermissionKey, PERMISSIONS, type PermissionKey } from './permissions/registry.js';
+import { buildExportRows, XLSX_MAX_ROWS, type ExportMode } from './export/buildExportRows.js';
+import { streamExportCsv, streamExportXlsx } from './export/streamWriters.js';
 import { ApolloApiError, searchPeople, searchCompanies, enrichPerson, pollWebhookResult, getCreditUsageStats } from './apollo.js';
 import {
   InstantlyApiError,
@@ -4211,6 +4214,106 @@ app.get(
   }),
 );
 
+// A raw, user-controlled string (the client-computed filename) ends up in
+// a Content-Disposition header below — strip anything that isn't a safe
+// filename character first, since an unescaped header value is a real
+// CRLF-header-injection vector.
+function sanitizeExportFilename(name: string): string {
+  const cleaned = name.replace(/[^A-Za-z0-9 ._()-]+/g, '_');
+  return cleaned || 'export';
+}
+
+app.post(
+  '/api/tables/:id/export',
+  requirePermission2('export.execute'),
+  asyncHandler(async (req, res) => {
+    const companyId = req.auth!.companyId;
+    const table = getTable(req.params.id, companyId);
+    if (!table || !tableAccessibleToRequest(req, table)) {
+      res.status(404).json({ error: 'Table not found' });
+      return;
+    }
+
+    const body = (req.body ?? {}) as {
+      mode?: unknown;
+      format?: unknown;
+      rowIds?: unknown;
+      columns?: unknown;
+      includeCompaniesWithoutContacts?: unknown;
+      onlyContactsWithEmail?: unknown;
+      filename?: unknown;
+    };
+    const mode: ExportMode = body.mode === 'with_contacts' ? 'with_contacts' : 'companies_only';
+    const format = body.format === 'xlsx' ? 'xlsx' : 'csv';
+    if (!Array.isArray(body.rowIds) || !Array.isArray(body.columns)) {
+      res.status(400).json({ error: 'Invalid export request' });
+      return;
+    }
+    const columns = body.columns.filter(
+      (c): c is { id: string; name: string; type: string } =>
+        !!c && typeof c === 'object' && typeof (c as { id?: unknown }).id === 'string' && typeof (c as { name?: unknown }).name === 'string',
+    );
+    const includeCompaniesWithoutContacts = !!body.includeCompaniesWithoutContacts;
+    const onlyContactsWithEmail = !!body.onlyContactsWithEmail;
+
+    // export.contacts is separately, server-side gated — a worker with
+    // only export.execute must be rejected here even if they never see the
+    // "Companies with contacts" option in the dialog at all.
+    if (mode === 'with_contacts') {
+      const user = getUserById(req.auth!.userId);
+      if (!user || !can(user, 'export.contacts')) {
+        res.status(403).json({ error: 'Neturite teisės eksportuoti su kontaktais', permission: 'export.contacts' });
+        return;
+      }
+    }
+
+    // SECURITY: the client resolves which rows are currently visible/
+    // selected (filter/sort/selection logic already lives correctly in
+    // TableView.tsx) and submits an explicit id list — but that list is
+    // never trusted as proof of ownership. Intersect against this
+    // company's own rows for this table, same "unscoped id → 404, not a
+    // silent cross-company read" precedent as every other route here.
+    const allRows = loadRowsForTable(req.params.id, companyId);
+    const requestedIds = new Set<string>((body.rowIds as unknown[]).filter((id): id is string => typeof id === 'string'));
+    const rowsToExport = allRows.filter((r) => requestedIds.has(r.id));
+
+    const { headerRow, dataRows } = buildExportRows({
+      columns,
+      rows: rowsToExport,
+      mode,
+      includeCompaniesWithoutContacts,
+      onlyContactsWithEmail,
+    });
+
+    if (format === 'xlsx' && dataRows.length + 1 > XLSX_MAX_ROWS) {
+      res.status(422).json({
+        error: `Per daug eilučių XLSX formatui (${dataRows.length + 1} > ${XLSX_MAX_ROWS}). Naudokite CSV formatą.`,
+        code: 'row_limit_exceeded',
+        rowCount: dataRows.length,
+        limit: XLSX_MAX_ROWS,
+      });
+      return;
+    }
+
+    appendAuditLog({
+      actorUserId: req.auth!.userId,
+      actorRole: req.auth!.role,
+      companyId,
+      action: 'export.run',
+      targetType: 'table',
+      targetId: req.params.id,
+      detail: { mode, format, rowCount: dataRows.length, includeCompaniesWithoutContacts, onlyContactsWithEmail },
+    });
+
+    const safeName = sanitizeExportFilename(typeof body.filename === 'string' ? body.filename : `irms_export.${format}`);
+    if (format === 'csv') {
+      streamExportCsv(res, safeName, headerRow, dataRows);
+    } else {
+      await streamExportXlsx(res, safeName, headerRow, dataRows);
+    }
+  }),
+);
+
 // --- Daily backups (a company's own view — see /api/admin/backups for
 // the owner's cross-company one) ---------------------------------------
 // Same requireNotWorker gate as every other table-management route
@@ -4663,6 +4766,15 @@ backfillSmsInboxCompanyId(firstCompanyId);
     setGrantedKeys('company', firstCompanyId, [...existingGrants, 'integrations.linkedin.use'], 'platform');
   }
 }
+
+// export.execute/export.contacts are ordinary keys (unlike
+// integrations.linkedin.use above) — every already-migrated company gets
+// them by default, same as any other non-restricted key, via the generic
+// per-key backfill helper (accounts/db.ts's own doc comment explains why
+// this needs its own small mechanism rather than re-running
+// migratePermissionsIfNeeded, which is a strict one-time snapshot).
+backfillNewPermissionKeyForExistingCompanies('export.execute');
+backfillNewPermissionKeyForExistingCompanies('export.contacts');
 
 // One-time seed, same "idempotent, real on the very first boot after this
 // shipped, a no-op forever after" shape as backfillCompanyId above — moves

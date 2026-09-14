@@ -2336,6 +2336,50 @@ tr.row-drop-end td {
   max-height: 7rem;
 }
 
+.export-dialog-mode {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.export-dialog-mode label {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+}
+.export-dialog-mode-disabled {
+  opacity: 0.6;
+}
+.export-dialog-mode-hint {
+  display: block;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+.export-dialog-count {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+.export-dialog-checkboxes,
+.export-dialog-scope {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+}
+.export-dialog-checkboxes label,
+.export-dialog-scope label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.export-dialog-format {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+}
+
 .csv-import-mapping-hint {
   margin: 0;
   font-size: 0.82rem;
