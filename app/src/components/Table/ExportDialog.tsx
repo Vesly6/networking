@@ -51,11 +51,19 @@ export function ExportDialog({
   const [format, setFormat] = useState<ExportFormat>('xlsx');
   const [includeCompaniesWithoutContacts, setIncludeCompaniesWithoutContacts] = useState(false);
   const [onlyContactsWithEmail, setOnlyContactsWithEmail] = useState(false);
+  // Off by default — matches the raw-JSON-as-is behavior this export
+  // already had before this checkbox existed, on explicit request (the
+  // account owner's own earlier decision not to touch note columns by
+  // default still applies; this is an opt-in on top of that, not a
+  // replacement for it). See utils/exportFlatten.ts's planCompanyColumns
+  // for what turning it on actually does.
+  const [prettyNotes, setPrettyNotes] = useState(false);
   const [scope, setScope] = useState<ExportScope>('all');
   const [status, setStatus] = useState<'idle' | 'preparing' | 'error'>('idle');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const visibleColumns = useMemo(() => columns.filter((c) => !c.hidden), [columns]);
+  const hasNoteColumn = useMemo(() => visibleColumns.some((c) => c.type === 'note'), [visibleColumns]);
   const visibleAllRows = useMemo(() => allRows.filter((r) => !r.hidden), [allRows]);
   const canShowScopeToggle = selectedRowIds.size >= 2;
   const scopedRows = useMemo(
@@ -72,8 +80,9 @@ export function ExportDialog({
         contactColumnId: contactColumn?.id ?? null,
         includeCompaniesWithoutContacts,
         onlyContactsWithEmail,
+        prettyNotes,
       }),
-    [visibleColumns, scopedRows, mode, contactColumn, includeCompaniesWithoutContacts, onlyContactsWithEmail],
+    [visibleColumns, scopedRows, mode, contactColumn, includeCompaniesWithoutContacts, onlyContactsWithEmail, prettyNotes],
   );
   const previewCount = preview.dataRows.length;
 
@@ -88,8 +97,9 @@ export function ExportDialog({
       contactColumnId: contactColumn?.id ?? null,
       includeCompaniesWithoutContacts,
       onlyContactsWithEmail,
+      prettyNotes,
     }).dataRows.length;
-  }, [mode, visibleAllRows, visibleColumns, contactColumn, includeCompaniesWithoutContacts, onlyContactsWithEmail]);
+  }, [mode, visibleAllRows, visibleColumns, contactColumn, includeCompaniesWithoutContacts, onlyContactsWithEmail, prettyNotes]);
 
   const xlsxRowLimitExceeded = previewCount + 1 > XLSX_MAX_ROWS;
   const effectiveFormat: ExportFormat = xlsxRowLimitExceeded ? 'csv' : format;
@@ -120,6 +130,7 @@ export function ExportDialog({
           contactColumnId: contactColumn?.id ?? null,
           includeCompaniesWithoutContacts,
           onlyContactsWithEmail,
+          prettyNotes,
           filename,
         });
       } else {
@@ -131,6 +142,7 @@ export function ExportDialog({
           columns: visibleColumns.map((c) => ({ id: c.id, name: c.name, type: c.type })),
           includeCompaniesWithoutContacts,
           onlyContactsWithEmail,
+          prettyNotes,
           filename,
         });
       }
@@ -185,6 +197,13 @@ export function ExportDialog({
           Eksportas: {previewCount} iš {totalCount} {mode === 'companies_only' ? 'įmonių' : 'kontaktų'}
           {scope === 'selected' ? ' (pasirinktos eilutės)' : isFilterActive ? ' (pritaikytas filtras)' : ''}
         </div>
+
+        {hasNoteColumn && (
+          <label className="export-dialog-pretty-notes" title="Vietoje neapdorotų duomenų — dvi skaitomos skiltys: „Pastabos“ (rankiniai įrašai) ir „Atsakymai“ (automatiškai iš rašyklos gauti atsakymai).">
+            <input type="checkbox" checked={prettyNotes} onChange={(e) => setPrettyNotes(e.target.checked)} />
+            Gražiai suformatuoti pastabas ir atsakymus (vietoj neapdorotų duomenų)
+          </label>
+        )}
 
         {mode === 'with_contacts' && withContactsAllowed && (
           <div className="export-dialog-checkboxes">

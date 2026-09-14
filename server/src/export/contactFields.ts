@@ -17,24 +17,73 @@ export interface ExtractedContactFields {
   linkedinUrl: string;
 }
 
+export interface ExportSenderRecord {
+  email: string;
+  date: string;
+}
+
+export interface ParsedContactEntry {
+  text: string;
+  /** How many times "Pridėti išsiųstus"/the ✉️ mark-as-sent action has
+   * bumped this entry (app/src/utils/contacts.ts's ContactEntry.sentCount)
+   * — surfaced in the "with contacts" export as its own column, on
+   * explicit request, mirroring the same count the in-app contact editor
+   * already shows next to a contact ("išsiuntėme jam/jai laiškus N").
+   * Absent in storage means never sent; normalized to 0 here rather than
+   * left undefined, since an export column reads better as a plain
+   * number than a sometimes-blank cell. */
+  sentCount: number;
+  /** Every mailbox that has sent to this contact, newest-first, mirroring
+   * ContactEntry.senders (contacts.ts's addContactSender prepends) — the
+   * export gets one dynamic "Siuntėjas N" column per position across the
+   * whole export's widest list, not just this one entry's own count (see
+   * buildExportRows.ts's own doc comment on the two-pass reason why). */
+  senders: ExportSenderRecord[];
+}
+
+/** Mirrors contacts.ts's normalizeSenders — tolerates both the current
+ * `{email,date}[]` shape and the very first shipped version's plain
+ * `string[]` (a real, already-written batch of entries exists in that
+ * older shape). */
+function normalizeSenders(v: unknown): ExportSenderRecord[] {
+  if (!Array.isArray(v)) return [];
+  const result: ExportSenderRecord[] = [];
+  for (const item of v) {
+    if (typeof item === 'string' && item.trim()) {
+      result.push({ email: item.trim(), date: '' });
+    } else if (item && typeof item === 'object' && typeof (item as { email?: unknown }).email === 'string') {
+      const email = (item as { email: string }).email.trim();
+      if (!email) continue;
+      const date = typeof (item as { date?: unknown }).date === 'string' ? (item as { date: string }).date : '';
+      result.push({ email, date });
+    }
+  }
+  return result;
+}
+
 /** Mirrors parseContacts()'s JSON-array-with-legacy-fallback shape — a
  * contact-type cell's raw value is either the current `{id,text,...}[]`
  * JSON array or, for data written before this feature existed, a bare
- * legacy string treated as one entry. Only `text` is needed here (every
- * other ContactEntry field — sentCount, senders, socialLookup — has no
- * bearing on an export). */
-export function parseContactEntryTexts(raw: string): string[] {
+ * legacy string treated as one entry. */
+export function parseContactEntries(raw: string): ParsedContactEntry[] {
   if (!raw) return [];
   try {
     const parsed: unknown = JSON.parse(raw);
     if (Array.isArray(parsed) && parsed.every((e) => e && typeof e === 'object')) {
-      return parsed.map((e) => (typeof (e as { text?: unknown }).text === 'string' ? (e as { text: string }).text : ''));
+      return parsed.map((e) => {
+        const entry = e as { text?: unknown; sentCount?: unknown; senders?: unknown };
+        return {
+          text: typeof entry.text === 'string' ? entry.text : '',
+          sentCount: typeof entry.sentCount === 'number' && Number.isFinite(entry.sentCount) ? entry.sentCount : 0,
+          senders: normalizeSenders(entry.senders),
+        };
+      });
     }
   } catch {
     // Not JSON — legacy plain text falls through below.
   }
   const trimmed = raw.trim();
-  return trimmed ? [trimmed] : [];
+  return trimmed ? [{ text: trimmed, sentCount: 0, senders: [] }] : [];
 }
 
 // Copied verbatim from app/src/utils/contacts.ts — keep both copies

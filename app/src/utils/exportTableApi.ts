@@ -19,6 +19,7 @@ export interface RunExportParams {
   columns: { id: string; name: string; type: string }[];
   includeCompaniesWithoutContacts: boolean;
   onlyContactsWithEmail: boolean;
+  prettyNotes: boolean;
   filename: string;
 }
 

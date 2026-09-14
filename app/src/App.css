@@ -2360,6 +2360,12 @@ tr.row-drop-end td {
   font-size: 0.85rem;
   color: var(--text-muted);
 }
+.export-dialog-pretty-notes {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+}
 .export-dialog-checkboxes,
 .export-dialog-scope {
   display: flex;

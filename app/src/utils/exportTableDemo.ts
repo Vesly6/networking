@@ -25,6 +25,7 @@ export interface RunDemoExportParams {
   contactColumnId: string | null;
   includeCompaniesWithoutContacts: boolean;
   onlyContactsWithEmail: boolean;
+  prettyNotes: boolean;
   filename: string;
 }
 
@@ -36,6 +37,7 @@ export async function runDemoExport(params: RunDemoExportParams): Promise<void> 
     contactColumnId: params.contactColumnId,
     includeCompaniesWithoutContacts: params.includeCompaniesWithoutContacts,
     onlyContactsWithEmail: params.onlyContactsWithEmail,
+    prettyNotes: params.prettyNotes,
   });
 
   if (params.format === 'csv') {

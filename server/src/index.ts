@@ -4414,6 +4414,7 @@ app.post(
       columns?: unknown;
       includeCompaniesWithoutContacts?: unknown;
       onlyContactsWithEmail?: unknown;
+      prettyNotes?: unknown;
       filename?: unknown;
     };
     const mode: ExportMode = body.mode === 'with_contacts' ? 'with_contacts' : 'companies_only';
@@ -4428,6 +4429,7 @@ app.post(
     );
     const includeCompaniesWithoutContacts = !!body.includeCompaniesWithoutContacts;
     const onlyContactsWithEmail = !!body.onlyContactsWithEmail;
+    const prettyNotes = !!body.prettyNotes;
 
     // export.contacts is separately, server-side gated — a worker with
     // only export.execute must be rejected here even if they never see the
@@ -4456,6 +4458,7 @@ app.post(
       mode,
       includeCompaniesWithoutContacts,
       onlyContactsWithEmail,
+      prettyNotes,
     });
 
     if (format === 'xlsx' && dataRows.length + 1 > XLSX_MAX_ROWS) {
@@ -4475,7 +4478,7 @@ app.post(
       action: 'export.run',
       targetType: 'table',
       targetId: req.params.id,
-      detail: { mode, format, rowCount: dataRows.length, includeCompaniesWithoutContacts, onlyContactsWithEmail },
+      detail: { mode, format, rowCount: dataRows.length, includeCompaniesWithoutContacts, onlyContactsWithEmail, prettyNotes },
     });
 
     const safeName = sanitizeExportFilename(typeof body.filename === 'string' ? body.filename : `irms_export.${format}`);
