@@ -131,38 +131,72 @@ export function addContact(raw: string, text: string, id: string = randomUUID())
   return serializeContacts([...existing, { id, text: trimmed }]);
 }
 
+/** Every email address currently used by any contact anywhere in this
+ * table's Contacts column — the table-wide counterpart to
+ * addContactsDedupByEmail's own row-scoped check below. One pass over
+ * every row (same O(total contacts) shape as emailMatch.ts's
+ * buildEmailIndex, and cheap for the same reason — even a real ~1000-row
+ * table with ~10 contacts each is only ~10,000 entries), meant to be
+ * computed once (e.g. a useMemo in MergeContactsModal.tsx) and reused
+ * across a whole import run, not rebuilt per row/contact. */
+export function buildContactEmailIndex(rows: { cells: Record<string, string> }[], contactColumnId: string): Set<string> {
+  const emails = new Set<string>();
+  for (const row of rows) {
+    for (const entry of parseContacts(row.cells[contactColumnId] ?? '')) {
+      const email = splitContactDisplayFields(entry.text).find((f) => f.kind === 'email')?.value.toLowerCase();
+      if (email) emails.add(email);
+    }
+  }
+  return emails;
+}
+
 /** Batch version of addContact() for MergeContactsModal.tsx — appends
  * several entries in one parse/serialize pass (avoids re-parsing the JSON
  * array once per entry) and skips any incoming entry whose email already
- * exists among the row's current contacts, so re-running the same merge
- * (or two overlapping ones) doesn't pile up duplicate people. Matches by
- * email specifically (not name) since it's the one field both a hand-typed
- * contact and a CSV-derived one are likely to have written identically —
- * a name has too many formatting variants to compare reliably. An entry
- * with no detectable email is never treated as a duplicate of anything. */
-export function addContactsDedupByEmail(raw: string, newEntryTexts: string[]): { raw: string; added: number; skipped: number } {
+ * exists, so re-running the same merge (or two overlapping ones) doesn't
+ * pile up duplicate people. Matches by email specifically (not name) since
+ * it's the one field both a hand-typed contact and a CSV-derived one are
+ * likely to have written identically — a name has too many formatting
+ * variants to compare reliably. An entry with no detectable email is never
+ * treated as a duplicate of anything.
+ *
+ * `knownEmails` is the caller's own working set of "already used"
+ * emails — seeded with this row's own existing contacts here (as this
+ * function always did), but the caller can pre-seed it further (e.g. with
+ * buildContactEmailIndex's table-wide result) and reuse the SAME Set
+ * across multiple calls to this function for different rows in one
+ * import run: this function mutates it, adding every email it accepts, so
+ * a later call in the same run — for the same or a different row — sees
+ * it immediately. That's what makes a single mechanism catch all three
+ * duplicate sources a bulk import can have: within this one row's own
+ * contacts, against the rest of the table, and against an earlier entry
+ * in this same incoming batch. */
+export function addContactsDedupByEmail(
+  raw: string,
+  newEntryTexts: string[],
+  knownEmails: Set<string>,
+): { raw: string; added: number; skipped: number; skippedEntries: { text: string; email: string }[] } {
   const existing = parseContacts(raw);
-  const existingEmails = new Set(
-    existing
-      .map((e) => splitContactDisplayFields(e.text).find((f) => f.kind === 'email')?.value.toLowerCase())
-      .filter((v): v is string => !!v),
-  );
+  for (const e of existing) {
+    const email = splitContactDisplayFields(e.text).find((f) => f.kind === 'email')?.value.toLowerCase();
+    if (email) knownEmails.add(email);
+  }
   let added = 0;
-  let skipped = 0;
+  const skippedEntries: { text: string; email: string }[] = [];
   const toAdd: ContactEntry[] = [];
   for (const text of newEntryTexts) {
     const trimmed = text.trim();
     if (!trimmed) continue;
     const email = splitContactDisplayFields(trimmed).find((f) => f.kind === 'email')?.value.toLowerCase();
-    if (email && existingEmails.has(email)) {
-      skipped++;
+    if (email && knownEmails.has(email)) {
+      skippedEntries.push({ text: trimmed, email });
       continue;
     }
-    if (email) existingEmails.add(email);
+    if (email) knownEmails.add(email);
     toAdd.push({ id: randomUUID(), text: trimmed });
     added++;
   }
-  return { raw: serializeContacts([...existing, ...toAdd]), added, skipped };
+  return { raw: serializeContacts([...existing, ...toAdd]), added, skipped: skippedEntries.length, skippedEntries };
 }
 
 export function removeContact(raw: string, id: string): string {

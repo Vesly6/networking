@@ -8,7 +8,7 @@ import { parseCsvFile, downloadCsv } from '../../utils/csv';
 import { normalizeDomain } from '../../utils/domainMatch';
 import { buildDomainIndex, type RowDomainMatch } from '../../utils/rowDomainIndex';
 import { getPrimaryLabel } from '../../utils/row';
-import { joinContactFields, addContactsDedupByEmail, parseContacts } from '../../utils/contacts';
+import { joinContactFields, addContactsDedupByEmail, buildContactEmailIndex, parseContacts } from '../../utils/contacts';
 import type { ImportChangeEntry } from '../../utils/importHistory';
 import { RowPickerField, type RowPickerOption } from './RowPickerField';
 
@@ -33,7 +33,21 @@ export interface MergeStats {
   skippedGroups: number;
 }
 
-type Step = 'pick-file' | 'map-fields' | 'review';
+type Step = 'pick-file' | 'map-fields' | 'review' | 'done';
+
+/** One contact that a merge run deliberately did NOT add, with enough
+ * context for the post-import results screen's downloadable report —
+ * on explicit request, so a skipped duplicate is reviewable afterward
+ * instead of silently vanishing behind a bare count. `reason` tells the
+ * two duplicate sources apart: the email was already somewhere in this
+ * table before the import started, vs. it appeared more than once inside
+ * the incoming CSV itself (first occurrence kept). */
+interface SkippedDuplicate {
+  companyName: string;
+  text: string;
+  email: string;
+  reason: 'already_in_table' | 'duplicate_in_file';
+}
 
 interface FieldMapping {
   matchCol: string;
@@ -193,6 +207,14 @@ export function MergeContactsModal({ tableId, columns, rows, contactColumnId, on
   // collision/unmatched groups; matched groups always start pre-decided).
   const [resolutions, setResolutions] = useState<Record<string, string>>({});
   const [showMatched, setShowMatched] = useState(false);
+  // Default ON, on explicit request — the common case for a second import
+  // is "top up the base, don't re-add people already in it," so the
+  // stricter check should be the one you have to consciously turn off.
+  // Only governs the table-wide part of the dedup; same-row and
+  // within-this-file duplicates are always caught regardless (see
+  // handleConfirm below).
+  const [skipTableWideDuplicates, setSkipTableWideDuplicates] = useState(true);
+  const [mergeResult, setMergeResult] = useState<{ stats: MergeStats; skipped: SkippedDuplicate[] } | null>(null);
 
   const handleFile = async (file: File) => {
     setError('');
@@ -219,6 +241,18 @@ export function MergeContactsModal({ tableId, columns, rows, contactColumnId, on
     () => (matchMode === 'id' && matchColumnId ? buildIdIndex(columns, rows, matchColumnId) : new Map<string, RowDomainMatch[]>()),
     [matchMode, matchColumnId, columns, rows],
   );
+
+  // Every email already present anywhere in this table's Contacts column,
+  // built once (same shape/cost as domainIndex/idIndex above). An
+  // immutable snapshot: handleConfirm copies it into its own mutable
+  // working set, and also reads this untouched original afterward to tell
+  // "was already in the table" apart from "duplicated inside the file."
+  // Empty when the checkbox is off, so that path costs nothing.
+  const tableWideEmails = useMemo(
+    () => (skipTableWideDuplicates ? buildContactEmailIndex(rows, contactColumnId) : new Set<string>()),
+    [skipTableWideDuplicates, rows, contactColumnId],
+  );
+  const rowsById = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
 
   // Built once here instead of inside renderGroupRow (as the old code did),
   // where it was recomputed from scratch — a second, full rows.map() — for
@@ -351,6 +385,11 @@ export function MergeContactsModal({ tableId, columns, rows, contactColumnId, on
     downloadCsv(filename, csv);
   };
 
+  const downloadSkippedDuplicatesCsv = (skipped: SkippedDuplicate[]) => {
+    const data = skipped.map((s) => [s.companyName, s.text, s.email, s.reason === 'already_in_table' ? 'Jau yra lentelėje' : 'Dublikatas faile']);
+    downloadCsv('dublikatai.csv', Papa.unparse({ fields: ['Įmonė', 'Kontaktas', 'El. paštas', 'Priežastis'], data }));
+  };
+
   const handleConfirm = () => {
     const byRow = new Map<string, string[]>();
     let skippedGroups = 0;
@@ -367,14 +406,23 @@ export function MergeContactsModal({ tableId, columns, rows, contactColumnId, on
 
     const updates: CellUpdate[] = [];
     const changes: ImportChangeEntry[] = [];
+    const skipped: SkippedDuplicate[] = [];
     let addedContacts = 0;
-    let skippedDuplicates = 0;
+    // One shared working set for the whole run — pre-seeded with the
+    // table-wide index (when the checkbox is on) and mutated by every
+    // addContactsDedupByEmail call below, so an email accepted into one
+    // row is a duplicate for every later row in this same import. See that
+    // function's own doc comment for the three cases this covers.
+    const knownEmails = new Set(tableWideEmails);
     for (const [rowId, entryTexts] of byRow) {
-      const row = rows.find((r) => r.id === rowId);
+      const row = rowsById.get(rowId);
       if (!row) continue;
-      const result = addContactsDedupByEmail(row.cells[contactColumnId] ?? '', entryTexts);
+      const result = addContactsDedupByEmail(row.cells[contactColumnId] ?? '', entryTexts, knownEmails);
       addedContacts += result.added;
-      skippedDuplicates += result.skipped;
+      const companyName = getPrimaryLabel(row, columns);
+      for (const s of result.skippedEntries) {
+        skipped.push({ companyName, text: s.text, email: s.email, reason: tableWideEmails.has(s.email) ? 'already_in_table' : 'duplicate_in_file' });
+      }
       updates.push({ rowId, columnId: contactColumnId, value: result.raw });
       if (result.added > 0) {
         // addContactsDedupByEmail appends new entries after the existing
@@ -389,16 +437,15 @@ export function MergeContactsModal({ tableId, columns, rows, contactColumnId, on
       }
     }
 
-    onConfirm(
-      updates,
-      {
-        updatedRows: byRow.size,
-        addedContacts,
-        skippedDuplicates,
-        skippedGroups,
-      },
-      changes,
-    );
+    const stats: MergeStats = { updatedRows: byRow.size, addedContacts, skippedDuplicates: skipped.length, skippedGroups };
+    // The write goes through right here, same as before — the 'done' step
+    // that follows is a results/report screen, not a second confirmation
+    // gate. The caller (TableView.tsx's handleConfirmMerge) deliberately no
+    // longer closes the modal itself, so the user can still reach the
+    // "Atsiųsti dublikatus" download before dismissing it.
+    onConfirm(updates, stats, changes);
+    setMergeResult({ stats, skipped });
+    setStep('done');
   };
 
   const renderGroupRow = (group: CsvGroup) => {
@@ -610,6 +657,10 @@ export function MergeContactsModal({ tableId, columns, rows, contactColumnId, on
               Iš viso {totalPeople} kontaktų, {groups.length} įmonių grupių. Automatiškai rasta: {matchedGroups.length} · Keli
               galimi atitikmenys: {collisionGroups.length} · Nerasta atitikmens: {unmatchedGroups.length}.
             </p>
+            <label className="merge-contacts-dedup-toggle">
+              <input type="checkbox" checked={skipTableWideDuplicates} onChange={(e) => setSkipTableWideDuplicates(e.target.checked)} />
+              Praleisti kontaktus, kurie jau yra šioje lentelėje (bet kurioje eilutėje, pagal el. paštą)
+            </label>
             {collisionGroups.length > 0 && (
               <>
                 <div className="merge-contacts-section-header">
@@ -663,10 +714,31 @@ export function MergeContactsModal({ tableId, columns, rows, contactColumnId, on
           </div>
         )}
 
+        {step === 'done' && mergeResult && (
+          <div className="merge-contacts-done">
+            <p className="apollo-search-modal-hint">
+              Pridėta kontaktų: {mergeResult.stats.addedContacts} · Atnaujinta eilučių: {mergeResult.stats.updatedRows}
+              {mergeResult.stats.skippedDuplicates > 0 && ` · Praleista dublikatų: ${mergeResult.stats.skippedDuplicates}`}
+              {mergeResult.stats.skippedGroups > 0 && ` · Praleista grupių: ${mergeResult.stats.skippedGroups}`}
+            </p>
+            {mergeResult.skipped.length > 0 && (
+              <button type="button" onClick={() => downloadSkippedDuplicatesCsv(mergeResult.skipped)}>
+                <Download className="icon" size={14} /> Atsiųsti dublikatus ({mergeResult.skipped.length})
+              </button>
+            )}
+          </div>
+        )}
+
         <div className="popover-footer">
-          <button type="button" onClick={onCancel}>
-            <X className="icon" size={16} /> Atšaukti
-          </button>
+          {step === 'done' ? (
+            <button type="button" className="primary" onClick={onCancel}>
+              Uždaryti
+            </button>
+          ) : (
+            <button type="button" onClick={onCancel}>
+              <X className="icon" size={16} /> Atšaukti
+            </button>
+          )}
           {step === 'map-fields' && (
             <button type="button" className="primary" onClick={() => setStep('review')}>
               Toliau

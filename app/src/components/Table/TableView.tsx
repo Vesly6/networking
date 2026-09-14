@@ -2792,8 +2792,10 @@ export function TableView({
     showToast(parts.join(' · '));
   };
 
+  // Deliberately does NOT close the modal — MergeContactsModal moves to its
+  // own 'done' step after this fires (stats + "Atsiųsti dublikatus"), and
+  // closes itself via onCancel when the user is finished with that screen.
   const handleConfirmMerge = (updates: CellUpdate[], stats: MergeStats, changes: ImportChangeEntry[]) => {
-    setMergeContactsOpen(false);
     if (updates.length > 0) updateCells(updates);
     if (changes.length > 0) {
       // Best-effort, same reasoning as PushReplyRowsModal/
