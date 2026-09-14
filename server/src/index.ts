@@ -33,6 +33,7 @@ import {
   listAuditLog,
   migratePermissionsIfNeeded,
   backfillNewPermissionKeyForExistingCompanies,
+  backfillWorkerDefaultTabsIfNeeded,
   recordLogin,
   listLoginLog,
   listNewsTopics,
@@ -1220,7 +1221,8 @@ app.post(
   '/api/admin/companies/:id/workers',
   requireSuperAdmin,
   asyncHandler(async (req, res) => {
-    const { username, password, firstName, lastName, visibleTabs, permissions } = req.body ?? {};
+    const body = req.body ?? {};
+    const { username, password, firstName, lastName, visibleTabs, permissions } = body;
     if (
       typeof username !== 'string' ||
       !username.trim() ||
@@ -1239,7 +1241,7 @@ app.post(
     }
     let permissionKeys: PermissionKey[] | null;
     try {
-      permissionKeys = pickPermissionKeys(req.body ?? {});
+      permissionKeys = pickPermissionKeys(body);
     } catch (err) {
       if (err instanceof InvalidPermissionKeysError) {
         res.status(400).json({ error: err.message });
@@ -1254,8 +1256,13 @@ app.post(
       firstName: firstName.trim(),
       lastName: lastName.trim(),
       role: 'worker',
-      visibleTabs: Array.isArray(visibleTabs) ? visibleTabs : [],
+      // A missing/malformed array (a raw API call, not the real form) gets
+      // the same table+calendar baseline a normal create does — see
+      // ALWAYS_ON_FEATURES and backfillWorkerDefaultTabsIfNeeded's own doc
+      // comment for why an *explicit* [] from the form is still respected.
+      visibleTabs: Array.isArray(visibleTabs) ? visibleTabs : ALWAYS_ON_FEATURES,
       permissions: permissions && typeof permissions === 'object' ? permissions : undefined,
+      ...pickWorkerIntegrationOverrides(body),
     });
     if (permissionKeys) {
       // Platform admin acting directly — no escalation check needed (see
@@ -1282,7 +1289,8 @@ app.patch(
   '/api/admin/companies/:id/workers/:userId',
   requireSuperAdmin,
   asyncHandler(async (req, res) => {
-    const { visibleTabs, permissions, password, firstName, lastName } = req.body ?? {};
+    const body = req.body ?? {};
+    const { visibleTabs, permissions, password, firstName, lastName } = body;
     if (password !== undefined && (typeof password !== 'string' || !password)) {
       res.status(400).json({ error: 'Slaptažodis negali būti tuščias' });
       return;
@@ -1293,7 +1301,7 @@ app.patch(
     }
     let permissionKeys: PermissionKey[] | null;
     try {
-      permissionKeys = pickPermissionKeys(req.body ?? {});
+      permissionKeys = pickPermissionKeys(body);
     } catch (err) {
       if (err instanceof InvalidPermissionKeysError) {
         res.status(400).json({ error: err.message });
@@ -1307,6 +1315,7 @@ app.patch(
       visibleTabs: Array.isArray(visibleTabs) ? visibleTabs : undefined,
       permissions: permissions && typeof permissions === 'object' ? permissions : undefined,
       password: typeof password === 'string' ? password : undefined,
+      ...pickWorkerIntegrationOverrides(body),
     });
     if (!worker) {
       res.status(404).json({ error: 'Worker not found' });
@@ -1748,6 +1757,41 @@ app.post(
       res.status(400).json({ error: 'Toks vartotojo vardas jau užimtas' });
       return;
     }
+    // Same escalation guard as PATCH /api/workers/:id below — a company's
+    // own super_admin may only grant a new worker a SUBSET of what they
+    // themselves currently hold, checked here too so a direct API call at
+    // creation time can't bypass it. Previously this route ignored
+    // `permissionKeys` entirely: registry permissions ticked on the create
+    // form were silently dropped and only stuck once the admin re-opened
+    // the worker and saved an edit via PATCH.
+    let permissionKeys: PermissionKey[] | null;
+    try {
+      permissionKeys = pickPermissionKeys(body);
+    } catch (err) {
+      if (err instanceof InvalidPermissionKeysError) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+    if (permissionKeys) {
+      const actingAdmin = getUserById(req.auth!.userId)!;
+      const actingEffective = effectivePermissions(actingAdmin);
+      const escalating = permissionKeys.filter((key) => !actingEffective.has(key));
+      if (escalating.length > 0) {
+        appendAuditLog({
+          actorUserId: req.auth!.userId,
+          actorRole: req.auth!.role,
+          companyId: req.auth!.companyId,
+          action: 'access.denied',
+          targetType: 'user',
+          targetId: null,
+          detail: { attemptedKeys: escalating },
+        });
+        res.status(403).json({ error: 'Negalite suteikti teisių, kurių patys neturite', keys: escalating });
+        return;
+      }
+    }
     const worker = createUser({
       companyId: req.auth!.companyId,
       username: username.trim(),
@@ -1755,10 +1799,26 @@ app.post(
       firstName: firstName.trim(),
       lastName: lastName.trim(),
       role: 'worker',
-      visibleTabs: Array.isArray(visibleTabs) ? visibleTabs : [],
+      // A missing/malformed array (a raw API call, not the real form) gets
+      // the same table+calendar baseline every worker should start with —
+      // see ALWAYS_ON_FEATURES and backfillWorkerDefaultTabsIfNeeded's own
+      // doc comment for the fix to workers created before this existed.
+      visibleTabs: Array.isArray(visibleTabs) ? visibleTabs : ALWAYS_ON_FEATURES,
       permissions: permissions && typeof permissions === 'object' ? permissions : undefined,
       ...pickWorkerIntegrationOverrides(body),
     });
+    if (permissionKeys) {
+      setGrantedKeys('user', worker.id, permissionKeys, req.auth!.userId);
+      appendAuditLog({
+        actorUserId: req.auth!.userId,
+        actorRole: req.auth!.role,
+        companyId: req.auth!.companyId,
+        action: 'permission.grant',
+        targetType: 'user',
+        targetId: worker.id,
+        detail: { keys: permissionKeys },
+      });
+    }
     res.json(workerToPublic(worker));
   }),
 );
@@ -4775,6 +4835,11 @@ backfillSmsInboxCompanyId(firstCompanyId);
 // migratePermissionsIfNeeded, which is a strict one-time snapshot).
 backfillNewPermissionKeyForExistingCompanies('export.execute');
 backfillNewPermissionKeyForExistingCompanies('export.contacts');
+
+// Fixes every existing worker stuck at zero visible tabs (a real, reported
+// bug — see accounts/db.ts's own doc comment on this function and the two
+// worker-creation routes below for the actual fix going forward).
+backfillWorkerDefaultTabsIfNeeded();
 
 // One-time seed, same "idempotent, real on the very first boot after this
 // shipped, a no-op forever after" shape as backfillCompanyId above — moves

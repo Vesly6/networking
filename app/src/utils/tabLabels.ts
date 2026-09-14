@@ -44,3 +44,14 @@ export const ALL_TABS = Object.keys(TAB_LABELS);
 export function workerGrantableTabs(companyTabs: string[]): string[] {
   return companyTabs.filter((t) => t !== 'workers' && t !== 'backups');
 }
+
+/** Mirrors server/src/accounts/db.ts's ALWAYS_ON_FEATURES exactly — Table
+ * and Calendar are the one baseline every worker should start with, same
+ * as a company itself can never have them disabled. Used to pre-check
+ * those two chips on a brand-new worker's "Matomos skiltys" picker
+ * (WorkersView.tsx) — a real, reported bug had a freshly-created worker
+ * start with NO tabs at all (Calendar included) because the create form
+ * began from an empty selection and the server defaulted a missing array
+ * to `[]`, not this. Filtered against the actual company tabs before use,
+ * same as any other chip, in case a table somehow isn't in the list. */
+export const DEFAULT_WORKER_TABS = ['table', 'calendar'];

@@ -6,7 +6,7 @@ import { useToastStore } from '../../store/useToastStore';
 import { typeToConfirmDialog } from '../../store/useTypeToConfirmStore';
 import { confirmDialog } from '../../store/useConfirmStore';
 import { formatHistoryTimestamp } from '../../utils/date';
-import { TAB_LABELS } from '../../utils/tabLabels';
+import { TAB_LABELS, DEFAULT_WORKER_TABS } from '../../utils/tabLabels';
 import { ALL_PERMISSION_KEYS, PERMISSION_GROUPS, PERMISSIONS, type PermissionKey } from '../../utils/permissions';
 import { ArrowRight, Key, UserCog, X } from 'lucide-react';
 
@@ -649,7 +649,7 @@ export function WorkersView({ onJumpToRow, onJumpToContact, companyTabs, company
           </div>
           <WorkerForm
             companyTabs={companyTabs}
-            initialTabs={[]}
+            initialTabs={DEFAULT_WORKER_TABS.filter((t) => companyTabs.includes(t))}
             initialPermissions={EMPTY_PERMISSIONS}
             actingPermissionKeys={actingPermissionKeys}
             submitLabel="Sukurti"

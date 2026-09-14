@@ -223,6 +223,20 @@ function migrate(database: Database.Database): void {
       permission_key TEXT PRIMARY KEY,
       done_at INTEGER NOT NULL
     );
+
+    -- One-time marker (same reasoning as permission_migration_done above)
+    -- for backfillWorkerDefaultTabsIfNeeded() below — a real, reported bug:
+    -- every worker created before this existed got visible_tabs = '[]'
+    -- (both worker-creation routes defaulted a missing array to [], not
+    -- ALWAYS_ON_FEATURES), so a freshly-created worker saw zero tabs,
+    -- Calendar included. This lets that one-time fix run exactly once
+    -- rather than on every boot, which would otherwise also silently undo
+    -- a future admin's deliberate "give this worker zero tabs" choice
+    -- (which is stored identically as '[]').
+    CREATE TABLE IF NOT EXISTS worker_default_tabs_backfill_done (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      done_at INTEGER NOT NULL
+    );
   `);
   // Additive migration for databases created before these four existed —
   // CREATE TABLE IF NOT EXISTS above is a no-op against an already-existing
@@ -1725,6 +1739,26 @@ export function backfillNewPermissionKeyForExistingCompanies(key: PermissionKey)
       if (!current.includes(key)) setGrantedKeys('company', id, [...current, key], 'platform');
     }
     database.prepare(`INSERT OR IGNORE INTO permission_key_backfills (permission_key, done_at) VALUES (?, ?)`).run(key, Date.now());
+  });
+  tx();
+}
+
+/** Run once, ever (see worker_default_tabs_backfill_done above) — fixes
+ * every existing worker whose visible_tabs is literally the empty-array
+ * string '[]' (both worker-creation routes used to default a missing
+ * array to [] instead of ALWAYS_ON_FEATURES) by giving them the same
+ * table+calendar baseline a new worker gets going forward. Deliberately
+ * narrow (exact-match on '[]', not "role = worker AND visible_tabs is
+ * falsy/absent") — a NULL column (unrestricted) is untouched, and this
+ * never runs a second time, so an admin who later deliberately empties a
+ * worker's tabs again keeps that choice. */
+export function backfillWorkerDefaultTabsIfNeeded(): void {
+  const database = getDb();
+  const already = database.prepare(`SELECT 1 FROM worker_default_tabs_backfill_done WHERE id = 1`).get();
+  if (already) return;
+  const tx = database.transaction(() => {
+    database.prepare(`UPDATE users SET visible_tabs = ? WHERE role = 'worker' AND visible_tabs = '[]'`).run(JSON.stringify(ALWAYS_ON_FEATURES));
+    database.prepare(`INSERT OR IGNORE INTO worker_default_tabs_backfill_done (id, done_at) VALUES (1, ?)`).run(Date.now());
   });
   tx();
 }
