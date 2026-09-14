@@ -1384,6 +1384,55 @@ export function deleteWorker(userId: string, companyId: string): void {
   getDb().prepare(`DELETE FROM users WHERE id = ? AND company_id = ? AND role = 'worker'`).run(userId, companyId);
 }
 
+export interface OwnIntegrationOverridesPatch {
+  instantlyApiKey?: string;
+  apolloApiKey?: string;
+  serperApiKey?: string;
+  openaiApiKey?: string;
+  anthropicApiKey?: string;
+  elevenlabsApiKey?: string;
+}
+
+/** Lets a company's own super_admin set THEIR OWN personal override key
+ * for a provider — the same six columns updateWorker() above manages for
+ * a worker, but scoped to the caller's own row with no `role = 'worker'`
+ * restriction. This closes a real gap: server/src/index.ts's
+ * resolveIntegrationCredential() reads effectiveUser(req)'s own override
+ * column regardless of role, but nothing before this ever WROTE to a
+ * super_admin's own override columns — so switching a provider to
+ * Individual mode (which removes the company-key fallback entirely) cut
+ * the super_admin's own access to it too, not just workers with no key of
+ * their own. Same "omitted leaves unchanged, explicit '' clears back to
+ * the company-wide fallback" convention as updateWorker(). */
+export function updateOwnIntegrationOverrides(userId: string, companyId: string, input: OwnIntegrationOverridesPatch): User | null {
+  const database = getDb();
+  const existing = database.prepare(`SELECT * FROM users WHERE id = ? AND company_id = ?`).get(userId, companyId) as UserRow | undefined;
+  if (!existing) return null;
+  const current = userFromRow(existing);
+  const nextInstantlyApiKey = input.instantlyApiKey !== undefined ? input.instantlyApiKey || null : current.instantlyApiKey;
+  const nextApolloApiKey = input.apolloApiKey !== undefined ? input.apolloApiKey || null : current.apolloApiKey;
+  const nextSerperApiKey = input.serperApiKey !== undefined ? input.serperApiKey || null : current.serperApiKey;
+  const nextOpenaiApiKey = input.openaiApiKey !== undefined ? input.openaiApiKey || null : current.openaiApiKey;
+  const nextAnthropicApiKey = input.anthropicApiKey !== undefined ? input.anthropicApiKey || null : current.anthropicApiKey;
+  const nextElevenlabsApiKey = input.elevenlabsApiKey !== undefined ? input.elevenlabsApiKey || null : current.elevenlabsApiKey;
+  database
+    .prepare(
+      `UPDATE users SET instantly_api_key = ?, apollo_api_key = ?, serper_api_key = ?, openai_api_key = ?, anthropic_api_key = ?, elevenlabs_api_key = ?
+       WHERE id = ? AND company_id = ?`,
+    )
+    .run(
+      nextInstantlyApiKey,
+      nextApolloApiKey,
+      nextSerperApiKey,
+      nextOpenaiApiKey,
+      nextAnthropicApiKey,
+      nextElevenlabsApiKey,
+      userId,
+      companyId,
+    );
+  return getUserById(userId);
+}
+
 export interface UpdateSuperAdminInput {
   username?: string;
   password?: string;

@@ -8636,6 +8636,37 @@ tr.row-drop-end td {
   gap: 0.5rem;
   flex-wrap: wrap;
 }
+.integrations-worker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  max-height: 16rem;
+  overflow-y: auto;
+  padding-right: 0.2rem;
+}
+.integrations-worker-list-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  padding: 0.3em 0;
+  border-bottom: 1px solid var(--border);
+}
+.integrations-worker-list-row:last-child {
+  border-bottom: none;
+}
+.integrations-worker-list-name {
+  flex: 1 1 12rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.85rem;
+}
+.integrations-worker-list-row input {
+  flex: 1 1 8rem;
+  min-width: 0;
+}
 .integrations-webhook-info {
   margin-top: 0.6rem;
   padding-top: 0.6rem;

@@ -16,6 +16,7 @@ import {
   getUserByUsername,
   listWorkers,
   updateWorker,
+  updateOwnIntegrationOverrides,
   deleteWorker,
   getCompanySuperAdmin,
   updateCompanySuperAdmin,
@@ -1583,12 +1584,47 @@ app.use(requireAuth);
 // since that family uses the wholly separate super-admin token), these
 // MUST sit after requireAuth — they read req.auth!.companyId, which only
 // exists once a normal Bearer session has been verified.
+// The six per-provider secret fields resolveIntegrationCredential() will
+// read off the caller's OWN row (effectiveUser(req)?.apolloApiKey etc.) —
+// same set updateOwnIntegrationOverrides() below writes. Kept as one list
+// so the GET route's own-key-status block and the PATCH route's field
+// picker can't drift apart.
+const OWN_OVERRIDABLE_FIELDS = ['instantlyApiKey', 'apolloApiKey', 'serperApiKey', 'openaiApiKey', 'anthropicApiKey', 'elevenlabsApiKey'] as const;
+
 app.get(
   '/api/integrations',
   requireNotWorker,
   requirePermission2('api_keys.view'),
   asyncHandler(async (req, res) => {
-    res.json(integrationsStatus(req.auth!.companyId));
+    const self = getUserById(req.auth!.userId);
+    const ownKeys: Record<string, boolean> = {};
+    for (const field of OWN_OVERRIDABLE_FIELDS) ownKeys[field] = !!self?.[field];
+    res.json({ ...integrationsStatus(req.auth!.companyId), ownKeys });
+  }),
+);
+
+// Lets the CALLER set their own personal override key for a provider — see
+// accounts/db.ts's updateOwnIntegrationOverrides() for why this exists: a
+// company's own super_admin had no way to satisfy resolveIntegrationCredential()
+// for themselves once a provider was switched to Individual mode (which
+// removes the company-wide fallback entirely), since nothing before this
+// ever wrote to a super_admin's own override columns — a real, reported
+// gap where flipping a provider to Individual silently cut the
+// super_admin's own access too, not just a worker's. requireNotWorker
+// means only a super_admin ever reaches this (a worker's own key is
+// still assigned BY their admin, never self-service).
+app.patch(
+  '/api/integrations/my-keys',
+  requireNotWorker,
+  requirePermission2('api_keys.edit'),
+  asyncHandler(async (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const patch: Record<string, string> = {};
+    for (const field of OWN_OVERRIDABLE_FIELDS) {
+      if (typeof body[field] === 'string') patch[field] = body[field];
+    }
+    updateOwnIntegrationOverrides(req.auth!.userId, req.auth!.companyId, patch);
+    res.json({ ok: true });
   }),
 );
 

@@ -38,7 +38,20 @@ export const NON_SECRET_INTEGRATION_FIELDS: readonly IntegrationField[] = [
 export type IntegrationModeField = 'apolloMode' | 'serperMode' | 'instantlyMode' | 'openaiMode' | 'anthropicMode' | 'elevenlabsMode';
 export type IntegrationMode = 'shared' | 'individual';
 
-export type IntegrationsStatus = Record<IntegrationField, boolean | string | null> & Record<IntegrationModeField, IntegrationMode>;
+// Exactly the six IntegrationFields that also exist as a per-user override
+// column (mirrors server/src/index.ts's OWN_OVERRIDABLE_FIELDS) — Zadarma's
+// real key/secret and LinkedIn's CDP URL have no per-user equivalent.
+export type OwnOverridableField = 'instantlyApiKey' | 'apolloApiKey' | 'serperApiKey' | 'openaiApiKey' | 'anthropicApiKey' | 'elevenlabsApiKey';
+
+export type IntegrationsStatus = Record<IntegrationField, boolean | string | null> &
+  Record<IntegrationModeField, IntegrationMode> & {
+    /** The CALLING user's own personal override key status per provider —
+     * only ever populated in self-service mode (companyId omitted below);
+     * the admin route managing an arbitrary company has no "self" in the
+     * company sense, so this is undefined there. See saveOwnKeys' own doc
+     * comment for why this exists at all. */
+    ownKeys?: Record<OwnOverridableField, boolean>;
+  };
 
 interface IntegrationsState {
   status: IntegrationsStatus | null;
@@ -61,6 +74,16 @@ interface IntegrationsState {
   save: (patch: Partial<Record<IntegrationField, string>>, companyId?: string) => Promise<void>;
   clear: (field: IntegrationField, companyId?: string) => Promise<void>;
   setMode: (field: IntegrationModeField, mode: IntegrationMode, companyId?: string) => Promise<void>;
+  /** Self-service only (no companyId param at all — there is no "my own
+   * key" concept for the platform admin managing someone else's company):
+   * lets the logged-in super_admin set/clear their OWN personal override
+   * key for a provider, same omitted-unchanged/explicit-''-clears
+   * convention as `save`. Exists to close a real gap — see
+   * server/src/accounts/db.ts's updateOwnIntegrationOverrides() doc
+   * comment: without a key of their own, switching a provider to
+   * Individual mode used to also cut the super_admin's own access to it,
+   * not just a worker's. */
+  saveOwnKeys: (patch: Partial<Record<OwnOverridableField, string>>) => Promise<void>;
 }
 
 function integrationsPath(companyId: string | undefined, suffix = ''): string {
@@ -134,6 +157,22 @@ export const useIntegrationsStore = create<IntegrationsState>((set, get) => ({
       await get().load(companyId);
     } catch (err) {
       set({ saving: false, error: err instanceof Error ? err.message : 'Nepavyko pakeisti režimo' });
+      throw err;
+    }
+  },
+
+  saveOwnKeys: async (patch) => {
+    set({ saving: true, error: null });
+    try {
+      await localApiRequest('/api/integrations/my-keys', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      });
+      set({ saving: false });
+      await get().load(undefined);
+    } catch (err) {
+      set({ saving: false, error: err instanceof Error ? err.message : 'Nepavyko išsaugoti asmeninio rakto' });
       throw err;
     }
   },

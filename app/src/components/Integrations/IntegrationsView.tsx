@@ -150,6 +150,7 @@ export function IntegrationsView({ companyId }: IntegrationsViewProps) {
   const save = useIntegrationsStore((s) => s.save);
   const clear = useIntegrationsStore((s) => s.clear);
   const setMode = useIntegrationsStore((s) => s.setMode);
+  const saveOwnKeys = useIntegrationsStore((s) => s.saveOwnKeys);
   const showToast = useToastStore((s) => s.show);
 
   const workers = useWorkersStore((s) => s.workers);
@@ -178,20 +179,21 @@ export function IntegrationsView({ companyId }: IntegrationsViewProps) {
     if (error) showToast(error);
   }, [error, showToast]);
 
-  // One selected worker + one draft value per provider group, keyed by
-  // that group's own field — lets each Individual-mode group's "assign a
-  // worker's key" sub-form act independently without six separate pieces
-  // of component state.
-  const [workerPickerSelection, setWorkerPickerSelection] = useState<Partial<Record<WorkerOverridableField, string>>>({});
-  const [workerKeyDraft, setWorkerKeyDraft] = useState<Partial<Record<WorkerOverridableField, string>>>({});
+  // One draft value per (worker, field) pair, keyed by a compound string —
+  // NOT per-group single-slot state, on explicit request: a company with
+  // 10+ workers needs to see and edit every one of them at once for a
+  // given provider (go down the list assigning key after key), not pick
+  // one worker at a time from a dropdown that hides everyone else.
+  const [workerKeyDrafts, setWorkerKeyDrafts] = useState<Record<string, string>>({});
+  const workerDraftKey = (workerId: string, field: WorkerOverridableField) => `${workerId}:${field}`;
 
-  const handleAssignWorkerKey = async (field: WorkerOverridableField) => {
-    const workerId = workerPickerSelection[field];
-    const value = (workerKeyDraft[field] ?? '').trim();
-    if (!workerId || !value) return;
+  const handleAssignWorkerKey = async (workerId: string, field: WorkerOverridableField) => {
+    const draftKey = workerDraftKey(workerId, field);
+    const value = (workerKeyDrafts[draftKey] ?? '').trim();
+    if (!value) return;
     try {
       await updateWorker(workerId, { [field]: value }, companyId);
-      setWorkerKeyDraft((prev) => ({ ...prev, [field]: '' }));
+      setWorkerKeyDrafts((prev) => ({ ...prev, [draftKey]: '' }));
       showToast('Darbuotojo raktas priskirtas');
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Nepavyko priskirti rakto');
@@ -203,6 +205,37 @@ export function IntegrationsView({ companyId }: IntegrationsViewProps) {
     if (!ok) return;
     try {
       await updateWorker(workerId, { [field]: '' }, companyId);
+      showToast('Išvalyta');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Nepavyko išvalyti');
+    }
+  };
+
+  // The logged-in super_admin's OWN personal override key per provider —
+  // self-service only (companyId undefined). Exists so switching a
+  // provider to Individual mode never locks the super_admin themselves
+  // out of it: resolveIntegrationCredential() reads this same row's
+  // column regardless of role, and until now nothing ever wrote to it for
+  // a super_admin (only workers had a UI for their own override).
+  const [myKeyDraft, setMyKeyDraft] = useState<Partial<Record<WorkerOverridableField, string>>>({});
+
+  const handleSaveOwnKey = async (field: WorkerOverridableField) => {
+    const value = (myKeyDraft[field] ?? '').trim();
+    if (!value) return;
+    try {
+      await saveOwnKeys({ [field]: value });
+      setMyKeyDraft((prev) => ({ ...prev, [field]: '' }));
+      showToast('Asmeninis raktas išsaugotas');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Nepavyko išsaugoti');
+    }
+  };
+
+  const handleClearOwnKey = async (field: WorkerOverridableField) => {
+    const ok = await confirmDialog({ message: 'Išvalyti savo asmeninį raktą?', danger: true });
+    if (!ok) return;
+    try {
+      await saveOwnKeys({ [field]: '' });
       showToast('Išvalyta');
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Nepavyko išvalyti');
@@ -348,52 +381,77 @@ export function IntegrationsView({ companyId }: IntegrationsViewProps) {
               );
             })}
           </div>
-          {group.modeField && status?.[group.modeField] === 'individual' && (() => {
-            const workerField = group.fields[0].field as WorkerOverridableField;
-            const selectedWorkerId = workerPickerSelection[workerField] ?? '';
-            const selectedWorker = workers.find((w) => w.id === selectedWorkerId);
-            const selectedWorkerHasKey = selectedWorker ? workerHasProviderKey(selectedWorker, workerField) : false;
+          {!companyId && group.modeField && (() => {
+            const ownField = group.fields[0].field as WorkerOverridableField;
+            const hasOwnKey = !!status?.ownKeys?.[ownField];
             return (
               <div className="integrations-worker-assign">
                 <p className="integrations-hint">
-                  Individual režimu darbuotojas be savo rakto šios integracijos naudoti negalės — priskirkite raktą konkrečiam
-                  darbuotojui čia, arba jo paties redagavimo formoje (Darbuotojai).
+                  Mano asmeninis raktas — jei nustatytas, naudojamas vietoje bendro įmonės rakto, net Shared režimu (ne tik
+                  Individual). Be jo, perjungus šią integraciją į Individual, jos nebegalėsite naudoti nė patys.
                 </p>
                 <div className="integrations-worker-assign-row">
-                  <select
-                    value={selectedWorkerId}
-                    onChange={(e) => setWorkerPickerSelection((prev) => ({ ...prev, [workerField]: e.target.value }))}
-                  >
-                    <option value="">— pasirinkite darbuotoją —</option>
-                    {workers.map((w) => (
-                      <option key={w.id} value={w.id}>
-                        {w.firstName} {w.lastName} ({w.username})
-                      </option>
-                    ))}
-                  </select>
-                  {selectedWorker && (
-                    <>
-                      <input
-                        type="password"
-                        placeholder={selectedWorkerHasKey ? '••••••••' : 'Naujas raktas'}
-                        autoComplete="off"
-                        value={workerKeyDraft[workerField] ?? ''}
-                        onChange={(e) => setWorkerKeyDraft((prev) => ({ ...prev, [workerField]: e.target.value }))}
-                      />
-                      <button type="button" onClick={() => void handleAssignWorkerKey(workerField)}>
-                        Priskirti
-                      </button>
-                      {selectedWorkerHasKey && (
-                        <button
-                          type="button"
-                          className="danger"
-                          onClick={() => void handleClearWorkerKey(workerField, selectedWorker.id, `${selectedWorker.firstName} ${selectedWorker.lastName}`)}
-                        >
-                          <X className="icon" size={14} /> Išvalyti
-                        </button>
-                      )}
-                    </>
+                  <input
+                    type="password"
+                    placeholder={hasOwnKey ? '••••••••' : 'Mano raktas'}
+                    autoComplete="off"
+                    value={myKeyDraft[ownField] ?? ''}
+                    onChange={(e) => setMyKeyDraft((prev) => ({ ...prev, [ownField]: e.target.value }))}
+                  />
+                  <button type="button" onClick={() => void handleSaveOwnKey(ownField)}>
+                    Išsaugoti
+                  </button>
+                  {hasOwnKey && (
+                    <button type="button" className="danger" onClick={() => void handleClearOwnKey(ownField)}>
+                      <X className="icon" size={14} /> Išvalyti
+                    </button>
                   )}
+                </div>
+              </div>
+            );
+          })()}
+          {group.modeField && status?.[group.modeField] === 'individual' && (() => {
+            const workerField = group.fields[0].field as WorkerOverridableField;
+            return (
+              <div className="integrations-worker-assign">
+                <p className="integrations-hint">
+                  Individual režimu darbuotojas be savo rakto šios integracijos naudoti negalės — priskirkite raktą kiekvienam
+                  žemiau, po vieną, kiek reikia (visi darbuotojai matomi vienu metu, ne po vieną iš sąrašo).
+                </p>
+                {workers.length === 0 && <p className="integrations-hint">Šioje įmonėje dar nėra darbuotojų.</p>}
+                <div className="integrations-worker-list">
+                  {workers.map((w) => {
+                    const hasKey = workerHasProviderKey(w, workerField);
+                    const draftKey = workerDraftKey(w.id, workerField);
+                    return (
+                      <div key={w.id} className="integrations-worker-list-row">
+                        <span className="integrations-worker-list-name">
+                          {w.firstName} {w.lastName} <span className="instantly-row-subtitle">({w.username})</span>
+                        </span>
+                        <input
+                          type="password"
+                          placeholder={hasKey ? '••••••••' : 'Raktas'}
+                          autoComplete="off"
+                          value={workerKeyDrafts[draftKey] ?? ''}
+                          onChange={(e) => setWorkerKeyDrafts((prev) => ({ ...prev, [draftKey]: e.target.value }))}
+                        />
+                        <button type="button" onClick={() => void handleAssignWorkerKey(w.id, workerField)}>
+                          Išsaugoti
+                        </button>
+                        {hasKey ? (
+                          <button
+                            type="button"
+                            className="danger"
+                            onClick={() => void handleClearWorkerKey(workerField, w.id, `${w.firstName} ${w.lastName}`)}
+                          >
+                            <X className="icon" size={14} /> Išvalyti
+                          </button>
+                        ) : (
+                          <span className="integrations-badge-unset">— Nenustatyta</span>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             );
