@@ -14,6 +14,7 @@ export interface ExtractedContactFields {
   position: string;
   email: string;
   phone: string;
+  linkedinUrl: string;
 }
 
 /** Mirrors parseContacts()'s JSON-array-with-legacy-fallback shape — a
@@ -58,8 +59,12 @@ const PHONE_PATTERN = /\+?\d[\d\s().-]{6,}\d/;
 export function extractContactFields(text: string): ExtractedContactFields {
   let remaining = text;
 
+  let linkedinUrl = '';
   const linkedinMatch = LINKEDIN_PATTERN.exec(remaining);
-  if (linkedinMatch) remaining = remaining.slice(0, linkedinMatch.index) + remaining.slice(linkedinMatch.index + linkedinMatch[0].length);
+  if (linkedinMatch) {
+    linkedinUrl = linkedinMatch[0];
+    remaining = remaining.slice(0, linkedinMatch.index) + remaining.slice(linkedinMatch.index + linkedinMatch[0].length);
+  }
 
   const instagramMatch = INSTAGRAM_PATTERN.exec(remaining);
   if (instagramMatch) remaining = remaining.slice(0, instagramMatch.index) + remaining.slice(instagramMatch.index + instagramMatch[0].length);
@@ -88,5 +93,5 @@ export function extractContactFields(text: string): ExtractedContactFields {
   const [nameSegment, positionSegment] = segments;
   const [firstName = '', ...rest] = (nameSegment ?? '').split(' ').filter(Boolean);
 
-  return { firstName, lastName: rest.join(' '), position: positionSegment ?? '', email, phone };
+  return { firstName, lastName: rest.join(' '), position: positionSegment ?? '', email, phone, linkedinUrl };
 }

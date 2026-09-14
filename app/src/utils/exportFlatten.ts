@@ -24,7 +24,7 @@ export interface BuiltExportRows {
   dataRows: string[][];
 }
 
-export const CONTACT_FIELD_HEADERS = ['Vardas', 'Pavardė', 'Pareigos', 'El. paštas', 'Telefonas'];
+export const CONTACT_FIELD_HEADERS = ['Vardas', 'Pavardė', 'Pareigos', 'El. paštas', 'Telefonas', 'LinkedIn'];
 
 // Excel's own hard per-sheet row cap (including the header row).
 export const XLSX_MAX_ROWS = 1_048_576;
@@ -60,12 +60,12 @@ export function buildExportRows(params: BuildExportRowsParams): BuiltExportRows 
     const extracted = entries.map((e) => contactTextToFields(e.text)).filter((f) => !onlyContactsWithEmail || !!f.email);
 
     if (extracted.length === 0) {
-      if (includeCompaniesWithoutContacts) dataRows.push([...companyValues, '', '', '', '', '']);
+      if (includeCompaniesWithoutContacts) dataRows.push([...companyValues, ...CONTACT_FIELD_HEADERS.map(() => '')]);
       continue;
     }
 
     for (const fields of extracted) {
-      dataRows.push([...companyValues, fields.firstName, fields.lastName, fields.position, fields.email, fields.phone]);
+      dataRows.push([...companyValues, fields.firstName, fields.lastName, fields.position, fields.email, fields.phone, fields.linkedinUrl]);
     }
   }
 
