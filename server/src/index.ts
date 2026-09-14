@@ -1469,6 +1469,7 @@ const VALID_FEATURES = new Set([
   'news',
   'workers',
   'backups',
+  'integrations',
 ]);
 
 // The full merged list (ALWAYS_ON_FEATURES + whatever's stored) — same
@@ -1567,6 +1568,82 @@ app.post(
 // loads the frontend at all (hits these routes directly) is blocked here
 // too, not just by the login screen.
 app.use(requireAuth);
+
+// A company's OWN super_admin managing their own company's integrations
+// directly — previously this screen only existed behind the platform
+// admin's independent /supersuperadmin dashboard (see
+// IntegrationsView.tsx's own doc comment on why self-service was removed
+// once already: there was no permission-scoped way to offer it yet). That
+// gap is exactly what api_keys.view/api_keys.edit/api_keys.set_mode exist
+// for — this is the first place any of the three is actually checked.
+// requireNotWorker is a hard role block regardless of what a worker might
+// be granted, matching workers.manage/backups.manage's own precedent for
+// a coarse admin-only action. Unlike the /api/admin/companies/:id/... twin
+// of these three routes (registered above, before app.use(requireAuth),
+// since that family uses the wholly separate super-admin token), these
+// MUST sit after requireAuth — they read req.auth!.companyId, which only
+// exists once a normal Bearer session has been verified.
+app.get(
+  '/api/integrations',
+  requireNotWorker,
+  requirePermission2('api_keys.view'),
+  asyncHandler(async (req, res) => {
+    res.json(integrationsStatus(req.auth!.companyId));
+  }),
+);
+
+app.patch(
+  '/api/integrations',
+  requireNotWorker,
+  asyncHandler(async (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    // A single PATCH can touch two independently-gated concerns at once
+    // (an actual key value vs. the Shared/Individual switch), so this
+    // can't be a single requirePermission2(key) — check whichever of the
+    // two the submitted body actually contains, same manual-check-plus-
+    // audit-log shape as the escalation guard in POST /api/workers.
+    const touchesKeys = INTEGRATION_FIELDS.some((f) => typeof body[f] === 'string' && (body[f] as string).trim());
+    const touchesMode = INTEGRATION_MODE_FIELDS.some((f) => body[f] !== undefined);
+    const user = getUserById(req.auth!.userId)!;
+    const effective = effectivePermissions(user);
+    const missing: PermissionKey[] = [];
+    if (touchesKeys && !effective.has('api_keys.edit')) missing.push('api_keys.edit');
+    if (touchesMode && !effective.has('api_keys.set_mode')) missing.push('api_keys.set_mode');
+    if (missing.length > 0) {
+      appendAuditLog({
+        actorUserId: req.auth!.userId,
+        actorRole: req.auth!.role,
+        companyId: req.auth!.companyId,
+        action: 'access.denied',
+        targetType: 'company',
+        targetId: req.auth!.companyId,
+        detail: { attemptedKeys: missing },
+      });
+      res.status(403).json({ error: 'Neturite šiai operacijai reikalingų teisių', keys: missing });
+      return;
+    }
+    patchIntegrations(req.auth!.companyId, body);
+    if (typeof body.instantlyApiKey === 'string' && body.instantlyApiKey.trim()) {
+      ensureVisiAtsakymaiTable(req.auth!.companyId);
+    }
+    res.json({ ok: true });
+  }),
+);
+
+app.post(
+  '/api/integrations/clear',
+  requireNotWorker,
+  requirePermission2('api_keys.edit'),
+  asyncHandler(async (req, res) => {
+    const { field } = req.body ?? {};
+    if (typeof field !== 'string' || !(INTEGRATION_FIELDS as readonly string[]).includes(field)) {
+      res.status(400).json({ error: 'Invalid "field"' });
+      return;
+    }
+    clearCompanyIntegrationField(req.auth!.companyId, field as (typeof INTEGRATION_FIELDS)[number]);
+    res.json({ ok: true });
+  }),
+);
 
 // Reads the current user fresh from the DB on every call (not from the
 // token's own payload, which only carries userId/companyId/role) — this

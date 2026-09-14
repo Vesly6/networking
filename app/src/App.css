@@ -3309,6 +3309,41 @@ tr.row-drop-end td {
   cursor: default;
 }
 
+.cell-hover-contact-filter {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.3rem 0.6rem 0;
+  padding: 0.2em 0.5em;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-muted);
+}
+.cell-hover-contact-filter input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  padding: 0.2em 0;
+  color: var(--text);
+}
+.cell-hover-contact-filter input:focus {
+  outline: none;
+}
+.cell-hover-contact-filter-clear {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+}
+.cell-hover-contact-filter-empty {
+  margin: 0.4rem 0.6rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
 .cell-hover-apollo-result {
   display: flex;
   align-items: center;
@@ -5943,6 +5978,50 @@ tr.row-drop-end td {
   flex-shrink: 0;
 }
 
+.campaign-leads-modal {
+  max-width: 640px;
+}
+.campaign-leads-search {
+  width: 100%;
+  box-sizing: border-box;
+}
+.campaign-leads-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+  overflow-y: auto;
+  min-height: 0;
+}
+.campaign-leads-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding-bottom: 0.2rem;
+  border-bottom: 1px solid var(--border);
+}
+.campaign-leads-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.3em 0;
+  font-size: 0.85rem;
+}
+.campaign-leads-row-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.campaign-leads-selected-count {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  align-self: center;
+}
+
 .instantly-pill {
   font-size: 0.72rem;
   font-weight: 600;
@@ -8545,6 +8624,17 @@ tr.row-drop-end td {
   display: flex;
   align-items: flex-end;
   gap: 0.6rem;
+}
+.integrations-worker-assign {
+  margin-top: 0.6rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--border);
+}
+.integrations-worker-assign-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
 }
 .integrations-webhook-info {
   margin-top: 0.6rem;

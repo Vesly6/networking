@@ -111,6 +111,17 @@ export function CallsView({ onJumpToRow, onJumpToContact }: CallsViewProps) {
   // and coming back, which really does unmount CallsView — see the tab
   // switch in App.tsx), so this guard only suppresses the fake
   // double-fire, not a real re-open.
+  // Stays false until the "Įkelti skambučius" button is actually clicked —
+  // never reset afterward, since every later error in this component only
+  // ever comes from that same button (the mount-triggered auto-load below
+  // only ever fires once, guarded by hasAutoLoadedRef). Keeps the
+  // auto-load's own failure (typically "Zadarma isn't configured —
+  // contact your administrator") console-silent instead of a surprise
+  // toast the instant a table (with the Calls tab already open from a
+  // prior session) loads on login — a real, reported bug, the same class
+  // Softphone.tsx's own init failure was already fixed to never toast —
+  // while still surfacing a real failure the moment the user clicks Load.
+  const isManualLoadRef = useRef(false);
   const hasAutoLoadedRef = useRef(false);
   useEffect(() => {
     if (!hasAutoLoadedRef.current) {
@@ -137,11 +148,11 @@ export function CallsView({ onJumpToRow, onJumpToContact }: CallsViewProps) {
   }, []);
 
   useEffect(() => {
-    if (error) showToast(error);
+    if (error && isManualLoadRef.current) showToast(error);
   }, [error, showToast]);
 
   useEffect(() => {
-    if (costsError) showToast(costsError);
+    if (costsError && isManualLoadRef.current) showToast(costsError);
   }, [costsError, showToast]);
 
   // Not a statistics-endpoint call (see useCallsStore's fetchBalance) — no

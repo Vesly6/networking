@@ -209,6 +209,18 @@ export function unsubscribeInstantlyLead(email: string) {
   });
 }
 
+/** Removes a lead from Instantly entirely — they stop receiving any
+ * further steps of whatever campaign they were in. Genuinely irreversible
+ * from this app's side (Instantly has no "undo," only re-adding the same
+ * email as a brand-new lead later); the caller must have already shown a
+ * confirmDialog, same as unsubscribeInstantlyLead above. Server route
+ * (DELETE /api/instantly/leads/:id) already existed and was already
+ * permission-gated identically to every other Instantly write — this is
+ * just the first client wrapper for it. */
+export function deleteInstantlyLead(id: string) {
+  return localApiRequest<{ status: string }>(`/api/instantly/leads/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
 // --- Email accounts ("mailboxes") ---
 
 export const ACCOUNT_STATUS_LABELS: Record<number, string> = {

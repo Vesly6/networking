@@ -45,6 +45,13 @@ interface WorkspaceViewProps {
    * not a worker), since deciding what gets backed up/restored is
    * workspace-level management, not a per-table content edit. */
   onOpenBackups?: () => void;
+  /** A company's own view of "Integracijos" (company-wide API keys,
+   * Shared/Individual mode, per-worker key assignment) — same role gate as
+   * onOpenWorkers/onOpenBackups (canManageTables: not a worker), plus
+   * App.tsx additionally requires the api_keys.view registry permission
+   * and the platform-admin-toggleable 'integrations' Funkcijos flag,
+   * mirroring exactly how onOpenWorkers/onOpenBackups are gated. */
+  onOpenIntegrations?: () => void;
 }
 
 export function WorkspaceView({
@@ -53,6 +60,7 @@ export function WorkspaceView({
   onOpenNews,
   onOpenLessons,
   onOpenBackups,
+  onOpenIntegrations,
 }: WorkspaceViewProps) {
   const tables = useWorkspaceStore((s) => s.tables);
   const createTable = useWorkspaceStore((s) => s.createTable);
@@ -137,6 +145,11 @@ export function WorkspaceView({
           {onOpenBackups && (
             <button type="button" onClick={onOpenBackups}>
               Duomenys
+            </button>
+          )}
+          {onOpenIntegrations && (
+            <button type="button" onClick={onOpenIntegrations}>
+              Integracijos
             </button>
           )}
           {canManageTables && (

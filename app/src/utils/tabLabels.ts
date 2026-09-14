@@ -25,6 +25,7 @@ export const TAB_LABELS: Record<string, string> = {
   news: 'Naujienos',
   workers: 'Darbuotojai',
   backups: 'Duomenys',
+  integrations: 'Integracijos',
 };
 
 /** Every value a company's enabledFeatures/a worker's visibleTabs can
@@ -42,7 +43,7 @@ export const ALL_TABS = Object.keys(TAB_LABELS);
  * company's enabledFeatures through this before handing it to
  * <WorkersView>, rather than duplicating the exclusion at each site. */
 export function workerGrantableTabs(companyTabs: string[]): string[] {
-  return companyTabs.filter((t) => t !== 'workers' && t !== 'backups');
+  return companyTabs.filter((t) => t !== 'workers' && t !== 'backups' && t !== 'integrations');
 }
 
 /** Mirrors server/src/accounts/db.ts's ALWAYS_ON_FEATURES exactly — Table

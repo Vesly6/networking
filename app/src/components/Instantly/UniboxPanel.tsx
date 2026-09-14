@@ -536,8 +536,31 @@ export function UniboxPanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Stays false until the user actually touches a filter/view control
+  // below (never reset afterward — once true, every future error in this
+  // panel really was triggered by something the user just clicked). Keeps
+  // this mount's automatic refresh() failure (typically "Instantly isn't
+  // configured — contact your administrator") console-silent instead of a
+  // surprise toast the instant Paštas → Pašto dėžutės opens — a real,
+  // reported bug (the same class of thing Softphone.tsx's own init
+  // failure was already fixed to never toast) — while still surfacing a
+  // real failure the moment the user manually changes a filter.
+  const isManualRefreshRef = useRef(false);
+  const handleSetViewMode = (mode: UniboxViewMode) => {
+    isManualRefreshRef.current = true;
+    setViewMode(mode);
+  };
+  const handleSetFilterMailbox = (mailbox: string | null) => {
+    isManualRefreshRef.current = true;
+    setFilterMailbox(mailbox);
+  };
+  const handleSetFilterCampaignId = (id: string | null) => {
+    isManualRefreshRef.current = true;
+    setFilterCampaignId(id);
+  };
+
   useEffect(() => {
-    if (error) showToast(error);
+    if (error && isManualRefreshRef.current) showToast(error);
   }, [error, showToast]);
   useEffect(() => {
     if (replyError) showToast(replyError);
@@ -683,7 +706,7 @@ export function UniboxPanel() {
                     type="button"
                     key={mode}
                     className={`instantly-status-row ${viewMode === mode ? 'active' : ''}`}
-                    onClick={() => setViewMode(mode)}
+                    onClick={() => handleSetViewMode(mode)}
                   >
                     <ModeIcon className="icon" size={16} /> {VIEW_MODE_LABELS[mode]}
                     {mode === 'unread' && unreadCount > 0 && <span className="instantly-status-count">{unreadCount}</span>}
@@ -715,7 +738,7 @@ export function UniboxPanel() {
                       type="button"
                       className="instantly-status-row"
                       onClick={() => {
-                        setFilterCampaignId(null);
+                        handleSetFilterCampaignId(null);
                         setCampaignsOpen(false);
                       }}
                     >
@@ -728,7 +751,7 @@ export function UniboxPanel() {
                       key={c.id}
                       className={`instantly-status-row ${filterCampaignId === c.id ? 'active' : ''}`}
                       onClick={() => {
-                        setFilterCampaignId(filterCampaignId === c.id ? null : c.id);
+                        handleSetFilterCampaignId(filterCampaignId === c.id ? null : c.id);
                         setCampaignsOpen(false);
                       }}
                     >
@@ -812,7 +835,7 @@ export function UniboxPanel() {
             </div>
 
             <div className="instantly-unibox-sidebar-title">Pašto dėžutė</div>
-            <select value={filterMailbox ?? ''} onChange={(e) => setFilterMailbox(e.target.value || null)}>
+            <select value={filterMailbox ?? ''} onChange={(e) => handleSetFilterMailbox(e.target.value || null)}>
               <option value="">Visos</option>
               {accountEmails.map((email) => (
                 <option key={email} value={email}>

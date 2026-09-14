@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { superAdminApiRequest } from '../utils/superAdminApi';
+import { localApiRequest } from '../utils/localApi';
 
 // Mirrors server/src/index.ts's INTEGRATION_FIELDS exactly (camelCase,
 // same order). Secret fields come back as booleans (never the real value,
@@ -44,24 +45,30 @@ interface IntegrationsState {
   loading: boolean;
   saving: boolean;
   error: string | null;
-  /** `companyId` required — there is no self-service "manage my own
-   * company's keys" route anymore (removed on explicit request: every
-   * company's integrations, including what used to be the owner's own,
-   * are managed exclusively through the independent super-admin dashboard
-   * now — see server/src/index.ts's /api/admin/companies/:id/integrations
-   * and its own doc comment). This store only ever talks to that one
-   * requireSuperAdmin-gated route family. */
-  load: (companyId: string) => Promise<void>;
+  /** `companyId` omitted = a company's own super_admin managing their own
+   * integrations (gated by the api_keys.view/edit/set_mode permission
+   * keys, `/api/integrations`); passed = the platform admin managing an
+   * arbitrary company by id from the independent super-admin dashboard
+   * (`/api/admin/companies/:id/integrations`) — same dual-route shape
+   * useWorkersStore.ts already uses for the identical "own company vs.
+   * admin-picked company" duality. Self-service used to be removed
+   * entirely (no permission-scoped way to offer it existed yet); this is
+   * that gap being closed now that the registry keys actually gate it. */
+  load: (companyId?: string) => Promise<void>;
   /** Partial — only the fields actually present get overwritten server-side
    * (an omitted field means "leave unchanged"), so this can be called with
    * just whichever fields the user actually typed into. */
-  save: (patch: Partial<Record<IntegrationField, string>>, companyId: string) => Promise<void>;
-  clear: (field: IntegrationField, companyId: string) => Promise<void>;
-  setMode: (field: IntegrationModeField, mode: IntegrationMode, companyId: string) => Promise<void>;
+  save: (patch: Partial<Record<IntegrationField, string>>, companyId?: string) => Promise<void>;
+  clear: (field: IntegrationField, companyId?: string) => Promise<void>;
+  setMode: (field: IntegrationModeField, mode: IntegrationMode, companyId?: string) => Promise<void>;
 }
 
-function integrationsPath(companyId: string, suffix = ''): string {
-  return `/api/admin/companies/${companyId}/integrations${suffix}`;
+function integrationsPath(companyId: string | undefined, suffix = ''): string {
+  return companyId ? `/api/admin/companies/${companyId}/integrations${suffix}` : `/api/integrations${suffix}`;
+}
+
+function integrationsRequest<T>(companyId: string | undefined, path: string, init?: RequestInit): Promise<T> {
+  return companyId ? superAdminApiRequest<T>(path, init) : localApiRequest<T>(path, init);
 }
 
 /** Same "stores own data, components own side effects" convention as
@@ -76,7 +83,7 @@ export const useIntegrationsStore = create<IntegrationsState>((set, get) => ({
   load: async (companyId) => {
     set({ loading: true, error: null });
     try {
-      const status = await superAdminApiRequest<IntegrationsStatus>(integrationsPath(companyId));
+      const status = await integrationsRequest<IntegrationsStatus>(companyId, integrationsPath(companyId));
       set({ status, loading: false });
     } catch (err) {
       set({ loading: false, error: err instanceof Error ? err.message : 'Nepavyko įkelti API raktų' });
@@ -86,7 +93,7 @@ export const useIntegrationsStore = create<IntegrationsState>((set, get) => ({
   save: async (patch, companyId) => {
     set({ saving: true, error: null });
     try {
-      await superAdminApiRequest(integrationsPath(companyId), {
+      await integrationsRequest(companyId, integrationsPath(companyId), {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(patch),
@@ -102,7 +109,7 @@ export const useIntegrationsStore = create<IntegrationsState>((set, get) => ({
   clear: async (field, companyId) => {
     set({ saving: true, error: null });
     try {
-      await superAdminApiRequest(integrationsPath(companyId, '/clear'), {
+      await integrationsRequest(companyId, integrationsPath(companyId, '/clear'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ field }),
@@ -118,7 +125,7 @@ export const useIntegrationsStore = create<IntegrationsState>((set, get) => ({
   setMode: async (field, mode, companyId) => {
     set({ saving: true, error: null });
     try {
-      await superAdminApiRequest(integrationsPath(companyId), {
+      await integrationsRequest(companyId, integrationsPath(companyId), {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ [field]: mode }),

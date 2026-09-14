@@ -3,7 +3,8 @@ import { useInstantlyCampaignsStore } from '../../store/useInstantlyCampaignsSto
 import { useToastStore } from '../../store/useToastStore';
 import { CAMPAIGN_STATUS_LABELS, type InstantlyCampaign } from '../../utils/instantlyApi';
 import { CampaignSequenceModal } from './CampaignSequenceModal';
-import { Eye } from 'lucide-react';
+import { CampaignLeadsModal } from './CampaignLeadsModal';
+import { Eye, Users } from 'lucide-react';
 
 function statusPillStyle(status: number): { background: string; color: string } {
   if (status === 1) return { background: '#e5f0e3', color: '#1b7a3d' };
@@ -27,6 +28,7 @@ export function CampaignsPanel() {
   const refresh = useInstantlyCampaignsStore((s) => s.refresh);
   const showToast = useToastStore((s) => s.show);
   const [openCampaignId, setOpenCampaignId] = useState<string | null>(null);
+  const [leadsCampaignId, setLeadsCampaignId] = useState<string | null>(null);
 
   useEffect(() => {
     void refresh();
@@ -53,6 +55,9 @@ export function CampaignsPanel() {
           <button type="button" onClick={() => setOpenCampaignId(campaign.id)}>
             <Eye className="icon" size={14} /> Peržiūrėti tekstą
           </button>
+          <button type="button" onClick={() => setLeadsCampaignId(campaign.id)}>
+            <Users className="icon" size={14} /> Peržiūrėti lidus
+          </button>
         </div>
       </div>
     );
@@ -63,6 +68,7 @@ export function CampaignsPanel() {
       {ready && campaigns.length === 0 && <p className="instantly-hint">Kol kas nėra kampanijų.</p>}
       <div className="instantly-list">{campaigns.map(renderRow)}</div>
       {openCampaignId && <CampaignSequenceModal campaignId={openCampaignId} onClose={() => setOpenCampaignId(null)} />}
+      {leadsCampaignId && <CampaignLeadsModal campaignId={leadsCampaignId} onClose={() => setLeadsCampaignId(null)} />}
     </div>
   );
 }

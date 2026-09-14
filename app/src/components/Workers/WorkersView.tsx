@@ -4,11 +4,10 @@ import { useAuthStore } from '../../store/useAuthStore';
 import { useWorkersStore, type Worker, type WorkerActionLogEntry, type WorkerActionType } from '../../store/useWorkersStore';
 import { useToastStore } from '../../store/useToastStore';
 import { typeToConfirmDialog } from '../../store/useTypeToConfirmStore';
-import { confirmDialog } from '../../store/useConfirmStore';
 import { formatHistoryTimestamp } from '../../utils/date';
 import { TAB_LABELS, DEFAULT_WORKER_TABS } from '../../utils/tabLabels';
 import { ALL_PERMISSION_KEYS, PERMISSION_GROUPS, PERMISSIONS, type PermissionKey } from '../../utils/permissions';
-import { ArrowRight, Key, UserCog, X } from 'lucide-react';
+import { ArrowRight, Key, UserCog } from 'lucide-react';
 
 const PERMISSION_LABELS: Array<{ key: keyof UserPermissions; label: string }> = [
   { key: 'canDeleteRows', label: 'Trinti eilutes' },
@@ -161,33 +160,6 @@ export interface WorkerZadarmaFields {
 
 const EMPTY_ZADARMA: WorkerZadarmaFields = { zadarmaSip: '', zadarmaWidgetSip: '', zadarmaCallerNumber: '' };
 
-/** The remaining plain-API-key integrations a worker can override — see
- * server/src/accounts/db.ts's per-worker migration. Unlike the Zadarma
- * fields above (a phone/extension number, not actually secret — always
- * pre-filled with the real value), these are real secrets the server never
- * re-sends once saved (see index.ts's workerToPublic()), so the form only
- * ever knows whether one is *set* (WorkerSecretsSet below), never its
- * actual value — same "never round-trip a saved secret into an input"
- * rule this app's own IntegrationsView.tsx already follows for the
- * company-wide keys. */
-type SecretApiKey = 'apolloApiKey' | 'instantlyApiKey' | 'serperApiKey' | 'openaiApiKey' | 'anthropicApiKey' | 'elevenlabsApiKey';
-const SECRET_API_KEY_FIELDS: Array<{ key: SecretApiKey; label: string }> = [
-  { key: 'apolloApiKey', label: 'Apollo.io' },
-  { key: 'instantlyApiKey', label: 'Instantly.ai' },
-  { key: 'serperApiKey', label: 'serper.dev' },
-  { key: 'openaiApiKey', label: 'OpenAI' },
-  { key: 'anthropicApiKey', label: 'Anthropic (Claude)' },
-  { key: 'elevenlabsApiKey', label: 'ElevenLabs' },
-];
-type WorkerSecretsSet = Partial<Record<SecretApiKey, boolean>>;
-/** Only the keys the admin actually touched this session end up here —
- * typing a value adds `key: theValue`; clicking "Išvalyti" adds `key: ''`
- * (a deliberate clear, distinct from simply never having typed anything);
- * an untouched field is just absent, so submitting this object leaves
- * every other secret exactly as it was (see UpdateWorkerInput's own
- * "omitted ≠ blank" convention, mirrored here on the client). */
-type SecretDrafts = Partial<Record<SecretApiKey, string>>;
-
 function WorkerForm({
   companyTabs,
   initialFirstName = '',
@@ -197,7 +169,6 @@ function WorkerForm({
   initialPermissionKeys = [],
   actingPermissionKeys,
   initialZadarma = EMPTY_ZADARMA,
-  initialSecretsSet = {},
   submitLabel,
   onSubmit,
   onCancel,
@@ -229,7 +200,6 @@ function WorkerForm({
    * doc comment), so there's nothing to bound. */
   actingPermissionKeys: PermissionKey[];
   initialZadarma?: WorkerZadarmaFields;
-  initialSecretsSet?: WorkerSecretsSet;
   submitLabel: string;
   onSubmit: (
     firstName: string,
@@ -238,7 +208,6 @@ function WorkerForm({
     permissions: UserPermissions,
     permissionKeys: PermissionKey[],
     zadarma: WorkerZadarmaFields,
-    secretDrafts: SecretDrafts,
   ) => void;
   onCancel?: () => void;
 }) {
@@ -248,18 +217,11 @@ function WorkerForm({
   const [permissions, setPermissions] = useState<UserPermissions>(initialPermissions);
   const [permissionKeys, setPermissionKeys] = useState<PermissionKey[]>(initialPermissionKeys);
   const [zadarma, setZadarma] = useState<WorkerZadarmaFields>(initialZadarma);
-  const [secretDrafts, setSecretDrafts] = useState<SecretDrafts>({});
 
   const toggleTab = (t: string) => setTabs((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
   const togglePermission = (key: keyof UserPermissions) => setPermissions((prev) => ({ ...prev, [key]: !prev[key] }));
   const togglePermissionKey = (key: PermissionKey) =>
     setPermissionKeys((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
-
-  const handleClearSecret = async (key: SecretApiKey, label: string) => {
-    const ok = await confirmDialog({ message: `Išvalyti „${label}“ raktą šiam darbuotojui?`, danger: true });
-    if (!ok) return;
-    setSecretDrafts((prev) => ({ ...prev, [key]: '' }));
-  };
 
   return (
     <div className="worker-form-permissions">
@@ -370,49 +332,15 @@ function WorkerForm({
           </label>
         </div>
       </div>
-      <div className="worker-form-section">
-        <span className="worker-form-section-label">
-          Kitos integracijos (nebūtina — jei tuščia, naudojamas bendras įmonės raktas)
-        </span>
-        <div className="worker-form-fields">
-          {SECRET_API_KEY_FIELDS.map(({ key, label }) => {
-            const isSet = !!initialSecretsSet[key];
-            const draft = secretDrafts[key];
-            const willClear = draft === '';
-            return (
-              <div key={key} className="integrations-field-row">
-                <label className="popover-field">
-                  <span>{label}</span>
-                  <input
-                    type="password"
-                    value={draft ?? ''}
-                    onChange={(e) => setSecretDrafts((prev) => ({ ...prev, [key]: e.target.value }))}
-                    placeholder={isSet && !willClear ? '••••••••' : 'API raktas'}
-                    autoComplete="off"
-                  />
-                </label>
-                {isSet && (
-                  <div className="integrations-field-status">
-                    <span className={willClear ? 'integrations-badge-unset' : 'integrations-badge-set'}>
-                      {willClear ? '— bus išvalyta' : 'Sukonfigūruota'}
-                    </span>
-                    {!willClear && (
-                      <button type="button" className="danger" onClick={() => void handleClearSecret(key, label)}>
-                        <X className="icon" size={14} /> Išvalyti
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </div>
+      <p className="integrations-hint">
+        Apollo/Instantly/Serper/OpenAI/Anthropic/ElevenLabs raktus konkrečiam darbuotojui priskirkite skiltyje
+        „Integracijos" (Individual režimu) — ten matoma iš karto, kuris raktas realiai naudojamas.
+      </p>
       <div className="worker-form-actions">
         <button
           type="button"
           className="primary"
-          onClick={() => onSubmit(firstName, lastName, tabs, permissions, permissionKeys, zadarma, secretDrafts)}
+          onClick={() => onSubmit(firstName, lastName, tabs, permissions, permissionKeys, zadarma)}
         >
           {submitLabel}
         </button>
@@ -515,7 +443,6 @@ export function WorkersView({ onJumpToRow, onJumpToContact, companyTabs, company
     permissions: UserPermissions,
     permissionKeys: PermissionKey[],
     zadarma: WorkerZadarmaFields,
-    secretDrafts: SecretDrafts,
   ) => {
     if (!username.trim() || !password || !firstName.trim()) {
       showToast('Užpildykite vardą, slaptažodį ir vardą');
@@ -534,7 +461,6 @@ export function WorkersView({ onJumpToRow, onJumpToContact, companyTabs, company
           zadarmaSip: zadarma.zadarmaSip || undefined,
           zadarmaWidgetSip: zadarma.zadarmaWidgetSip || undefined,
           zadarmaCallerNumber: zadarma.zadarmaCallerNumber || undefined,
-          ...secretDrafts,
         },
         companyId,
       );
@@ -555,7 +481,6 @@ export function WorkersView({ onJumpToRow, onJumpToContact, companyTabs, company
     permissions: UserPermissions,
     permissionKeys: PermissionKey[],
     zadarma: WorkerZadarmaFields,
-    secretDrafts: SecretDrafts,
   ) => {
     if (!firstName.trim()) {
       showToast('Vardas negali būti tuščias');
@@ -573,7 +498,6 @@ export function WorkersView({ onJumpToRow, onJumpToContact, companyTabs, company
           zadarmaSip: zadarma.zadarmaSip,
           zadarmaWidgetSip: zadarma.zadarmaWidgetSip,
           zadarmaCallerNumber: zadarma.zadarmaCallerNumber,
-          ...secretDrafts,
         },
         companyId,
       );
@@ -727,17 +651,9 @@ export function WorkersView({ onJumpToRow, onJumpToContact, companyTabs, company
                 zadarmaWidgetSip: worker.zadarmaWidgetSip ?? '',
                 zadarmaCallerNumber: worker.zadarmaCallerNumber ?? '',
               }}
-              initialSecretsSet={{
-                apolloApiKey: worker.apolloApiKeySet,
-                instantlyApiKey: worker.instantlyApiKeySet,
-                serperApiKey: worker.serperApiKeySet,
-                openaiApiKey: worker.openaiApiKeySet,
-                anthropicApiKey: worker.anthropicApiKeySet,
-                elevenlabsApiKey: worker.elevenlabsApiKeySet,
-              }}
               submitLabel="Išsaugoti"
-              onSubmit={(firstName, lastName, tabs, permissions, permissionKeys, zadarma, secretDrafts) =>
-                void handleUpdate(worker, firstName, lastName, tabs, permissions, permissionKeys, zadarma, secretDrafts)
+              onSubmit={(firstName, lastName, tabs, permissions, permissionKeys, zadarma) =>
+                void handleUpdate(worker, firstName, lastName, tabs, permissions, permissionKeys, zadarma)
               }
             />
           ) : (

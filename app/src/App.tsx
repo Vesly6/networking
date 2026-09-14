@@ -33,10 +33,12 @@ import { WorkersView } from './components/Workers/WorkersView';
 import { NewsView } from './components/News/NewsView';
 import { AdminView } from './components/Admin/AdminView';
 import { OwnBackupsView } from './components/Workspace/OwnBackupsView';
+import { IntegrationsView } from './components/Integrations/IntegrationsView';
 import { BrandLogo } from './components/BrandLogo';
 import { getNextActionColumn } from './utils/row';
 import { DEMO_MODE } from './utils/demoMode';
 import { workerGrantableTabs } from './utils/tabLabels';
+import { can } from './utils/permissions';
 import { isOverdue, isDueToday } from './utils/date';
 import { ArrowLeft, Clock, Bell, BellOff, Menu } from 'lucide-react';
 import './App.css';
@@ -93,7 +95,7 @@ function App() {
   // (see that URL check above this component's main return). The
   // cross-company Admin dashboard itself deliberately does NOT live here
   // either, for the same reason.
-  const [workspaceScreen, setWorkspaceScreen] = useState<'tables' | 'workers' | 'news' | 'lessons' | 'backups'>('tables');
+  const [workspaceScreen, setWorkspaceScreen] = useState<'tables' | 'workers' | 'news' | 'lessons' | 'backups' | 'integrations'>('tables');
   const [focusRowId, setFocusRowId] = useState<string | null>(null);
   const [focusContact, setFocusContact] = useState<{ rowId: string; columnId: string; contactId: string } | null>(null);
   const [editingTitle, setEditingTitle] = useState(false);
@@ -538,7 +540,9 @@ function App() {
                         ? 'Naujienos'
                         : workspaceScreen === 'backups'
                           ? 'Duomenys'
-                          : 'Pamokos'}
+                          : workspaceScreen === 'integrations'
+                            ? 'Integracijos'
+                            : 'Pamokos'}
                   </h2>
                 </div>
                 <div className="workspace-header-actions">
@@ -561,6 +565,8 @@ function App() {
                 <NewsView />
               ) : workspaceScreen === 'backups' ? (
                 <OwnBackupsView />
+              ) : workspaceScreen === 'integrations' ? (
+                <IntegrationsView />
               ) : (
                 <LessonsView />
               )}
@@ -578,6 +584,13 @@ function App() {
               onOpenBackups={
                 user.role !== 'worker' && (user.company?.enabledFeatures ?? []).includes('backups')
                   ? () => setWorkspaceScreen('backups')
+                  : undefined
+              }
+              onOpenIntegrations={
+                user.role !== 'worker' &&
+                can(user.permissionKeys, 'api_keys.view') &&
+                (user.company?.enabledFeatures ?? []).includes('integrations')
+                  ? () => setWorkspaceScreen('integrations')
                   : undefined
               }
             />

@@ -39,7 +39,7 @@ import { getAllTranscriptions, saveSmsLogEntry, getAllSmsLog } from '../../db/db
 import { ApolloContactSearchModal } from './ApolloContactSearchModal';
 import { SocialLookupModal } from './SocialLookupModal';
 import { Popover } from '../Popover';
-import { Copy, Check, Square, Hourglass, Mic, Bot, ChevronDown, Search, Save, X, Mail, Phone, PenLine, Send, History } from 'lucide-react';
+import { Copy, Check, Square, Hourglass, Mic, Bot, ChevronDown, Search, ListFilter, Save, X, Mail, Phone, PenLine, Send, History } from 'lucide-react';
 
 interface CellHoverEditorProps {
   anchor: HTMLElement;
@@ -447,6 +447,14 @@ export function CellHoverEditor({
   // again — the form doesn't need to eat screen space every time a
   // contact cell is opened just to browse existing entries.
   const [manualContactFormOpen, setManualContactFormOpen] = useState(false);
+  // Filters the contact list below by plain substring match against each
+  // entry's raw text (name, position, email, phone — whatever's in
+  // there) — on explicit request, for a company row that's accumulated
+  // dozens/hundreds of contacts in this one cell ("100 работников...
+  // это кошмар"), where scrolling to find "everyone named Igor" or
+  // "every director" by eye stops being practical. Client-side only, no
+  // new storage — never touches `value` itself, purely what's rendered.
+  const [contactSearch, setContactSearch] = useState('');
   // The sent/replied badge's portaled hover tooltip (SentBadgeTooltip) —
   // one at a time, cleared on mouseleave. `anchor` is the badge <span>
   // itself, captured directly in the mouseenter handler (not read back
@@ -1580,6 +1588,22 @@ export function CellHoverEditor({
                   <Search className="icon" size={16} /> Paieška
                 </button>
               </div>
+              {parseContacts(value).length > 1 && (
+                <div className="cell-hover-contact-filter">
+                  <ListFilter className="icon" size={14} />
+                  <input
+                    type="text"
+                    placeholder="Filtruoti kontaktus (vardas, pareigos…)"
+                    value={contactSearch}
+                    onChange={(e) => setContactSearch(e.target.value)}
+                  />
+                  {contactSearch && (
+                    <button type="button" className="cell-hover-contact-filter-clear" onClick={() => setContactSearch('')}>
+                      <X className="icon" size={14} />
+                    </button>
+                  )}
+                </div>
+              )}
               {manualContactFormOpen && (
                 <div className="filter-accordion-body cell-hover-contact-manual-body">
                   <form
@@ -1654,9 +1678,16 @@ export function CellHoverEditor({
                   </div>
                 </div>
               )}
-              {parseContacts(value).length > 0 && (
+              {parseContacts(value).length > 0 &&
+                (() => {
+                  const query = contactSearch.trim().toLowerCase();
+                  const visibleContacts = query ? parseContacts(value).filter((c) => c.text.toLowerCase().includes(query)) : parseContacts(value);
+                  if (visibleContacts.length === 0) {
+                    return <p className="cell-hover-contact-filter-empty">Pagal „{contactSearch.trim()}“ kontaktų nerasta.</p>;
+                  }
+                  return (
                 <div className="cell-hover-history">
-                  {parseContacts(value).map((c) => {
+                  {visibleContacts.map((c) => {
                     const phone = extractPhoneNumber(c.text);
                     const isEditing = editingContactId === c.id;
                     const fields = splitContactDisplayFields(c.text);
@@ -2019,7 +2050,8 @@ export function CellHoverEditor({
                     );
                   })}
                 </div>
-              )}
+                  );
+                })()}
             </>
           )}
         </div>,

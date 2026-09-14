@@ -5,6 +5,7 @@ import {
   type IntegrationField,
   type IntegrationModeField,
 } from '../../store/useIntegrationsStore';
+import { useWorkersStore, type Worker } from '../../store/useWorkersStore';
 import { useToastStore } from '../../store/useToastStore';
 import { confirmDialog } from '../../store/useConfirmStore';
 import { LOCAL_API_BASE } from '../../utils/localApi';
@@ -90,28 +91,56 @@ const GROUPS: GroupDef[] = [
 
 const NON_SECRET = new Set<IntegrationField>(NON_SECRET_INTEGRATION_FIELDS);
 
-interface IntegrationsViewProps {
-  /** Required — this only ever renders from the independent super-admin
-   * dashboard now, managing one specific company at a time. There is no
-   * self-service "manage my own company's keys" usage anymore (removed on
-   * explicit request — see the doc comment below). */
-  companyId: string;
+// Exactly the IntegrationField values that also exist as a per-worker
+// override (see useWorkersStore.ts's WorkerIntegrationOverrides) — every
+// group with a `modeField` above has exactly one field, and that field is
+// always one of these six; Zadarma's real key/secret and LinkedIn's CDP
+// URL have no per-worker equivalent at all (see GroupDef.modeField's own
+// doc comment), so those two groups never render the worker-assignment
+// sub-section below.
+type WorkerOverridableField = 'instantlyApiKey' | 'apolloApiKey' | 'serperApiKey' | 'openaiApiKey' | 'anthropicApiKey' | 'elevenlabsApiKey';
+
+function workerHasProviderKey(worker: Worker, field: WorkerOverridableField): boolean {
+  switch (field) {
+    case 'instantlyApiKey':
+      return !!worker.instantlyApiKeySet;
+    case 'apolloApiKey':
+      return !!worker.apolloApiKeySet;
+    case 'serperApiKey':
+      return !!worker.serperApiKeySet;
+    case 'openaiApiKey':
+      return !!worker.openaiApiKeySet;
+    case 'anthropicApiKey':
+      return !!worker.anthropicApiKeySet;
+    case 'elevenlabsApiKey':
+      return !!worker.elevenlabsApiKeySet;
+  }
 }
 
-/** Super-admin only, entirely — no company account of any role sees "API
- * raktai" self-service anymore (on explicit request: previously any
- * super-admin pasted in their own company's keys and a tab appeared
+interface IntegrationsViewProps {
+  /** Omitted = a company's own super_admin managing their own company's
+   * integrations directly (the new "Integracijos" top-level tab, gated by
+   * the api_keys.view/edit/set_mode registry keys). Passed = the platform
+   * admin managing an arbitrary company by id from the independent
+   * super-admin dashboard, unchanged from before. Self-service used to be
+   * removed entirely (see the doc comment below) because no
+   * permission-scoped way to offer it existed yet — this is that gap
+   * being closed now that the registry actually gates it. */
+  companyId?: string;
+}
+
+/** Reachable two ways now: the independent /supersuperadmin dashboard
+ * (companyId passed, managing an arbitrary company), or a company's own
+ * super_admin's "Integracijos" tab (companyId omitted, managing their own
+ * — see useIntegrationsStore.ts's dual-route load/save/clear/setMode).
+ * Self-service was removed once already (on explicit request: previously
+ * any super-admin pasted in their own company's keys and a tab appeared
  * automatically — see accounts/db.ts's now-removed
- * computeAvailableFeatures; later, briefly, an "owner" role had its own
- * quick path to just their own company's keys — that's gone too, on
- * request that the super-admin identity be fully independent of any
- * regular company login). Every company's integrations, including what
- * used to be "the owner's own," are now managed exclusively through this
- * one screen, reached only via the independent /supersuperadmin
- * dashboard. Which tabs a configured key actually unlocks is a *separate*,
- * explicit choice in the Admin dashboard's own Funkcijos panel
- * (updateCompanyFeatures) — configuring a key here never makes a tab
- * auto-appear on its own. */
+ * computeAvailableFeatures) specifically because there was no
+ * permission-scoped way to offer it — the api_keys.* registry keys didn't
+ * exist yet. Which tabs a configured key actually unlocks is a *separate*,
+ * explicit choice in the Funkcijos panel (updateCompanyFeatures) —
+ * configuring a key here never makes a tab auto-appear on its own. */
 export function IntegrationsView({ companyId }: IntegrationsViewProps) {
   const status = useIntegrationsStore((s) => s.status);
   const loading = useIntegrationsStore((s) => s.loading);
@@ -123,22 +152,62 @@ export function IntegrationsView({ companyId }: IntegrationsViewProps) {
   const setMode = useIntegrationsStore((s) => s.setMode);
   const showToast = useToastStore((s) => s.show);
 
+  const workers = useWorkersStore((s) => s.workers);
+  const loadWorkers = useWorkersStore((s) => s.load);
+  const updateWorker = useWorkersStore((s) => s.update);
+
   const [draft, setDraft] = useState<Partial<Record<IntegrationField, string>>>({});
   // Per-company webhook URL — see server/src/index.ts's POST
-  // /api/instantly/webhook/:companyId doc comment.
-  const instantlyWebhookUrl = `${LOCAL_API_BASE}/api/instantly/webhook/${companyId}`;
+  // /api/instantly/webhook/:companyId doc comment. Only meaningful in
+  // admin mode (an arbitrary company by id) — a company's own super_admin
+  // sees their own webhook URL just as well via req.auth!.companyId
+  // server-side, but this specific display line needs an id to build the
+  // URL string client-side, so it's only rendered when companyId is known.
+  const instantlyWebhookUrl = companyId ? `${LOCAL_API_BASE}/api/instantly/webhook/${companyId}` : null;
 
   useEffect(() => {
     void load(companyId);
+    void loadWorkers(companyId);
     // Re-load whenever the owner switches which company they're viewing
     // in the Admin dashboard — companyId is the one prop that can
     // actually change across this component's lifetime (the no-arg
     // "manage my own" usage never changes it at all).
-  }, [load, companyId]);
+  }, [load, loadWorkers, companyId]);
 
   useEffect(() => {
     if (error) showToast(error);
   }, [error, showToast]);
+
+  // One selected worker + one draft value per provider group, keyed by
+  // that group's own field — lets each Individual-mode group's "assign a
+  // worker's key" sub-form act independently without six separate pieces
+  // of component state.
+  const [workerPickerSelection, setWorkerPickerSelection] = useState<Partial<Record<WorkerOverridableField, string>>>({});
+  const [workerKeyDraft, setWorkerKeyDraft] = useState<Partial<Record<WorkerOverridableField, string>>>({});
+
+  const handleAssignWorkerKey = async (field: WorkerOverridableField) => {
+    const workerId = workerPickerSelection[field];
+    const value = (workerKeyDraft[field] ?? '').trim();
+    if (!workerId || !value) return;
+    try {
+      await updateWorker(workerId, { [field]: value }, companyId);
+      setWorkerKeyDraft((prev) => ({ ...prev, [field]: '' }));
+      showToast('Darbuotojo raktas priskirtas');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Nepavyko priskirti rakto');
+    }
+  };
+
+  const handleClearWorkerKey = async (field: WorkerOverridableField, workerId: string, workerLabel: string) => {
+    const ok = await confirmDialog({ message: `Išvalyti ${workerLabel} individualų raktą?`, danger: true });
+    if (!ok) return;
+    try {
+      await updateWorker(workerId, { [field]: '' }, companyId);
+      showToast('Išvalyta');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Nepavyko išvalyti');
+    }
+  };
 
   // Pre-fill only the two non-secret fields once status loads — a secret
   // field's draft deliberately starts (and, after every successful save,
@@ -279,7 +348,57 @@ export function IntegrationsView({ companyId }: IntegrationsViewProps) {
               );
             })}
           </div>
-          {group.title === 'Instantly (Paštas)' && (
+          {group.modeField && status?.[group.modeField] === 'individual' && (() => {
+            const workerField = group.fields[0].field as WorkerOverridableField;
+            const selectedWorkerId = workerPickerSelection[workerField] ?? '';
+            const selectedWorker = workers.find((w) => w.id === selectedWorkerId);
+            const selectedWorkerHasKey = selectedWorker ? workerHasProviderKey(selectedWorker, workerField) : false;
+            return (
+              <div className="integrations-worker-assign">
+                <p className="integrations-hint">
+                  Individual režimu darbuotojas be savo rakto šios integracijos naudoti negalės — priskirkite raktą konkrečiam
+                  darbuotojui čia, arba jo paties redagavimo formoje (Darbuotojai).
+                </p>
+                <div className="integrations-worker-assign-row">
+                  <select
+                    value={selectedWorkerId}
+                    onChange={(e) => setWorkerPickerSelection((prev) => ({ ...prev, [workerField]: e.target.value }))}
+                  >
+                    <option value="">— pasirinkite darbuotoją —</option>
+                    {workers.map((w) => (
+                      <option key={w.id} value={w.id}>
+                        {w.firstName} {w.lastName} ({w.username})
+                      </option>
+                    ))}
+                  </select>
+                  {selectedWorker && (
+                    <>
+                      <input
+                        type="password"
+                        placeholder={selectedWorkerHasKey ? '••••••••' : 'Naujas raktas'}
+                        autoComplete="off"
+                        value={workerKeyDraft[workerField] ?? ''}
+                        onChange={(e) => setWorkerKeyDraft((prev) => ({ ...prev, [workerField]: e.target.value }))}
+                      />
+                      <button type="button" onClick={() => void handleAssignWorkerKey(workerField)}>
+                        Priskirti
+                      </button>
+                      {selectedWorkerHasKey && (
+                        <button
+                          type="button"
+                          className="danger"
+                          onClick={() => void handleClearWorkerKey(workerField, selectedWorker.id, `${selectedWorker.firstName} ${selectedWorker.lastName}`)}
+                        >
+                          <X className="icon" size={14} /> Išvalyti
+                        </button>
+                      )}
+                    </>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
+          {group.title === 'Instantly (Paštas)' && instantlyWebhookUrl && (
             <div className="integrations-webhook-info">
               <p className="integrations-hint">
                 Kad atsakymai patys atsirastų „Visi atsakymai" lentelėje (be rankinio paspaudimo Paštas skiltyje): šios įmonės
