@@ -1,5 +1,6 @@
 import { getAuthToken, notifyUnauthorized } from './authToken';
 import { DEMO_MODE, NOT_CONFIGURED_MESSAGE } from './demoMode';
+import { getClientId } from './clientId';
 
 // Shared by every feature that talks to the proxy server (calls, contacts
 // AI-parsing, click-to-call) — one place for the base URL and the
@@ -27,7 +28,15 @@ export async function localApiRequest<T>(path: string, init?: RequestInit): Prom
   // handling those call sites already have, without touching any of them.
   if (DEMO_MODE) throw new Error(NOT_CONFIGURED_MESSAGE);
   const token = getAuthToken();
-  const headers = { ...(init?.headers ?? {}), ...(token ? { Authorization: `Bearer ${token}` } : {}) };
+  // X-Client-Id rides along on every request, not just table/row writes —
+  // harmless for routes that don't care, and means live-sync's self-echo
+  // suppression (server/src/realtime.ts) doesn't need every individual
+  // write call site to remember to attach it.
+  const headers = {
+    ...(init?.headers ?? {}),
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    'X-Client-Id': getClientId(),
+  };
   let res: Response;
   try {
     res = await fetch(`${LOCAL_API_BASE}${path}`, { ...init, headers });

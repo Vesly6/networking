@@ -110,6 +110,23 @@ interface TableState {
    * cached copy from useWorkspaceStore — see CLAUDE.md for why. */
   loadTable: (tableId: string) => Promise<void>;
   unload: () => void;
+  /** Live-sync patches from another session working on the SAME table —
+   * see utils/tableRealtime.ts's own doc comment for the full design.
+   * Deliberately NOT routed through snapshot()/persistRows(): this is
+   * data that ALREADY exists on the server (someone else's write just
+   * landed), so there is nothing to save again and nothing for the local
+   * undo stack to attribute to the current user — undoing a remote
+   * change would be a confusing, silent edit made in someone else's name.
+   * All three replace only the specific rows/columns named, preserving
+   * every other row/column's object reference — this is what keeps the
+   * virtualized grid from re-rendering (and the memoized DataCell rows
+   * from disturbing anything unrelated: current scroll position, sort,
+   * search, active cell/selection, an open note editor) beyond the one
+   * row that actually changed. A stale event for a table the user has
+   * since navigated away from is a silent no-op (guarded by tableId). */
+  applyRemoteRowsUpserted: (tableId: string, rows: Row[]) => void;
+  applyRemoteRowsDeleted: (tableId: string, rowIds: string[]) => void;
+  applyRemoteColumnsUpdated: (tableId: string, columns: Column[]) => void;
   undo: () => void;
   redo: () => void;
   addColumn: (name: string, type: ColumnType, options?: string[]) => void;
@@ -368,6 +385,33 @@ export const useTableStore = create<TableState>((set, get) => {
       currentLoadController?.abort();
       currentLoadController = null;
       set({ tableId: null, columns: [], rows: [], ready: false, loadError: null, undoStack: [], redoStack: [] });
+    },
+
+    applyRemoteRowsUpserted: (tableId, incomingRows) => {
+      const state = get();
+      if (state.tableId !== tableId || incomingRows.length === 0) return;
+      const byId = new Map(incomingRows.map((r) => [r.id, r]));
+      const rows = state.rows.map((r) => byId.get(r.id) ?? r);
+      // A row not already present locally is a genuinely new row (added
+      // from another session — CSV import, "+ Add row", paste) rather
+      // than an edit to one already loaded; appended rather than dropped,
+      // so it actually shows up without the local user reloading.
+      for (const row of incomingRows) {
+        if (!state.rows.some((r) => r.id === row.id)) rows.push(row);
+      }
+      set({ rows });
+    },
+
+    applyRemoteRowsDeleted: (tableId, rowIds) => {
+      const state = get();
+      if (state.tableId !== tableId || rowIds.length === 0) return;
+      const idSet = new Set(rowIds);
+      set({ rows: state.rows.filter((r) => !idSet.has(r.id)) });
+    },
+
+    applyRemoteColumnsUpdated: (tableId, columns) => {
+      if (get().tableId !== tableId) return;
+      set({ columns });
     },
 
     undo: () => {

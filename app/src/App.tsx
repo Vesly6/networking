@@ -39,6 +39,7 @@ import { getNextActionColumn } from './utils/row';
 import { DEMO_MODE } from './utils/demoMode';
 import { workerGrantableTabs } from './utils/tabLabels';
 import { can } from './utils/permissions';
+import { useTableRealtimeSync } from './utils/tableRealtime';
 import { isOverdue, isDueToday } from './utils/date';
 import { ArrowLeft, Clock, Bell, BellOff, Menu } from 'lucide-react';
 import './App.css';
@@ -84,6 +85,12 @@ function App() {
   const unload = useTableStore((s) => s.unload);
   const columns = useTableStore((s) => s.columns);
   const rows = useTableStore((s) => s.rows);
+  const loadedTableId = useTableStore((s) => s.tableId);
+  // Only once loadTable() has actually resolved for this exact table —
+  // opening a live-sync connection before then would either target the
+  // wrong id (still the previous table's) or a table that turns out not
+  // to exist. See utils/tableRealtime.ts's own doc comment.
+  useTableRealtimeSync(tableReady ? loadedTableId : null);
 
   const [tab, setTab] = useState<AppScreen>('table');
   // Only meaningful while !activeTable — lets "Darbuotojai" be reached from

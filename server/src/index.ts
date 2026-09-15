@@ -101,7 +101,9 @@ import {
   deleteRow,
   deleteRows,
   getRowById,
+  getRowsUpdatedSince,
   getTablesByIds,
+  type Row,
   setTableOwner,
   backfillCompanyId,
   backfillTableOwners,
@@ -134,7 +136,9 @@ import {
   requireSuperAdmin,
   issueImpersonationToken,
   issuePlatformImpersonationToken,
+  resolveAuthFromToken,
 } from './auth.js';
+import { subscribeToTable, broadcastToTable } from './realtime.js';
 import { can, effectivePermissions, companyCeiling } from './permissions/effective.js';
 import { ALL_PERMISSION_KEYS, isPermissionKey, PERMISSIONS, type PermissionKey } from './permissions/registry.js';
 import { buildExportRows, XLSX_MAX_ROWS, type ExportMode } from './export/buildExportRows.js';
@@ -1564,6 +1568,59 @@ app.post(
     res.json(table);
   }),
 );
+
+// Live table sync (see realtime.ts's own doc comment for the full design
+// story) — deliberately sits BEFORE the app.use(requireAuth) gate below,
+// not because it's public, but because the browser's EventSource API
+// can't set an Authorization header at all, so this route authenticates
+// itself via a `?token=` query param carrying the exact same bearer
+// token every other request sends as a header (resolveAuthFromToken is
+// the identical check requireAuth itself uses). AUTH_DISABLED's local-dev
+// escape hatch is intentionally NOT mirrored here — a live-sync
+// connection with no real user id can't be scoped to a company/table at
+// all, so local testing of this route needs a real login even with the
+// flag set (every other route stays exactly as permissive as before).
+app.get('/api/tables/:id/events', (req, res) => {
+  const token = typeof req.query.token === 'string' ? req.query.token : null;
+  const auth = token ? resolveAuthFromToken(token) : null;
+  if (!auth) {
+    res.status(401).json({ error: 'Neautentifikuota' });
+    return;
+  }
+  if (getCompany(auth.companyId)?.blockedAt) {
+    res.status(403).json({ error: 'Ši įmonė yra užblokuota' });
+    return;
+  }
+  req.auth = auth;
+  const table = getTable(req.params.id, auth.companyId);
+  // Same tableAccessibleToRequest check every other table/row route uses
+  // — a worker (or an admin impersonating one) without access to this
+  // specific table can't open a live-sync stream for it either, which is
+  // what keeps one worker's edits from ever reaching another's connection
+  // (broadcastToTable only ever writes to subscribers of this exact
+  // tableId, and nobody without access can become one).
+  if (!table || !tableAccessibleToRequest(req, table)) {
+    res.status(404).json({ error: 'Table not found' });
+    return;
+  }
+  const clientId = typeof req.query.clientId === 'string' ? req.query.clientId : null;
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    // Disables response buffering on any reverse proxy that respects this
+    // header (nginx and several PaaS front ends do) — without it, a
+    // buffering layer between this server and the browser could hold
+    // events for seconds before flushing, defeating the point of "sees it
+    // within moments."
+    'X-Accel-Buffering': 'no',
+  });
+  res.write(': connected\n\n');
+
+  const unsubscribe = subscribeToTable(req.params.id, auth.companyId, clientId, res);
+  req.on('close', unsubscribe);
+});
 
 // Everything below requires a valid session token — a visitor who never
 // loads the frontend at all (hits these routes directly) is blocked here
@@ -4108,6 +4165,28 @@ app.get(
   }),
 );
 
+// Live-sync reconnect catch-up — see realtime.ts's own doc comment and
+// getRowsUpdatedSince's. Called by the frontend right after its
+// EventSource (re)connects, with the newest `updatedAt` it already has
+// applied, so a connection drop of any length is closed by one small,
+// targeted query instead of a full table reload.
+app.get(
+  '/api/tables/:id/rows/since',
+  asyncHandler(async (req, res) => {
+    const table = getTable(req.params.id, req.auth!.companyId);
+    if (!table || !tableAccessibleToRequest(req, table)) {
+      res.status(404).json({ error: 'Table not found' });
+      return;
+    }
+    const since = Number(req.query.since);
+    if (!Number.isFinite(since) || since < 0) {
+      res.status(400).json({ error: 'Invalid "since"' });
+      return;
+    }
+    res.json({ rows: getRowsUpdatedSince(req.params.id, req.auth!.companyId, since) });
+  }),
+);
+
 app.patch(
   '/api/tables/:id/columns',
   asyncHandler(async (req, res) => {
@@ -4168,6 +4247,12 @@ app.patch(
       }
     }
     updateTableColumns(req.params.id, req.body.columns, companyId);
+    broadcastToTable(
+      req.params.id,
+      companyId,
+      { type: 'columns_updated', tableId: req.params.id, columns: req.body.columns },
+      originClientId(req),
+    );
     res.json({ ok: true });
   }),
 );
@@ -4639,6 +4724,36 @@ function rowActionAttribution(req: Request): RowActionAttribution | null {
   return null;
 }
 
+// Live table sync (see realtime.ts's own doc comment) — the writer's own
+// browser-tab id, sent as a header on every mutating table/row request
+// (utils/localApi.ts on the frontend attaches it unconditionally) so its
+// own EventSource connection can be excluded when the resulting change is
+// broadcast back out, rather than a tab redundantly "receiving" its own
+// just-made edit as if it were a remote one.
+function originClientId(req: Request): string | null {
+  const header = req.header('X-Client-Id');
+  return typeof header === 'string' && header ? header : null;
+}
+
+// Rows saved in one request can, in principle, span more than one table
+// (PUT /api/rows' body isn't restricted to a single tableId) — grouping
+// before broadcasting means every affected table's own viewers get
+// exactly the rows that changed for THEM, never another table's rows
+// mixed into their event stream. In practice this almost always resolves
+// to a single group, since the client only ever has one table open at a
+// time.
+function broadcastRowsSaved(rows: Row[], companyId: string, originId: string | null): void {
+  const byTable = new Map<string, Row[]>();
+  for (const row of rows) {
+    const list = byTable.get(row.tableId) ?? [];
+    list.push(row);
+    byTable.set(row.tableId, list);
+  }
+  for (const [tableId, tableRows] of byTable) {
+    broadcastToTable(tableId, companyId, { type: 'rows_upserted', tableId, rows: tableRows }, originId);
+  }
+}
+
 // Bulk save — the one endpoint that actually matters for real usage at
 // scale: useTableStore.ts's moveRows/insertRows/applySortOrder all rewrite
 // `order` across *every* row on a single drag-reorder or sort click, so
@@ -4668,6 +4783,7 @@ app.put(
       return;
     }
     saveRows(req.body.rows, companyId, rowActionAttribution(req));
+    broadcastRowsSaved(req.body.rows, companyId, originClientId(req));
     res.json({ ok: true });
   }),
 );
@@ -4695,6 +4811,7 @@ app.post(
       return;
     }
     saveRows(req.body.rows, companyId, rowActionAttribution(req));
+    broadcastRowsSaved(req.body.rows, companyId, originClientId(req));
     res.json({ ok: true });
   }),
 );
@@ -4714,6 +4831,7 @@ app.put(
       return;
     }
     saveRow(row, companyId, rowActionAttribution(req));
+    broadcastToTable(row.tableId, companyId, { type: 'rows_upserted', tableId: row.tableId, rows: [row] }, originClientId(req));
     res.json({ ok: true });
   }),
 );
@@ -4740,14 +4858,29 @@ app.delete(
     // batched — a row that doesn't exist or belongs to a table this
     // request can't access is silently skipped rather than failing the
     // whole batch, since a stale/already-deleted id in the selection
-    // (e.g. a double-click) shouldn't block deleting the rest.
-    const validIds = (ids as string[]).filter((id) => {
-      const row = getRowById(id, companyId);
-      if (!row) return false;
-      const table = getTable(row.tableId, companyId);
-      return !!table && tableAccessibleToRequest(req, table);
-    });
+    // (e.g. a double-click) shouldn't block deleting the rest. Kept as
+    // full row objects, not just ids, so the tableId needed for
+    // broadcasting below is still available after deleteRows() removes
+    // the rows themselves.
+    const validRows = (ids as string[])
+      .map((id) => getRowById(id, companyId))
+      .filter((row): row is NonNullable<typeof row> => {
+        if (!row) return false;
+        const table = getTable(row.tableId, companyId);
+        return !!table && tableAccessibleToRequest(req, table);
+      });
+    const validIds = validRows.map((r) => r.id);
     deleteRows(validIds, companyId);
+    const byTable = new Map<string, string[]>();
+    for (const row of validRows) {
+      const list = byTable.get(row.tableId) ?? [];
+      list.push(row.id);
+      byTable.set(row.tableId, list);
+    }
+    const originId = originClientId(req);
+    for (const [tableId, rowIds] of byTable) {
+      broadcastToTable(tableId, companyId, { type: 'rows_deleted', tableId, rowIds }, originId);
+    }
     res.json({ ok: true, deleted: validIds.length });
   }),
 );
@@ -4768,6 +4901,7 @@ app.delete(
       return;
     }
     deleteRow(req.params.id, companyId);
+    broadcastToTable(row.tableId, companyId, { type: 'rows_deleted', tableId: row.tableId, rowIds: [req.params.id] }, originClientId(req));
     res.json({ ok: true });
   }),
 );

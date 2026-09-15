@@ -108,6 +108,17 @@ export function checkCredentials(username: string, password: string): User | nul
   return getUserByUsername(username);
 }
 
+/** Same token → AuthContext resolution requireAuth uses below, pulled out
+ * and exported for the one route that can't carry an Authorization header
+ * at all: the live-table-sync SSE stream (index.ts's GET
+ * /api/tables/:id/events). The browser's EventSource API has no way to
+ * set custom request headers, so that route authenticates via a
+ * `?token=` query param carrying the exact same bearer token instead —
+ * this is what it verifies it against. */
+export function resolveAuthFromToken(token: string): AuthContext | null {
+  return resolvePlatformImpersonationAuth(token) ?? resolveImpersonationAuth(token) ?? verifyToken(token);
+}
+
 /** Express middleware — every route it wraps requires a valid
  * `Authorization: Bearer <token>` header, and attaches the decoded
  * {userId, companyId, role} onto req.auth for every downstream route to
@@ -135,7 +146,7 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
   }
   const header = req.headers.authorization;
   const token = header?.startsWith('Bearer ') ? header.slice(7) : null;
-  const auth = token ? (resolvePlatformImpersonationAuth(token) ?? resolveImpersonationAuth(token) ?? verifyToken(token)) : null;
+  const auth = token ? resolveAuthFromToken(token) : null;
   if (!auth) {
     res.status(401).json({ error: 'Neautentifikuota' });
     return;

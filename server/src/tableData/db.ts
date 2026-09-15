@@ -935,6 +935,25 @@ export function loadRowsForTable(tableId: string, companyId: string): Row[] {
   return rows.map(rowFromRow);
 }
 
+/** Live-sync reconnect catch-up (see realtime.ts's own doc comment) — a
+ * client's EventSource can silently drop and reconnect (a phone locking,
+ * a flaky wifi hop) without anything telling the app it missed events in
+ * between; SSE has no "replay what you missed" built in on its own. The
+ * client re-calls this with the newest `updatedAt` it has already applied
+ * every time its connection (re)opens, so a gap of any length is closed
+ * by one small, targeted query instead of reloading the whole table. Rows
+ * deleted entirely while disconnected are NOT caught by this (there's no
+ * tombstone to query) — same accepted gap as every other "resync since a
+ * timestamp" endpoint in this app; a still-open table only drifts by
+ * showing a deleted row until its next real reload, never the reverse
+ * (silently missing a real edit). */
+export function getRowsUpdatedSince(tableId: string, companyId: string, sinceTs: number): Row[] {
+  const rows = getDb()
+    .prepare(`SELECT * FROM rows WHERE table_id = ? AND company_id = ? AND updated_at > ? ORDER BY updated_at ASC`)
+    .all(tableId, companyId, sinceTs) as RowRow[];
+  return rows.map(rowFromRow);
+}
+
 export function countRowsForTable(tableId: string, companyId: string): number {
   const row = getDb().prepare(`SELECT COUNT(*) AS n FROM rows WHERE table_id = ? AND company_id = ?`).get(tableId, companyId) as {
     n: number;
