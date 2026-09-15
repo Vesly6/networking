@@ -6084,6 +6084,13 @@ tr.row-drop-end td {
   padding: 0.5em 0.6em;
   resize: vertical;
 }
+.campaign-sequence-body-preview {
+  width: 100%;
+  min-height: 220px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+}
 
 .instantly-table-wrap {
   overflow-x: auto;

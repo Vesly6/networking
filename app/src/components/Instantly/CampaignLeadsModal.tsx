@@ -27,7 +27,12 @@ function matchesSearch(lead: InstantlyLead, query: string): boolean {
   return haystack.includes(query.toLowerCase());
 }
 
-const PAGE_SIZE = 200;
+// Instantly's own /leads/list schema caps `limit` at 100 — sending more
+// silently breaks the request rather than clamping (confirmed against the
+// live API: this was the actual cause of leads never showing up here, even
+// for a real, populated campaign). Matches instantlyReplySync.ts's own
+// PAGE_SIZE for the same endpoint.
+const PAGE_SIZE = 100;
 
 /** A campaign's leads, grouped by company so the other people at a company
  * that already replied positively are visually right next to each other —

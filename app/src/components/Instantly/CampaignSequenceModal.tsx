@@ -5,6 +5,14 @@ import { useInstantlyCampaignsStore } from '../../store/useInstantlyCampaignsSto
 import { useToastStore } from '../../store/useToastStore';
 import type { InstantlySequenceStep } from '../../utils/instantlyApi';
 
+// A minimal HTML shell so the preview's own line-height/font matches a
+// real email client roughly, rather than inheriting this app's own
+// spreadsheet-dense styles from inside the iframe (an iframe's contents
+// never inherit the parent page's CSS at all, sandboxed or not).
+function buildPreviewDoc(bodyHtml: string): string {
+  return `<!doctype html><html><head><meta charset="utf-8"><style>body{font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:#111;margin:0;padding:0.75rem;word-wrap:break-word;}</style></head><body>${bodyHtml}</body></html>`;
+}
+
 interface CampaignSequenceModalProps {
   campaignId: string;
   onClose: () => void;
@@ -84,10 +92,15 @@ export function CampaignSequenceModal({ campaignId, onClose }: CampaignSequenceM
                       <span>Tema</span>
                       <input value={variant.subject} readOnly />
                     </label>
-                    <label className="search-filter-field">
+                    <div className="search-filter-field">
                       <span>Tekstas</span>
-                      <textarea className="campaign-sequence-body" rows={6} value={variant.body} readOnly />
-                    </label>
+                      <iframe
+                        className="campaign-sequence-body-preview"
+                        title={`sequence-body-${stepIndex}-${variantIndex}`}
+                        sandbox=""
+                        srcDoc={buildPreviewDoc(variant.body)}
+                      />
+                    </div>
                   </div>
                 ))}
               </div>
