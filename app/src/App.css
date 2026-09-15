@@ -5992,12 +5992,16 @@ tr.row-drop-end td {
   box-sizing: border-box;
 }
 .campaign-leads-list {
-  display: flex;
-  flex-direction: column;
-  gap: 0.8rem;
   overflow-y: auto;
-  min-height: 0;
+  flex: 1 1 auto;
+  min-height: 260px;
+  max-height: 60vh;
 }
+/* Explicit, fixed heights matching CampaignLeadsModal.tsx's own
+   HEADER_ROW_SIZE/LEAD_ROW_SIZE exactly — the list is virtualized
+   (@tanstack/react-virtual, fixed estimateSize, no per-row remeasuring),
+   so a row rendering taller than the size the virtualizer assumed would
+   silently overlap the row positioned right after it. */
 .campaign-leads-group-header {
   display: flex;
   align-items: center;
@@ -6005,14 +6009,17 @@ tr.row-drop-end td {
   gap: 0.6rem;
   font-size: 0.85rem;
   font-weight: 600;
-  padding-bottom: 0.2rem;
+  height: 34px;
+  box-sizing: border-box;
+  padding-top: 0.5rem;
   border-bottom: 1px solid var(--border);
 }
 .campaign-leads-row {
   display: flex;
   align-items: center;
   gap: 0.6rem;
-  padding: 0.3em 0;
+  height: 32px;
+  box-sizing: border-box;
   font-size: 0.85rem;
 }
 .campaign-leads-row-name {
@@ -6026,10 +6033,6 @@ tr.row-drop-end td {
   font-size: 0.85rem;
   color: var(--text-muted);
   align-self: center;
-}
-.campaign-leads-load-more {
-  display: flex;
-  gap: 0.5rem;
 }
 .campaign-leads-partial-hint {
   color: var(--text-muted);
@@ -6824,6 +6827,43 @@ tr.row-drop-end td {
   font-size: 0.8rem;
   flex-shrink: 0;
   white-space: nowrap;
+}
+.instantly-detail-info {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+.instantly-detail-info:hover:not(:disabled) {
+  color: var(--accent);
+}
+
+.lead-info-modal {
+  max-width: 480px;
+}
+.lead-info-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  overflow-y: auto;
+}
+.lead-info-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.8rem;
+  font-size: 0.85rem;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--border);
+}
+.lead-info-label {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.lead-info-divider {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-top: 0.4rem;
 }
 
 .instantly-thread-row-active {

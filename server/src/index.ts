@@ -3129,10 +3129,32 @@ app.post(
   }),
 );
 
+// CampaignLeadsModal.tsx now auto-pages through an entire campaign on
+// open (up to 100 real requests for a 10,000-lead campaign) rather than
+// requiring a manual "load more" click per page — on explicit request,
+// with an explicit worry about a large campaign not breaking anything.
+// A single rate-limit hit partway through used to just fail the whole
+// walk; one retry after a real pause (same wait Instantly's own reply-
+// sync pipeline already uses, instantlyReplySync.ts's withRateLimitRetry)
+// lets a big campaign recover from a transient limit instead of aborting.
+async function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+const LEADS_LIST_RATE_LIMIT_WAIT_MS = 25000;
+
 app.post(
   '/api/instantly/leads/list',
   asyncHandler(async (req, res) => {
-    const result = await listInstantlyLeads(req.body ?? {}, requireInstantlyKey(req));
+    const apiKey = requireInstantlyKey(req);
+    let result;
+    try {
+      result = await listInstantlyLeads(req.body ?? {}, apiKey);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (!/rate limit/i.test(message)) throw err;
+      await sleep(LEADS_LIST_RATE_LIMIT_WAIT_MS);
+      result = await listInstantlyLeads(req.body ?? {}, apiKey);
+    }
     res.json(result);
   }),
 );

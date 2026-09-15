@@ -189,7 +189,13 @@ export interface InstantlyLead {
   [key: string]: unknown;
 }
 
-export function fetchInstantlyLeads(body: { search?: string; campaign?: string; limit?: number; starting_after?: string }) {
+export function fetchInstantlyLeads(body: {
+  search?: string;
+  campaign?: string;
+  contacts?: string[];
+  limit?: number;
+  starting_after?: string;
+}) {
   return localApiRequest<InstantlyPage<InstantlyLead>>('/api/instantly/leads/list', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

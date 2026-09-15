@@ -249,6 +249,10 @@ export interface ListLeadsBody {
   search?: string;
   campaign?: string;
   list_id?: string;
+  // Exact-match filter by lead email — used to look up one specific
+  // lead's full record (company/job title/phone/...) from an email
+  // address alone, e.g. Unibox's per-thread "About this contact" info.
+  contacts?: string[];
   limit?: number;
   starting_after?: string;
 }

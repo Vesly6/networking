@@ -17,7 +17,8 @@ import {
   isOutgoingInstantlyEmail as isOutgoing,
   type UniboxThreadEmail,
 } from '../../utils/instantlyApi';
-import { Inbox, Mail, Clock, X, Link, ChevronRight, CornerUpRight, CornerUpLeft, Download, type LucideIcon } from 'lucide-react';
+import { Inbox, Mail, Clock, X, Link, ChevronRight, CornerUpRight, CornerUpLeft, Download, Info, type LucideIcon } from 'lucide-react';
+import { LeadInfoModal } from './LeadInfoModal';
 
 /** The "Daugiau" section — originally modeled directly on a screenshot of
  * Instantly's own real "More" menu (Inbox/Unread only/Reminders
@@ -519,6 +520,7 @@ export function UniboxPanel() {
   // own header.
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [threadListCollapsed, setThreadListCollapsed] = useState(false);
+  const [showLeadInfo, setShowLeadInfo] = useState(false);
 
   useEffect(() => {
     void refresh();
@@ -571,6 +573,7 @@ export function UniboxPanel() {
 
   useEffect(() => {
     setComposeMode(null);
+    setShowLeadInfo(false);
   }, [openThreadId]);
 
   // Primary/Others (is_focused) and the status sidebar both filter over
@@ -965,11 +968,23 @@ export function UniboxPanel() {
                 >
                   <Mail className="icon" size={16} /> Neperskaityta
                 </button>
+                <button
+                  type="button"
+                  className="instantly-detail-info"
+                  title="Apie kontaktą — iš kokios įmonės, kokia kampanija ir kt."
+                  disabled={!leadEmail}
+                  onClick={() => setShowLeadInfo(true)}
+                >
+                  <Info className="icon" size={16} />
+                </button>
                 <button type="button" className="instantly-detail-close" onClick={() => setOpenThreadId(null)}>
                   <X className="icon" size={16} />
                 </button>
               </div>
               <p className="instantly-thread-subject-heading">{latest.subject || '(be temos)'}</p>
+              {showLeadInfo && leadEmail && (
+                <LeadInfoModal email={leadEmail} campaignId={latest.campaign_id} onClose={() => setShowLeadInfo(false)} />
+              )}
               <div className="instantly-thread-detail">
                 {openThread.messages.map((m) => {
                   const outgoing = isOutgoing(m);

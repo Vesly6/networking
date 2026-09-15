@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { X, Users, Trash2 } from 'lucide-react';
 import { fetchInstantlyLeads, deleteInstantlyLead, type InstantlyLead } from '../../utils/instantlyApi';
 import { useToastStore } from '../../store/useToastStore';
@@ -34,6 +35,10 @@ function matchesSearch(lead: InstantlyLead, query: string): boolean {
 // PAGE_SIZE for the same endpoint.
 const PAGE_SIZE = 100;
 
+type FlatItem = { type: 'header'; key: string; count: number } | { type: 'lead'; lead: InstantlyLead };
+const HEADER_ROW_SIZE = 34;
+const LEAD_ROW_SIZE = 32;
+
 /** A campaign's leads, grouped by company so the other people at a company
  * that already replied positively are visually right next to each other —
  * on explicit request, to support deleting them (they should stop
@@ -43,65 +48,69 @@ const PAGE_SIZE = 100;
  * delete only, no lead editing/creation. Selection is always manual
  * (checkboxes), with a per-company "select all" shortcut for convenience —
  * on explicit request, there is no automatic "also select the other leads
- * at this company" behavior tied to a reply. */
+ * at this company" behavior tied to a reply.
+ *
+ * Loading is fully automatic — on explicit follow-up request, opening this
+ * screen alone (no separate "load more"/"load all" click) walks every page
+ * of the campaign in the background, since search/domain lookup only ever
+ * matches what's actually loaded and a manual multi-click flow read as a
+ * real bug ("search finds nothing") rather than "hasn't been paged in
+ * yet". The list itself is virtualized (@tanstack/react-virtual, same
+ * library/reasoning as TableView.tsx's own row virtualization — a real,
+ * reproduced hang mounting ~700k unvirtualized table cells) specifically
+ * because a large campaign (the account owner explicitly asked about a
+ * 10,000-contact case) would otherwise mount that many checkbox rows at
+ * once. */
 export function CampaignLeadsModal({ campaignId, onClose }: CampaignLeadsModalProps) {
   const showToast = useToastStore((s) => s.show);
   const [leads, setLeads] = useState<InstantlyLead[]>([]);
   const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [loadingAll, setLoadingAll] = useState(false);
+  const [autoLoadingMore, setAutoLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [nextCursor, setNextCursor] = useState<string | undefined>(undefined);
   const [search, setSearch] = useState('');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [deleting, setDeleting] = useState(false);
 
-  // Returns the next page's cursor (or undefined once exhausted) so
-  // handleLoadAll can chain calls without depending on nextCursor's state
-  // value, which wouldn't have re-rendered yet between loop iterations.
-  const loadPage = async (starting_after?: string): Promise<string | undefined> => {
-    try {
-      const page = await fetchInstantlyLeads({ campaign: campaignId, limit: PAGE_SIZE, starting_after });
-      setLeads((prev) => (starting_after ? [...prev, ...page.items] : page.items));
-      setNextCursor(page.next_starting_after);
-      return page.next_starting_after;
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Nepavyko įkelti lidų');
-      return undefined;
-    }
-  };
-
   useEffect(() => {
+    let cancelled = false;
     setLoading(true);
-    void loadPage().finally(() => setLoading(false));
+    setError(null);
+    setLeads([]);
+    setAutoLoadingMore(false);
+    void (async () => {
+      let cursor: string | undefined;
+      let isFirstPage = true;
+      try {
+        for (;;) {
+          const page = await fetchInstantlyLeads({ campaign: campaignId, limit: PAGE_SIZE, starting_after: cursor });
+          if (cancelled) return;
+          setLeads((prev) => (isFirstPage ? page.items : [...prev, ...page.items]));
+          if (isFirstPage) {
+            setLoading(false);
+            isFirstPage = false;
+          }
+          if (!page.next_starting_after) break;
+          setAutoLoadingMore(true);
+          cursor = page.next_starting_after;
+        }
+      } catch (err) {
+        if (!cancelled) setError(err instanceof Error ? err.message : 'Nepavyko įkelti lidų');
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+          setAutoLoadingMore(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
     // Fresh load whenever a different campaign's modal opens.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [campaignId]);
 
   useEffect(() => {
     if (error) showToast(error);
   }, [error, showToast]);
-
-  const handleLoadMore = async () => {
-    setLoadingMore(true);
-    await loadPage(nextCursor);
-    setLoadingMore(false);
-  };
-
-  // On explicit request: search only ever matches leads already loaded
-  // into this modal, and the first page alone (100) can easily miss
-  // someone in a bigger campaign (703 leads, in the case that prompted
-  // this) — "search finds nothing" read as a real bug when it was really
-  // "hasn't been loaded yet". This walks every remaining page up front so
-  // search/domain lookups actually cover the whole campaign.
-  const handleLoadAll = async () => {
-    setLoadingAll(true);
-    let cursor = nextCursor;
-    while (cursor) {
-      cursor = await loadPage(cursor);
-    }
-    setLoadingAll(false);
-  };
 
   // Sorted by company so everyone from the same company renders adjacently
   // under one group heading, then filtered by the search box — grouping
@@ -119,6 +128,23 @@ export function CampaignLeadsModal({ campaignId, onClose }: CampaignLeadsModalPr
     return result;
   }, [leads, search]);
 
+  const flatItems = useMemo(() => {
+    const items: FlatItem[] = [];
+    for (const group of groups) {
+      items.push({ type: 'header', key: group.key, count: group.leads.length });
+      for (const lead of group.leads) items.push({ type: 'lead', lead });
+    }
+    return items;
+  }, [groups]);
+
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const rowVirtualizer = useVirtualizer({
+    count: flatItems.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: (index) => (flatItems[index]?.type === 'header' ? HEADER_ROW_SIZE : LEAD_ROW_SIZE),
+    overscan: 12,
+  });
+
   const toggleSelected = (id: string) =>
     setSelectedIds((prev) => {
       const next = new Set(prev);
@@ -127,12 +153,15 @@ export function CampaignLeadsModal({ campaignId, onClose }: CampaignLeadsModalPr
       return next;
     });
 
-  const selectGroup = (group: { leads: InstantlyLead[] }) =>
+  const selectGroupByKey = (key: string) => {
+    const group = groups.find((g) => g.key === key);
+    if (!group) return;
     setSelectedIds((prev) => {
       const next = new Set(prev);
       for (const lead of group.leads) next.add(lead.id);
       return next;
     });
+  };
 
   const handleDeleteSelected = async () => {
     const ids = [...selectedIds];
@@ -186,49 +215,50 @@ export function CampaignLeadsModal({ campaignId, onClose }: CampaignLeadsModalPr
         />
 
         {loading && <p className="instantly-hint">Kraunama…</p>}
-        {!loading && nextCursor && search.trim() && (
+        {!loading && autoLoadingMore && search.trim() && (
           <p className="instantly-hint campaign-leads-partial-hint">
-            Įkelti dar ne visi lidai — paieška veikia tik tarp jau įkeltų. Spauskite „Įkelti visus lidus", kad
-            paieška apimtų visą kampaniją.
+            Vis dar kraunami likę kampanijos lidai — paieška kol kas apima tik įkeltus ({leads.length}).
           </p>
         )}
         {!loading && groups.length === 0 && <p className="instantly-hint">Lidų nerasta.</p>}
 
         {!loading && groups.length > 0 && (
-          <div className="campaign-leads-list">
-            {groups.map((group) => (
-              <div className="campaign-leads-group" key={group.key}>
-                <div className="campaign-leads-group-header">
-                  <span>
-                    {group.key} <span className="instantly-row-subtitle">({group.leads.length})</span>
-                  </span>
-                  {group.leads.length > 1 && (
-                    <button type="button" onClick={() => selectGroup(group)}>
-                      Pasirinkti visus šios įmonės
-                    </button>
-                  )}
-                </div>
-                {group.leads.map((lead) => (
-                  <label key={lead.id} className="campaign-leads-row">
-                    <input type="checkbox" checked={selectedIds.has(lead.id)} onChange={() => toggleSelected(lead.id)} />
-                    <span className="campaign-leads-row-name">{leadName(lead)}</span>
-                    <span className="instantly-row-subtitle">{lead.email}</span>
-                  </label>
-                ))}
-              </div>
-            ))}
+          <div className="campaign-leads-list" ref={scrollRef}>
+            <div style={{ height: rowVirtualizer.getTotalSize(), position: 'relative', width: '100%' }}>
+              {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+                const item = flatItems[virtualRow.index];
+                return (
+                  <div
+                    key={virtualRow.key}
+                    style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${virtualRow.start}px)` }}
+                  >
+                    {item.type === 'header' ? (
+                      <div className="campaign-leads-group-header">
+                        <span>
+                          {item.key} <span className="instantly-row-subtitle">({item.count})</span>
+                        </span>
+                        {item.count > 1 && (
+                          <button type="button" onClick={() => selectGroupByKey(item.key)}>
+                            Pasirinkti visus šios įmonės
+                          </button>
+                        )}
+                      </div>
+                    ) : (
+                      <label className="campaign-leads-row">
+                        <input type="checkbox" checked={selectedIds.has(item.lead.id)} onChange={() => toggleSelected(item.lead.id)} />
+                        <span className="campaign-leads-row-name">{leadName(item.lead)}</span>
+                        <span className="instantly-row-subtitle">{item.lead.email}</span>
+                      </label>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
 
-        {!loading && nextCursor && (
-          <div className="campaign-leads-load-more">
-            <button type="button" onClick={() => void handleLoadMore()} disabled={loadingMore || loadingAll}>
-              {loadingMore ? 'Kraunama…' : 'Įkelti daugiau'}
-            </button>
-            <button type="button" onClick={() => void handleLoadAll()} disabled={loadingMore || loadingAll}>
-              {loadingAll ? `Kraunama visi… (${leads.length})` : 'Įkelti visus lidus'}
-            </button>
-          </div>
+        {!loading && autoLoadingMore && (
+          <p className="instantly-hint">Kraunama daugiau lidų automatiškai… (įkelta: {leads.length})</p>
         )}
 
         <div className="popover-footer">
