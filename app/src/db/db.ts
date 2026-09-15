@@ -136,16 +136,17 @@ export async function updateTableName(tableId: string, name: string): Promise<vo
   });
 }
 
-/** Reassigns an existing table to a specific user (a worker, or the
- * super_admin themself) — see server/src/tableData/db.ts's per-table
- * ownership migration doc comment. Used by WorkspaceView.tsx's owner
- * picker (admin-only). */
-export async function setTableOwnerDB(tableId: string, ownerUserId: string): Promise<void> {
+/** Reassigns an existing table's worker access list — see
+ * server/src/tableData/db.ts's per-table ownership migration doc comment.
+ * Used by WorkspaceView.tsx's checkbox picker (admin-only). A list, not a
+ * single id, on explicit request: several workers can share one table;
+ * an empty array is a real, valid "no worker can see this" state. */
+export async function setTableOwnersDB(tableId: string, ownerUserIds: string[]): Promise<void> {
   if (DEMO_MODE) return demoData.setTableOwnerDB();
   await localApiRequest(`/api/tables/${encodeURIComponent(tableId)}/owner`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ownerUserId }),
+    body: JSON.stringify({ ownerUserIds }),
   });
 }
 

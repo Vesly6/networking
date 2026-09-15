@@ -147,13 +147,14 @@ function findOrCreateTargetTable(companyId: string, name: string): TableMeta {
   // other system-context table creation (tableData/db.ts's
   // backfillTableOwners/restoreBackupAsNewTable). The admin can reassign
   // it afterward via the normal owner picker like any other table.
+  const admin = getCompanySuperAdmin(companyId)?.id;
   const table: TableMeta = {
     id: randomUUID(),
     name,
     columns,
     dailyBackupEnabled: false,
     order: nextOrder,
-    ownerUserId: getCompanySuperAdmin(companyId)?.id,
+    ownerUserIds: admin ? [admin] : [],
     createdAt: now,
     updatedAt: now,
   };

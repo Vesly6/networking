@@ -8,7 +8,8 @@ import { BrandLogo } from '../BrandLogo';
 import { IrmsLogo } from '../IrmsLogo';
 import { ThemeToggle } from '../ThemeToggle';
 import { ImportHistoryModal } from './ImportHistoryModal';
-import { Package } from 'lucide-react';
+import { Popover } from '../Popover';
+import { Package, Users } from 'lucide-react';
 
 interface WorkspaceViewProps {
   onOpenTable: (id: string) => void;
@@ -67,7 +68,7 @@ export function WorkspaceView({
   const renameTable = useWorkspaceStore((s) => s.renameTable);
   const deleteTable = useWorkspaceStore((s) => s.deleteTable);
   const setTableBackupFlag = useWorkspaceStore((s) => s.setTableBackupFlag);
-  const setTableOwner = useWorkspaceStore((s) => s.setTableOwner);
+  const setTableOwners = useWorkspaceStore((s) => s.setTableOwners);
   const logout = useAuthStore((s) => s.logout);
   const currentUser = useAuthStore((s) => s.user);
   // A real, reported gap: this screen never checked role/permissions at
@@ -98,6 +99,13 @@ export function WorkspaceView({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState('');
   const [importHistoryOpen, setImportHistoryOpen] = useState(false);
+  // Which table's "who can see this" checkbox popover is open — at most
+  // one at a time, same pattern as editingId above. The super_admin
+  // themself is never a checkbox here: they already see every table
+  // regardless of this list (tableAccessibleToRequest's own real-admin
+  // bypass), so there's nothing for a checkbox on their own name to do.
+  const [ownerPopoverTableId, setOwnerPopoverTableId] = useState<string | null>(null);
+  const [ownerPopoverAnchor, setOwnerPopoverAnchor] = useState<HTMLElement | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -108,6 +116,29 @@ export function WorkspaceView({
       cancelled = true;
     };
   }, [tables]);
+
+  // Closes the owner popover on any click outside it — this screen has no
+  // existing shared "click anywhere closes popovers" container the way
+  // TableView.tsx does, so this is scoped narrowly by class name (works
+  // regardless of the popover's own portaled DOM position — see
+  // Popover.tsx's own doc comment on why it portals to document.body).
+  useEffect(() => {
+    if (!ownerPopoverTableId) return;
+    const handleDocMouseDown = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (target.closest('.table-card-owner-trigger') || target.closest('.table-card-owner-popover-list')) return;
+      setOwnerPopoverTableId(null);
+      setOwnerPopoverAnchor(null);
+    };
+    document.addEventListener('mousedown', handleDocMouseDown);
+    return () => document.removeEventListener('mousedown', handleDocMouseDown);
+  }, [ownerPopoverTableId]);
+
+  const accessSummaryLabel = (count: number): string => {
+    if (count === 0) return 'Niekas';
+    if (count === 1) return '1 darbuotojas';
+    return `${count} darbuotojai`;
+  };
 
   const handleCreate = async () => {
     const id = await createTable(`Lentelė ${tables.length + 1}`);
@@ -227,20 +258,45 @@ export function WorkspaceView({
                   >
                     Ištrinti
                   </button>
-                  <select
-                    className="table-card-owner-select"
-                    title="Kam priklauso ši lentelė — matys tik jis (ir jūs)"
-                    value={t.ownerUserId ?? currentUser?.id ?? ''}
-                    onClick={(e) => e.stopPropagation()}
-                    onChange={(e) => setTableOwner(t.id, e.target.value)}
+                  <button
+                    type="button"
+                    className="table-card-owner-trigger"
+                    title="Kurie darbuotojai gali matyti šią lentelę — jūs matote ją visada"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const el = e.currentTarget;
+                      if (ownerPopoverTableId === t.id) {
+                        setOwnerPopoverTableId(null);
+                        setOwnerPopoverAnchor(null);
+                      } else {
+                        setOwnerPopoverTableId(t.id);
+                        setOwnerPopoverAnchor(el);
+                      }
+                    }}
                   >
-                    {currentUser && <option value={currentUser.id}>Aš (privatu)</option>}
-                    {workers.map((w) => (
-                      <option key={w.id} value={w.id}>
-                        {`${w.firstName} ${w.lastName}`.trim()}
-                      </option>
-                    ))}
-                  </select>
+                    <Users className="icon" size={14} /> Prieiga: {accessSummaryLabel((t.ownerUserIds ?? []).length)}
+                  </button>
+                  {ownerPopoverTableId === t.id && ownerPopoverAnchor && (
+                    <Popover anchor={ownerPopoverAnchor} width={240}>
+                      <div className="table-card-owner-popover-list">
+                        {workers.length === 0 && <p className="instantly-hint">Darbuotojų nėra.</p>}
+                        {workers.map((w) => {
+                          const ids = t.ownerUserIds ?? [];
+                          const checked = ids.includes(w.id);
+                          return (
+                            <label key={w.id} className="table-card-owner-popover-row">
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => setTableOwners(t.id, checked ? ids.filter((id) => id !== w.id) : [...ids, w.id])}
+                              />
+                              {`${w.firstName} ${w.lastName}`.trim()}
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </Popover>
+                  )}
                 </div>
               )}
             </div>

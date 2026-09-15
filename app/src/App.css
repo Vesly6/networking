@@ -4130,14 +4130,27 @@ tr.row-drop-end td {
   border-color: var(--accent);
 }
 
-/* Per-table owner reassignment picker (see WorkspaceView.tsx and
-   server/src/tableData/db.ts's ownership migration) — matches the sibling
-   action buttons' own compact sizing rather than the browser's larger
-   default <select> chrome. */
-.table-card-owner-select {
-  font-size: 0.78rem;
-  padding: 0.3em 0.5em;
-  max-width: 140px;
+/* Per-table worker-access checkbox picker (see WorkspaceView.tsx and
+   server/src/tableData/db.ts's ownership migration) — the trigger button
+   inherits .table-card-actions button's own compact sizing above; only
+   its icon+label layout and the popover's checkbox list are new here. */
+.table-card-owner-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+.table-card-owner-popover-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.table-card-owner-popover-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
 }
 
 /* Owner's Admin dashboard (AdminView.tsx) — reuses .workspace-view/

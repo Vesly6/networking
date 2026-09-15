@@ -104,7 +104,7 @@ import {
   getRowsUpdatedSince,
   getTablesByIds,
   type Row,
-  setTableOwner,
+  setTableOwners,
   backfillCompanyId,
   backfillTableOwners,
   listWorkerActions,
@@ -335,16 +335,18 @@ function effectiveUser(req: Request) {
 // tableData/db.ts's own migration doc comment). One rule everywhere: a
 // table is visible/writable if the request is a company's own super_admin
 // in their real, non-impersonating session (full oversight, sees every
-// table regardless of owner), OR the table's ownerUserId matches
-// effectiveUser(req) — the impersonated worker's own id while
-// impersonating, otherwise the real logged-in user's own id. This is also
-// exactly how a super_admin's OWN newly-created tables end up private to
-// them by default: effectiveUser(req) in their own session already
-// resolves to their own id, with no special-casing needed at all.
+// table regardless of owners), OR effectiveUser(req)'s id — the
+// impersonated worker's own id while impersonating, otherwise the real
+// logged-in user's own id — appears in the table's ownerUserIds (now a
+// list, not a single id, on explicit request: several workers can share
+// one table). This is also exactly how a super_admin's OWN newly-created
+// tables end up private to them by default: effectiveUser(req) in their
+// own session already resolves to their own id, with no special-casing
+// needed at all.
 function tableAccessibleToRequest(req: Request, table: TableMeta): boolean {
   if (req.auth!.role === 'super_admin' && !req.auth!.actingAs) return true;
   const user = effectiveUser(req);
-  return !!user && table.ownerUserId === user.id;
+  return !!user && table.ownerUserIds.includes(user.id);
 }
 
 // Same rule as tableAccessibleToRequest above, shaped for loadTables()/
@@ -4136,19 +4138,20 @@ app.post(
       res.status(400).json({ error: 'Invalid table payload' });
       return;
     }
-    // ownerUserId is ALWAYS derived server-side from effectiveUser(req) —
-    // never trusted from the client body (a worker can't create tables at
+    // The initial owner is ALWAYS derived server-side from effectiveUser(req)
+    // — never trusted from the client body (a worker can't create tables at
     // all per requireNotWorker above, but an impersonating admin's client
     // could otherwise claim any owner it liked). This is the one rule that
     // makes a table private to the admin in their own session, or
     // assigned to the impersonated worker while impersonating — see
-    // tableAccessibleToRequest's own doc comment.
+    // tableAccessibleToRequest's own doc comment. Other workers can be
+    // added afterward via PATCH /api/tables/:id/owner's checkbox list.
     const owner = effectiveUser(req);
     if (!owner) {
       res.status(401).json({ error: 'Neautentifikuota' });
       return;
     }
-    saveTable({ ...table, ownerUserId: owner.id }, req.auth!.companyId);
+    saveTable({ ...table, ownerUserIds: [owner.id] }, req.auth!.companyId);
     res.json({ ok: true });
   }),
 );
@@ -4327,14 +4330,16 @@ app.patch(
   }),
 );
 
-// The one explicit way to hand an existing table off to a specific worker
-// (or reclaim it back to a specific admin) — see the per-table ownership
+// The one explicit way to change which worker(s) can see an existing
+// table (or reclaim it back to admin-only) — see the per-table ownership
 // migration's own doc comment in tableData/db.ts. Required, not optional:
-// since a table's owner_user_id now defaults to the creating/effective
-// user with no "shared" fallback, this is the only way a worker who
-// didn't create a table themselves (via impersonation) ever gets access
-// to one. `ownerUserId` must be a real user of the same company — worker
-// or the super_admin themself (no role restriction on the target).
+// since a table's owner list defaults to just the creating/effective user
+// with no "shared" fallback, this is the only way a worker who didn't
+// create a table themselves (via impersonation) ever gets access to one.
+// `ownerUserIds` — now a list, not a single id, on explicit request
+// ("несколько работников работают на одной таблице вместе") — must name
+// only real users of the same company; an empty array is valid (nobody
+// but the admin can see it).
 app.patch(
   '/api/tables/:id/owner',
   requireNotWorker,
@@ -4346,16 +4351,18 @@ app.patch(
       res.status(404).json({ error: 'Table not found' });
       return;
     }
-    if (typeof req.body?.ownerUserId !== 'string') {
-      res.status(400).json({ error: 'Invalid "ownerUserId"' });
+    const ids = req.body?.ownerUserIds;
+    if (!Array.isArray(ids) || ids.some((id) => typeof id !== 'string')) {
+      res.status(400).json({ error: 'Invalid "ownerUserIds"' });
       return;
     }
-    const newOwner = getUserById(req.body.ownerUserId);
-    if (!newOwner || newOwner.companyId !== companyId) {
+    const uniqueIds = [...new Set(ids as string[])];
+    const owners = uniqueIds.map((id) => getUserById(id));
+    if (owners.some((u) => !u || u.companyId !== companyId)) {
       res.status(400).json({ error: 'Invalid owner' });
       return;
     }
-    setTableOwner(req.params.id, newOwner.id, companyId);
+    setTableOwners(req.params.id, uniqueIds, companyId);
     res.json({ ok: true });
   }),
 );

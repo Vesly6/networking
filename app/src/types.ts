@@ -58,13 +58,15 @@ export interface TableMeta {
   /** Which TableFolder (if any) this table is grouped under in SheetTabs.
    * null/undefined = ungrouped. */
   folderId?: string | null;
-  /** Which user (the company's super_admin, or a specific worker) this
-   * table is exclusively visible to — see server/src/tableData/db.ts's
-   * own migration doc comment for the ownership model, and
-   * WorkspaceView.tsx's owner picker for how it's reassigned. The server
-   * always derives/overwrites this on create; the client never sets it
-   * explicitly. */
-  ownerUserId?: string | null;
+  /** Which worker(s), beyond the company's own super_admin (who always
+   * sees every table regardless of this list), can see this table — see
+   * server/src/tableData/db.ts's own migration doc comment for the
+   * ownership model, and WorkspaceView.tsx's checkbox picker for how it's
+   * reassigned. On create the server always seeds this to just the
+   * creating user; the client never sets it explicitly except through the
+   * picker's own PATCH call. An empty array is a real, valid "no worker
+   * can see this" state, not "not yet assigned." */
+  ownerUserIds?: string[];
   createdAt: number;
   updatedAt: number;
 }

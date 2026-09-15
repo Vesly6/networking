@@ -172,6 +172,19 @@ function migrate(database: Database.Database): void {
   } catch {
     // Column already exists — nothing to do.
   }
+  // Multi-worker table sharing — on explicit request ("несколько
+  // работников работают на одной таблице вместе"). Replaces the single
+  // owner_user_id column above with a JSON array of worker ids, same
+  // JSON-blob convention this whole schema already uses for
+  // columns_json/cells_json rather than a join table. owner_user_id
+  // itself is left in place, unused going forward — backfillTableOwners()
+  // below reads it exactly once per row to seed the new array, then
+  // nothing ever touches it again.
+  try {
+    database.exec(`ALTER TABLE tables ADD COLUMN owner_user_ids TEXT`);
+  } catch {
+    // Column already exists — nothing to do.
+  }
 
   database.exec(`
     -- One row per daily snapshot of one flagged table. Stores the SAME
@@ -233,10 +246,30 @@ export function backfillCompanyId(ownerCompanyId: string): void {
  * reassigns at least one via the new owner picker — see the plan this
  * feature shipped from for why this was accepted rather than avoided. */
 export function backfillTableOwners(): void {
-  const stmt = getDb().prepare(`UPDATE tables SET owner_user_id = ? WHERE company_id = ? AND owner_user_id IS NULL`);
+  const database = getDb();
+  const stmt = database.prepare(`UPDATE tables SET owner_user_id = ? WHERE company_id = ? AND owner_user_id IS NULL`);
   for (const company of listCompanies()) {
     const admin = getCompanySuperAdmin(company.id);
     if (admin) stmt.run(admin.id, company.id);
+  }
+  // Multi-worker sharing migration (see the owner_user_ids ALTER TABLE's
+  // own doc comment above) — every row's owner_user_id is guaranteed
+  // non-NULL by the loop just above (a fresh company with no super_admin
+  // at all is the one unreachable exception, in which case there's
+  // nothing sane to seed and the row is simply skipped, same as before),
+  // so this always has a real single id to migrate into a one-element
+  // array. Runs after every boot but only ever touches owner_user_ids IS
+  // NULL rows, so it's a no-op once a table has actually been through
+  // this once — including a table whose array was later explicitly
+  // cleared to zero workers, which is a real, distinct empty array `[]`,
+  // never NULL again.
+  const rows = database.prepare(`SELECT id, owner_user_id FROM tables WHERE owner_user_ids IS NULL`).all() as {
+    id: string;
+    owner_user_id: string | null;
+  }[];
+  const seedStmt = database.prepare(`UPDATE tables SET owner_user_ids = ? WHERE id = ?`);
+  for (const row of rows) {
+    seedStmt.run(JSON.stringify(row.owner_user_id ? [row.owner_user_id] : []), row.id);
   }
 }
 
@@ -268,14 +301,15 @@ export interface TableMeta {
   dailyBackupEnabled: boolean;
   order: number;
   folderId?: string;
-  /** Which user (a company's super_admin, or a specific worker) this
-   * table is exclusively visible to — see index.ts's
-   * tableAccessibleToRequest/tableAccessContext for the actual
-   * enforcement, and backfillTableOwners' own doc comment for the
-   * migration story. Undefined only ever transiently (mapped from a NULL
-   * `owner_user_id` row, which backfillTableOwners resolves on every
-   * boot) — never treated as "shared with everyone." */
-  ownerUserId?: string;
+  /** Which worker(s) this table is visible to, beyond the company's own
+   * super_admin (who always sees every table regardless of this list —
+   * see index.ts's tableAccessibleToRequest/tableAccessContext for the
+   * actual enforcement). Empty array = visible to no worker at all (admin
+   * only) — a real, valid, distinct state from "not yet assigned," not a
+   * transient one; see backfillTableOwners' own doc comment for the
+   * migration story from the old single-owner model. Always an array,
+   * never undefined, by the time this leaves tableFromRow. */
+  ownerUserIds: string[];
   createdAt: number;
   updatedAt: number;
 }
@@ -290,7 +324,8 @@ export interface TableAccessContext {
   isRealAdmin: boolean;
   /** effectiveUser(req)'s id (the impersonated worker if a super_admin is
    * currently acting as one, else the real logged-in user) — ignored when
-   * isRealAdmin is true. */
+   * isRealAdmin is true. Checked against a table's ownerUserIds via
+   * `.includes()`, not `===` — see the multi-worker-sharing migration. */
   ownerUserId: string;
 }
 
@@ -302,6 +337,7 @@ interface TableRow {
   order_num: number;
   folder_id: string | null;
   owner_user_id: string | null;
+  owner_user_ids: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -314,7 +350,12 @@ function tableFromRow(r: TableRow): TableMeta {
     dailyBackupEnabled: r.daily_backup_enabled === 1,
     order: r.order_num,
     folderId: r.folder_id ?? undefined,
-    ownerUserId: r.owner_user_id ?? undefined,
+    // Falls back to the legacy single-owner column, then to empty, for
+    // the narrow transient window between the ALTER TABLE running and
+    // backfillTableOwners()'s own seeding pass on this same boot — never
+    // actually reached in practice (both run back-to-back at startup) but
+    // keeps this mapping correct even if that ever changed.
+    ownerUserIds: r.owner_user_ids ? JSON.parse(r.owner_user_ids) : r.owner_user_id ? [r.owner_user_id] : [],
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -332,10 +373,10 @@ export function loadTables(companyId: string, access?: TableAccessContext): Tabl
     .all(companyId) as TableRow[];
   const tables = rows.map(tableFromRow);
   if (!access || access.isRealAdmin) return tables;
-  // A NULL/undefined owner never equals a real user's id, so an
-  // unassigned table is automatically excluded here without a separate
-  // branch — matches the "no owner == admin-only" rule exactly.
-  return tables.filter((t) => t.ownerUserId === access.ownerUserId);
+  // An empty ownerUserIds array never contains a real user's id, so an
+  // unassigned (or explicitly nobody-but-admin) table is automatically
+  // excluded here without a separate branch.
+  return tables.filter((t) => t.ownerUserIds.includes(access.ownerUserId));
 }
 
 /** Scoped by companyId so a request for another company's table id
@@ -354,17 +395,17 @@ export function getTable(id: string, companyId: string): TableMeta | null {
  * belongs to that same company — this is what stops a crafted request
  * from overwriting another company's table even if it somehow guessed a
  * real id (astronomically unlikely given UUIDs, but free to guard). */
-// order_num/folder_id/owner_user_id are only ever meaningful for the
+// order_num/folder_id/owner_user_ids are only ever meaningful for the
 // INSERT branch (a brand-new table) — the ON CONFLICT DO UPDATE clause
 // deliberately leaves them out, same as it already leaves out created_at,
 // so a re-save (the CSV-migration upsert path, restoreBackupAsNewTable)
-// never clobbers a table's manual order/folder/owner with whatever stale
-// value the caller happened to be holding — an existing table's owner can
-// only ever change via the explicit setTableOwner() below.
+// never clobbers a table's manual order/folder/owners with whatever stale
+// value the caller happened to be holding — an existing table's owners can
+// only ever change via the explicit setTableOwners() below.
 export function saveTable(table: TableMeta, companyId: string): void {
   getDb()
     .prepare(
-      `INSERT INTO tables (id, name, columns_json, order_num, folder_id, owner_user_id, company_id, created_at, updated_at)
+      `INSERT INTO tables (id, name, columns_json, order_num, folder_id, owner_user_ids, company_id, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET name = excluded.name, columns_json = excluded.columns_json, updated_at = excluded.updated_at
        WHERE tables.company_id = excluded.company_id`,
@@ -375,7 +416,7 @@ export function saveTable(table: TableMeta, companyId: string): void {
       JSON.stringify(table.columns),
       table.order,
       table.folderId ?? null,
-      table.ownerUserId ?? null,
+      JSON.stringify(table.ownerUserIds ?? []),
       companyId,
       table.createdAt,
       table.updatedAt,
@@ -419,18 +460,22 @@ export function setTableFolder(tableId: string, folderId: string | null, company
     .run(folderId, Date.now(), tableId, companyId);
 }
 
-/** The one explicit way an existing table's owner ever changes after
+/** The one explicit way an existing table's owners ever change after
  * creation — see index.ts's PATCH /api/tables/:id/owner. Same
- * read-check-then-UPDATE shape as setTableFolder above. */
-export function setTableOwner(tableId: string, ownerUserId: string, companyId: string): void {
+ * read-check-then-UPDATE shape as setTableFolder above. `ownerUserIds`
+ * fully replaces the previous list (the caller sends the complete,
+ * already-edited set — same "whole list, not a delta" contract
+ * updateTableColumns already uses) — an empty array is a real, valid
+ * "no worker can see this" state, not treated specially. */
+export function setTableOwners(tableId: string, ownerUserIds: string[], companyId: string): void {
   const database = getDb();
   const existing = database.prepare(`SELECT id FROM tables WHERE id = ? AND company_id = ?`).get(tableId, companyId) as
     | { id: string }
     | undefined;
   if (!existing) return;
   database
-    .prepare(`UPDATE tables SET owner_user_id = ?, updated_at = ? WHERE id = ? AND company_id = ?`)
-    .run(ownerUserId, Date.now(), tableId, companyId);
+    .prepare(`UPDATE tables SET owner_user_ids = ?, updated_at = ? WHERE id = ? AND company_id = ?`)
+    .run(JSON.stringify(ownerUserIds), Date.now(), tableId, companyId);
 }
 
 /** SheetTabs' drag-reorder — one transaction for the whole batch, same
@@ -1381,7 +1426,7 @@ export function restoreBackupAsNewTable(id: string, companyId?: string, ownerUse
     columns: backup.columns,
     dailyBackupEnabled: false,
     order: nextOrder.nextOrder,
-    ownerUserId: owner,
+    ownerUserIds: owner ? [owner] : [],
     createdAt: now,
     updatedAt: now,
   };

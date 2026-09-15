@@ -9,7 +9,7 @@ import {
   saveTable,
   updateTableBackupFlag,
   updateTableName,
-  setTableOwnerDB,
+  setTableOwnersDB,
   setTableFolder,
   reorderTablesDB,
   loadTableFolders,
@@ -123,11 +123,13 @@ interface WorkspaceState {
   duplicateTable: (id: string) => Promise<string | null>;
   renameTable: (id: string, name: string) => void;
   /** Admin-only (see WorkspaceView.tsx's canManageTables gate) — the one
-   * explicit way to hand an existing table off to a specific worker, or
-   * reclaim it back to a specific admin. See server/src/tableData/db.ts's
-   * per-table ownership migration doc comment for why this exists at all.
-   * Same optimistic-update-then-persist shape as renameTable. */
-  setTableOwner: (id: string, ownerUserId: string) => void;
+   * explicit way to change which worker(s) can see an existing table. See
+   * server/src/tableData/db.ts's per-table ownership migration doc
+   * comment for why this exists at all. Takes the complete, already-
+   * edited list (not a delta) — same contract as setColumnsHidden etc.
+   * elsewhere in this app. Same optimistic-update-then-persist shape as
+   * renameTable. */
+  setTableOwners: (id: string, ownerUserIds: string[]) => void;
   deleteTable: (id: string) => void;
   /** The Workspace screen's per-table daily-backup toggle (Package icon)
    * — see server/src/tableData/db.ts's own doc comment on why this is explicit
@@ -350,14 +352,14 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       });
   },
 
-  setTableOwner: (id, ownerUserId) => {
-    const tables = get().tables.map((t) => (t.id === id ? { ...t, ownerUserId, updatedAt: Date.now() } : t));
+  setTableOwners: (id, ownerUserIds) => {
+    const tables = get().tables.map((t) => (t.id === id ? { ...t, ownerUserIds, updatedAt: Date.now() } : t));
     set({ tables });
-    setTableOwnerDB(id, ownerUserId)
+    setTableOwnersDB(id, ownerUserIds)
       .then(() => set({ actionError: null }))
       .catch((err) => {
         set({
-          actionError: err instanceof Error ? `Nepavyko pakeisti lentelės savininko — ${err.message}` : 'Nepavyko pakeisti lentelės savininko serveryje',
+          actionError: err instanceof Error ? `Nepavyko pakeisti lentelės prieigos — ${err.message}` : 'Nepavyko pakeisti lentelės prieigos serveryje',
         });
       });
   },
