@@ -49,19 +49,25 @@ export function CampaignLeadsModal({ campaignId, onClose }: CampaignLeadsModalPr
   const [leads, setLeads] = useState<InstantlyLead[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [loadingAll, setLoadingAll] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [nextCursor, setNextCursor] = useState<string | undefined>(undefined);
   const [search, setSearch] = useState('');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [deleting, setDeleting] = useState(false);
 
-  const loadPage = async (starting_after?: string) => {
+  // Returns the next page's cursor (or undefined once exhausted) so
+  // handleLoadAll can chain calls without depending on nextCursor's state
+  // value, which wouldn't have re-rendered yet between loop iterations.
+  const loadPage = async (starting_after?: string): Promise<string | undefined> => {
     try {
       const page = await fetchInstantlyLeads({ campaign: campaignId, limit: PAGE_SIZE, starting_after });
       setLeads((prev) => (starting_after ? [...prev, ...page.items] : page.items));
       setNextCursor(page.next_starting_after);
+      return page.next_starting_after;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Nepavyko įkelti lidų');
+      return undefined;
     }
   };
 
@@ -80,6 +86,21 @@ export function CampaignLeadsModal({ campaignId, onClose }: CampaignLeadsModalPr
     setLoadingMore(true);
     await loadPage(nextCursor);
     setLoadingMore(false);
+  };
+
+  // On explicit request: search only ever matches leads already loaded
+  // into this modal, and the first page alone (100) can easily miss
+  // someone in a bigger campaign (703 leads, in the case that prompted
+  // this) — "search finds nothing" read as a real bug when it was really
+  // "hasn't been loaded yet". This walks every remaining page up front so
+  // search/domain lookups actually cover the whole campaign.
+  const handleLoadAll = async () => {
+    setLoadingAll(true);
+    let cursor = nextCursor;
+    while (cursor) {
+      cursor = await loadPage(cursor);
+    }
+    setLoadingAll(false);
   };
 
   // Sorted by company so everyone from the same company renders adjacently
@@ -165,6 +186,12 @@ export function CampaignLeadsModal({ campaignId, onClose }: CampaignLeadsModalPr
         />
 
         {loading && <p className="instantly-hint">Kraunama…</p>}
+        {!loading && nextCursor && search.trim() && (
+          <p className="instantly-hint campaign-leads-partial-hint">
+            Įkelti dar ne visi lidai — paieška veikia tik tarp jau įkeltų. Spauskite „Įkelti visus lidus", kad
+            paieška apimtų visą kampaniją.
+          </p>
+        )}
         {!loading && groups.length === 0 && <p className="instantly-hint">Lidų nerasta.</p>}
 
         {!loading && groups.length > 0 && (
@@ -193,10 +220,15 @@ export function CampaignLeadsModal({ campaignId, onClose }: CampaignLeadsModalPr
           </div>
         )}
 
-        {!loading && nextCursor && !search.trim() && (
-          <button type="button" onClick={() => void handleLoadMore()} disabled={loadingMore}>
-            {loadingMore ? 'Kraunama…' : 'Įkelti daugiau'}
-          </button>
+        {!loading && nextCursor && (
+          <div className="campaign-leads-load-more">
+            <button type="button" onClick={() => void handleLoadMore()} disabled={loadingMore || loadingAll}>
+              {loadingMore ? 'Kraunama…' : 'Įkelti daugiau'}
+            </button>
+            <button type="button" onClick={() => void handleLoadAll()} disabled={loadingMore || loadingAll}>
+              {loadingAll ? `Kraunama visi… (${leads.length})` : 'Įkelti visus lidus'}
+            </button>
+          </div>
         )}
 
         <div className="popover-footer">

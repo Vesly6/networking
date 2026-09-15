@@ -1,6 +1,6 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { X, Mail } from 'lucide-react';
+import { X, Mail, Eye, Shuffle } from 'lucide-react';
 import { useInstantlyCampaignsStore } from '../../store/useInstantlyCampaignsStore';
 import { useToastStore } from '../../store/useToastStore';
 import type { InstantlySequenceStep } from '../../utils/instantlyApi';
@@ -8,9 +8,45 @@ import type { InstantlySequenceStep } from '../../utils/instantlyApi';
 // A minimal HTML shell so the preview's own line-height/font matches a
 // real email client roughly, rather than inheriting this app's own
 // spreadsheet-dense styles from inside the iframe (an iframe's contents
-// never inherit the parent page's CSS at all, sandboxed or not).
+// never inherit the parent page's CSS at all, sandboxed or not). The
+// .mtag chip style lives here, not App.css, for the same reason —
+// nothing outside this document's own <style> reaches inside the iframe.
 function buildPreviewDoc(bodyHtml: string): string {
-  return `<!doctype html><html><head><meta charset="utf-8"><style>body{font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:#111;margin:0;padding:0.75rem;word-wrap:break-word;}</style></head><body>${bodyHtml}</body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><style>body{font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:#111;margin:0;padding:0.75rem;word-wrap:break-word;}.mtag{background:#eef2ff;color:#4338ca;border-radius:4px;padding:0 0.35em;font-weight:600;}</style></head><body>${bodyHtml}</body></html>`;
+}
+
+// Instantly's spintax: {{RANDOM | option A | option B | ...}} — picks one
+// option per real send, which is exactly why the raw stored body reads as
+// nonsense rather than an actual email. Resolving it here mirrors that
+// same one-random-pick-per-send behavior for a "how will this actually
+// look" preview, on explicit request ("хочу видеть как спинтакс на самом
+// деле выглядят"); a "Perkurti" (reroll) button lets the user see a
+// different roll without pretending there's only ever one true answer.
+const SPINTAX_PATTERN = /\{\{\s*random\s*\|([^}]+)\}\}/gi;
+// Whatever's left after spintax resolution is a plain personalization
+// merge tag (firstName, Greetings, sendingAccountName, ...) — this app has
+// no specific recipient to fill one in with at the campaign-sequence
+// level, so rather than inventing fake sample data, it's just visually
+// marked as a placeholder chip instead of raw, confusing double braces.
+const MERGE_TAG_PATTERN = /\{\{\s*([^}|]+?)\s*\}\}/g;
+
+function resolveSpintax(html: string): string {
+  return html.replace(SPINTAX_PATTERN, (_match, optionsRaw: string) => {
+    const options = optionsRaw
+      .split('|')
+      .map((o) => o.trim())
+      .filter(Boolean);
+    if (options.length === 0) return '';
+    return options[Math.floor(Math.random() * options.length)];
+  });
+}
+
+function markMergeTags(html: string): string {
+  return html.replace(MERGE_TAG_PATTERN, (_match, tag: string) => `<span class="mtag">${tag}</span>`);
+}
+
+function buildPreviewBody(html: string): string {
+  return markMergeTags(resolveSpintax(html));
 }
 
 interface CampaignSequenceModalProps {
@@ -47,6 +83,12 @@ export function CampaignSequenceModal({ campaignId, onClose }: CampaignSequenceM
   const clearCampaignDetail = useInstantlyCampaignsStore((s) => s.clearCampaignDetail);
   const showToast = useToastStore((s) => s.show);
 
+  const [previewMode, setPreviewMode] = useState(false);
+  // Keyed by "stepIndex-variantIndex" — recomputed on toggle-on and on
+  // every explicit reroll, never on an unrelated re-render, so the spintax
+  // pick shown stays stable until the user actually asks to see another.
+  const [resolvedBodies, setResolvedBodies] = useState<Record<string, string>>({});
+
   useEffect(() => {
     void fetchCampaignDetail(campaignId);
     return () => clearCampaignDetail();
@@ -54,10 +96,30 @@ export function CampaignSequenceModal({ campaignId, onClose }: CampaignSequenceM
   }, [campaignId]);
 
   useEffect(() => {
+    setPreviewMode(false);
+    setResolvedBodies({});
+  }, [campaignId]);
+
+  useEffect(() => {
     if (campaignDetailError) showToast(campaignDetailError);
   }, [campaignDetailError, showToast]);
 
   const steps = campaignDetail?.id === campaignId ? (campaignDetail.sequences?.[0]?.steps ?? []) : [];
+
+  const rerollPreview = () => {
+    const next: Record<string, string> = {};
+    steps.forEach((step, stepIndex) => {
+      step.variants.forEach((variant, variantIndex) => {
+        next[`${stepIndex}-${variantIndex}`] = buildPreviewBody(variant.body);
+      });
+    });
+    setResolvedBodies(next);
+  };
+
+  const handleTogglePreview = () => {
+    if (!previewMode) rerollPreview();
+    setPreviewMode((v) => !v);
+  };
 
   return createPortal(
     <div className="modal-backdrop" onClick={onClose}>
@@ -73,6 +135,25 @@ export function CampaignSequenceModal({ campaignId, onClose }: CampaignSequenceM
 
         {!campaignDetailLoading && campaignDetail && steps.length === 0 && (
           <p className="instantly-hint">Ši kampanija dar neturi laiškų sekos.</p>
+        )}
+
+        {!campaignDetailLoading && steps.length > 0 && (
+          <div className="campaign-sequence-toolbar">
+            <button type="button" className={previewMode ? 'primary' : undefined} onClick={handleTogglePreview}>
+              <Eye className="icon" size={14} /> {previewMode ? 'Rodyti šabloną' : 'Peržiūra (kaip atrodys realiai)'}
+            </button>
+            {previewMode && (
+              <button type="button" onClick={rerollPreview}>
+                <Shuffle className="icon" size={14} /> Perkurti spintax
+              </button>
+            )}
+          </div>
+        )}
+        {previewMode && (
+          <p className="instantly-hint">
+            Spintax variantai parenkami atsitiktinai, kaip realiame siuntime. Pažymėtos vietos — personalizacijos
+            žymos, kurios bus užpildytos konkrečiu kontaktu, ne tikri duomenys.
+          </p>
         )}
 
         {!campaignDetailLoading && steps.length > 0 && (
@@ -98,7 +179,9 @@ export function CampaignSequenceModal({ campaignId, onClose }: CampaignSequenceM
                         className="campaign-sequence-body-preview"
                         title={`sequence-body-${stepIndex}-${variantIndex}`}
                         sandbox=""
-                        srcDoc={buildPreviewDoc(variant.body)}
+                        srcDoc={buildPreviewDoc(
+                          previewMode ? (resolvedBodies[`${stepIndex}-${variantIndex}`] ?? variant.body) : variant.body,
+                        )}
                       />
                     </div>
                   </div>

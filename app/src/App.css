@@ -6027,6 +6027,13 @@ tr.row-drop-end td {
   color: var(--text-muted);
   align-self: center;
 }
+.campaign-leads-load-more {
+  display: flex;
+  gap: 0.5rem;
+}
+.campaign-leads-partial-hint {
+  color: var(--text-muted);
+}
 
 .instantly-pill {
   font-size: 0.72rem;
@@ -6090,6 +6097,11 @@ tr.row-drop-end td {
   border: 1px solid var(--border);
   border-radius: 6px;
   background: #fff;
+}
+.campaign-sequence-toolbar {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
 }
 
 .instantly-table-wrap {
