@@ -46,6 +46,15 @@ function hasUnreadIncoming(messages: UniboxThreadEmail[]): boolean {
   return messages.some((m) => m.is_unread && !isOutgoingInstantlyEmail(m));
 }
 
+// Instantly's own documented max for GET /emails' `limit` — confirmed
+// against the real OpenAPI schema (minimum 1, maximum 100).
+const EMAILS_PAGE_LIMIT = 100;
+// See refresh()'s own doc comment — how many threads a refresh tries to
+// have on hand before it stops auto-paging, and the safety cap on how
+// many extra pages it'll spend trying to get there.
+const MIN_THREADS_ON_REFRESH = 30;
+const MAX_REFRESH_PAGES = 5;
+
 function groupIntoThreads(emails: UniboxThreadEmail[]): UniboxThread[] {
   const byThread = new Map<string, UniboxThreadEmail[]>();
   for (const email of emails) {
@@ -174,15 +183,42 @@ export const useInstantlyInboxStore = create<InstantlyInboxState>((set, get) => 
     set({ error: null });
     try {
       const { viewMode, filterMailbox, filterCampaignId } = get();
-      const page = await fetchInstantlyEmails({
-        limit: 50,
-        is_unread: viewMode === 'unread' ? true : undefined,
-        scheduled_only: viewMode === 'scheduled' ? true : undefined,
-        eaccount: filterMailbox ?? undefined,
-        campaign_id: filterCampaignId ?? undefined,
-      });
-      const threads = groupIntoThreads(page.items);
-      set({ threads, nextCursor: page.next_starting_after ?? null, ready: true });
+      // A real, reported gap: one page of raw *emails* can easily produce
+      // very few actual conversation *threads* — a busy campaign's most
+      // recent activity is mostly one-message outgoing sends, which can
+      // crowd out the handful of genuine reply threads further back in
+      // time ("зашёл в unibox, там было только три ответа"). Keeps
+      // fetching further pages — same auto-page-until-enough pattern
+      // CampaignLeadsModal.tsx already uses — until at least
+      // MIN_THREADS_ON_REFRESH threads have been assembled, capped at
+      // MAX_REFRESH_PAGES to stay well inside this endpoint's own
+      // documented 20 req/min budget (refreshUnreadCount/
+      // refreshInterestedUnreadCount below already page through this same
+      // endpoint uncapped, so a small, capped extra walk here is
+      // comparatively conservative, not a new risk).
+      let cursor: string | undefined;
+      let allItems: UniboxThreadEmail[] = [];
+      let threads: UniboxThread[] = [];
+      let pages = 0;
+      do {
+        const page = await fetchInstantlyEmails({
+          limit: EMAILS_PAGE_LIMIT,
+          starting_after: cursor,
+          is_unread: viewMode === 'unread' ? true : undefined,
+          scheduled_only: viewMode === 'scheduled' ? true : undefined,
+          eaccount: filterMailbox ?? undefined,
+          campaign_id: filterCampaignId ?? undefined,
+        });
+        allItems = [...allItems, ...page.items];
+        threads = groupIntoThreads(allItems);
+        cursor = page.next_starting_after ?? undefined;
+        pages++;
+        // Reveals results progressively rather than waiting for every
+        // page — the common case (page 1 already has 30+) resolves in
+        // one request same as before; only a reply-starved page 1 pays
+        // for the extra round trips, and the user sees each page land.
+        set({ threads, nextCursor: cursor ?? null, ready: true });
+      } while (cursor && threads.length < MIN_THREADS_ON_REFRESH && pages < MAX_REFRESH_PAGES);
     } catch (err) {
       set({ error: err instanceof Error ? err.message : 'Nepavyko įkelti pokalbių', ready: true });
     }
@@ -194,7 +230,7 @@ export const useInstantlyInboxStore = create<InstantlyInboxState>((set, get) => 
     set({ loadMoreLoading: true });
     try {
       const page = await fetchInstantlyEmails({
-        limit: 50,
+        limit: EMAILS_PAGE_LIMIT,
         starting_after: nextCursor,
         is_unread: viewMode === 'unread' ? true : undefined,
         scheduled_only: viewMode === 'scheduled' ? true : undefined,
