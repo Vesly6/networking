@@ -410,7 +410,22 @@ export function TableView({
   // its own, more granular pair of keys).
   const canExportExecute = useAuthStore((s) => can(s.user?.permissionKeys, 'export.execute'));
   const canExportContacts = useAuthStore((s) => can(s.user?.permissionKeys, 'export.contacts'));
-  const canViewLinkedInPlanner = useAuthStore((s) => can(s.user?.permissionKeys, 'linkedin_planner.view'));
+  // Not a permissionKeys check (linkedin_planner.view has no checkbox
+  // anywhere — see server/src/index.ts's requireLinkedInPlannerViewer doc
+  // comment for why relying on it here would silently never fetch the
+  // badge for any worker whose grant is missing/stale, with no way for an
+  // admin to fix it). Mirrors App.tsx's own allowedTabs computation
+  // instead: a worker (or an admin impersonating one) needs
+  // 'linkedin_planner' in their own visibleTabs; a real, non-impersonating
+  // admin always passes.
+  const canViewLinkedInPlanner = useAuthStore((s) => {
+    const user = s.user;
+    if (!user) return false;
+    if ((user.role === 'worker' || user.impersonating) && user.visibleTabs) {
+      return user.visibleTabs.includes('linkedin_planner');
+    }
+    return true;
+  });
   // The (⋮) column menu (ColumnMenu.tsx) is a hard block for every worker,
   // not gated per-field — on explicit request ("nenoriu, kad jis isvis
   // turėtų galimybę užeiti į (⋮)"). ColumnMenu itself already disables the
