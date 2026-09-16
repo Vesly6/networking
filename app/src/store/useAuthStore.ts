@@ -190,16 +190,31 @@ export const useAuthStore = create<AuthState>((set) => ({
   loggingIn: false,
   error: null,
 
+  // A real, reported cross-tenant leak: every OTHER store in this app
+  // (table data, Instantly accounts/campaigns/inbox, integrations status,
+  // workers, etc.) is a plain module-level Zustand singleton with no
+  // reset-on-login hook of its own — some don't even clear their payload
+  // on a failed refresh, and useIntegrationsStatusStore's own `loaded`
+  // guard means it never re-fetches AT ALL once true. So logging into a
+  // DIFFERENT company in the same browser tab, without a real navigation,
+  // left every one of them silently showing the PREVIOUS company's data
+  // (a super_admin logging into a different company's account still saw
+  // the first company's Instantly mailbox/campaign list). A full page
+  // reload is the one fix that can't be defeated by some future store
+  // forgetting to wire itself into a manual "reset everything" list — every
+  // store re-initializes from scratch, same already-proven pattern
+  // platformImpersonation.ts's own startPlatformImpersonation uses for the
+  // identical class of risk (window.location.href, not React state).
   login: async (username, password) => {
     set({ loggingIn: true, error: null });
     try {
-      const { token, user } = await localApiRequest<{ token: string; user: AuthUser }>('/api/auth/login', {
+      const { token } = await localApiRequest<{ token: string; user: AuthUser }>('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password }),
       });
       setAuthToken(token);
-      set({ token, user, loggingIn: false });
+      window.location.href = '/';
     } catch (err) {
       set({ loggingIn: false, error: err instanceof Error ? err.message : 'Nepavyko prisijungti' });
       throw err;
@@ -209,13 +224,13 @@ export const useAuthStore = create<AuthState>((set) => ({
   register: async (input) => {
     set({ loggingIn: true, error: null });
     try {
-      const { token, user } = await localApiRequest<{ token: string; user: AuthUser }>('/api/register', {
+      const { token } = await localApiRequest<{ token: string; user: AuthUser }>('/api/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(input),
       });
       setAuthToken(token);
-      set({ token, user, loggingIn: false });
+      window.location.href = '/';
     } catch (err) {
       set({ loggingIn: false, error: err instanceof Error ? err.message : 'Nepavyko užsiregistruoti' });
       throw err;
@@ -243,6 +258,14 @@ export const useAuthStore = create<AuthState>((set) => ({
     set({ token: null, user: null });
   },
 
+  // Same full-reload reasoning as login/register above — impersonation
+  // switches the effective identity just as much as a real login does, and
+  // this file's own store isn't the only one that cares which user is
+  // "acting": per-worker Zadarma/integration overrides, worker-scoped
+  // views, etc. all live in other module-level stores with no reset hook
+  // of their own. Matches platformImpersonation.ts's own
+  // startPlatformImpersonation, which already does exactly this for the
+  // platform-level equivalent of this same switch.
   impersonateWorker: async (workerId) => {
     const { token: impersonationToken } = await localApiRequest<{ token: string }>(
       `/api/workers/${encodeURIComponent(workerId)}/impersonate`,
@@ -251,17 +274,16 @@ export const useAuthStore = create<AuthState>((set) => ({
     const realToken = getAuthToken();
     if (realToken) setStashedAdminToken(realToken); // stash BEFORE switching
     setAuthToken(impersonationToken);
-    set({ token: impersonationToken });
-    await useAuthStore.getState().fetchMe();
+    window.location.href = '/';
   },
 
+  // Same reload reasoning as impersonateWorker above.
   stopImpersonating: async () => {
     const realToken = getStashedAdminToken();
     if (!realToken) return;
     setStashedAdminToken(null);
     setAuthToken(realToken);
-    set({ token: realToken });
-    await useAuthStore.getState().fetchMe();
+    window.location.href = '/';
   },
 }));
 

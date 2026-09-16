@@ -1505,6 +1505,45 @@ app.post(
   }),
 );
 
+// The one deliberate hole in integrationsStatus()'s own "a secret is
+// never re-sent to the browser" rule (see that function's own doc
+// comment) — added on explicit request, so the platform Super Super
+// Admin can actually compare a real key's value across two companies
+// (e.g. to confirm/rule out two companies accidentally sharing one
+// Instantly account, which would explain their reply data mixing
+// together). POST + a single validated field, same shape as /clear right
+// above — never a bulk GET, so this can't accidentally widen what the
+// existing boolean-only status routes (integrationsStatus,
+// effectiveIntegrationsStatus, workerToPublic) return to anyone else.
+// requireSuperAdmin only — a company's own super_admin (api_keys.view/
+// edit) is structurally confined to req.auth!.companyId everywhere else
+// in this file and must stay that way; this route isn't reachable by
+// that role at all, by construction (it sits above app.use(requireAuth),
+// same as the rest of this admin trio).
+app.post(
+  '/api/admin/companies/:id/integrations/reveal',
+  requireSuperAdmin,
+  asyncHandler(async (req, res) => {
+    const { field } = req.body ?? {};
+    if (typeof field !== 'string' || !(INTEGRATION_FIELDS as readonly string[]).includes(field)) {
+      res.status(400).json({ error: 'Invalid "field"' });
+      return;
+    }
+    const integrations = getCompanyIntegrations(req.params.id);
+    const value = integrations?.[field as (typeof INTEGRATION_FIELDS)[number]] ?? null;
+    appendAuditLog({
+      actorUserId: null,
+      actorRole: 'super_super_admin',
+      companyId: req.params.id,
+      action: 'integrations.reveal',
+      targetType: 'company',
+      targetId: req.params.id,
+      detail: { field },
+    });
+    res.json({ field, value });
+  }),
+);
+
 // Mirrors app/src/utils/tabLabels.ts's ALL_TABS exactly — the full set of
 // values updateCompanyFeatures will actually accept. Filtered against
 // (unrecognized strings silently dropped) rather than rejecting the whole

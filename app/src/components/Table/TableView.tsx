@@ -1657,8 +1657,17 @@ export function TableView({
     // editable-cell/autoFocus transition made the popover reappear (or
     // never actually close) in practice. Clearing it immediately on
     // mousedown, before any of that has a chance to happen, sidesteps the
-    // race entirely rather than chasing its exact mechanism.
+    // race entirely rather than chasing its exact mechanism. Same fix,
+    // same reason, for the three column-header filter popovers (numeric/
+    // color/reply-status) — a real, reported bug: clicking a cell that
+    // becomes `editable` on this mousedown never produces a document-level
+    // `click` at all (the pressed element is gone by mouseup), so
+    // closePopovers' own listener never runs and any of these three stayed
+    // stuck open.
     setDateCellPopover(null);
+    setNumericFilterColumnId(null);
+    setColorFilterColumnId(null);
+    setReplyStatusFilterColumnId(null);
     if (extend && rangeAnchor) setRangeFocus({ r, c });
     else {
       setRangeAnchor({ r, c });
@@ -2910,6 +2919,15 @@ export function TableView({
     setHiddenRowsAnchor(null);
     setDateCellPopover(null);
     setNumericFilterColumnId(null);
+    // Two more real, reported gaps in this same list: colorFilterColumnId
+    // and replyStatusFilterColumnId (unlike numericFilterColumnId right
+    // above, which WAS already here) each only ever got cleared from
+    // inside their own popover (a swatch/"Išvalyti" click, or a sort-order
+    // button click) — never by clicking anywhere else in the table, so
+    // both stayed stuck open until the user happened to click one of
+    // those specific in-popover controls.
+    setColorFilterColumnId(null);
+    setReplyStatusFilterColumnId(null);
     if (!justFinishedHeaderDragRef.current) {
       setRowRangeAnchor(null);
       setRowRangeFocus(null);

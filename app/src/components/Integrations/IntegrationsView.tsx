@@ -9,7 +9,7 @@ import { useWorkersStore, type Worker } from '../../store/useWorkersStore';
 import { useToastStore } from '../../store/useToastStore';
 import { confirmDialog } from '../../store/useConfirmStore';
 import { LOCAL_API_BASE } from '../../utils/localApi';
-import { Check, X, Save, Copy } from 'lucide-react';
+import { Check, X, Save, Copy, Eye, EyeOff } from 'lucide-react';
 
 interface FieldDef {
   field: IntegrationField;
@@ -151,6 +151,7 @@ export function IntegrationsView({ companyId }: IntegrationsViewProps) {
   const clear = useIntegrationsStore((s) => s.clear);
   const setMode = useIntegrationsStore((s) => s.setMode);
   const saveOwnKeys = useIntegrationsStore((s) => s.saveOwnKeys);
+  const reveal = useIntegrationsStore((s) => s.reveal);
   const showToast = useToastStore((s) => s.show);
 
   const workers = useWorkersStore((s) => s.workers);
@@ -158,6 +159,15 @@ export function IntegrationsView({ companyId }: IntegrationsViewProps) {
   const updateWorker = useWorkersStore((s) => s.update);
 
   const [draft, setDraft] = useState<Partial<Record<IntegrationField, string>>>({});
+  // The real key value, once fetched via the eye button — deliberately its
+  // OWN state, never merged into `draft` (see useIntegrationsStore.ts's
+  // reveal() doc comment): draft's whole other purpose is "what the admin
+  // is about to SAVE", and a save silently re-submitting an already-stored
+  // key verbatim would defeat the point of `handleSave` only ever sending
+  // what actually changed. Admin-only (companyId always set whenever this
+  // is populated) — cleared whenever the viewed company changes, below.
+  const [revealed, setRevealed] = useState<Partial<Record<IntegrationField, string>>>({});
+  const [revealingField, setRevealingField] = useState<IntegrationField | null>(null);
   // Per-company webhook URL — see server/src/index.ts's POST
   // /api/instantly/webhook/:companyId doc comment. Only meaningful in
   // admin mode (an arbitrary company by id) — a company's own super_admin
@@ -172,7 +182,15 @@ export function IntegrationsView({ companyId }: IntegrationsViewProps) {
     // Re-load whenever the owner switches which company they're viewing
     // in the Admin dashboard — companyId is the one prop that can
     // actually change across this component's lifetime (the no-arg
-    // "manage my own" usage never changes it at all).
+    // "manage my own" usage never changes it at all). Also clears any
+    // revealed key and unsaved draft from whichever company was open
+    // before — a real, easy-to-miss class of bug this app just got bitten
+    // by elsewhere (see useAuthStore.ts's login/logout doc comment): a
+    // revealed secret staying on screen while looking at a DIFFERENT
+    // company would be exactly the same "stale cross-tenant data" problem,
+    // just self-inflicted via this one component instead of a stale store.
+    setRevealed({});
+    setDraft({});
   }, [load, loadWorkers, companyId]);
 
   useEffect(() => {
@@ -278,6 +296,15 @@ export function IntegrationsView({ companyId }: IntegrationsViewProps) {
         }
         return next;
       });
+      // A previously-revealed value for anything just changed would now
+      // be showing the OLD key with no indication it's stale — clear it
+      // rather than leave a lie on screen; re-clicking the eye fetches the
+      // real, current value again.
+      setRevealed((prev) => {
+        const next = { ...prev };
+        for (const field of Object.keys(patch) as IntegrationField[]) delete next[field];
+        return next;
+      });
       showToast('Išsaugota');
     } catch {
       // error already surfaced via the effect watching the store's `error`
@@ -306,9 +333,39 @@ export function IntegrationsView({ companyId }: IntegrationsViewProps) {
         delete next[field];
         return next;
       });
+      setRevealed((prev) => {
+        const next = { ...prev };
+        delete next[field];
+        return next;
+      });
       showToast('Išvalyta');
     } catch {
       // error already surfaced via the effect watching the store's `error`
+    }
+  };
+
+  // Toggles a secret field's real value on/off — admin-only (companyId is
+  // always set here, see the button's own render guard below). Clicking
+  // again while already revealed just hides it again locally, with no
+  // second server round trip.
+  const handleToggleReveal = async (field: IntegrationField) => {
+    if (!companyId) return;
+    if (revealed[field] !== undefined) {
+      setRevealed((prev) => {
+        const next = { ...prev };
+        delete next[field];
+        return next;
+      });
+      return;
+    }
+    setRevealingField(field);
+    try {
+      const value = await reveal(field, companyId);
+      setRevealed((prev) => ({ ...prev, [field]: value ?? '' }));
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Nepavyko atskleisti rakto');
+    } finally {
+      setRevealingField(null);
     }
   };
 
@@ -355,6 +412,12 @@ export function IntegrationsView({ companyId }: IntegrationsViewProps) {
             {group.fields.map(({ field, label, placeholder }) => {
               const secret = !NON_SECRET.has(field);
               const configured = secret ? !!status?.[field] : !!(status?.[field] as string | null);
+              // Revealing is only ever offered in the platform admin's
+              // cross-company view (companyId set) — see
+              // useIntegrationsStore.ts's reveal() own doc comment for why
+              // there's deliberately no self-service twin of this route.
+              const canReveal = secret && configured && !!companyId;
+              const revealedValue = revealed[field];
               return (
                 <div key={field} className="integrations-field-row">
                   <label className="popover-field">
@@ -371,12 +434,48 @@ export function IntegrationsView({ companyId }: IntegrationsViewProps) {
                     <span className={configured ? 'integrations-badge-set' : 'integrations-badge-unset'}>
                       {configured ? <><Check className="icon" size={14} /> Sukonfigūruota</> : '— Nenustatyta'}
                     </span>
+                    {canReveal && (
+                      <button
+                        type="button"
+                        title={revealedValue !== undefined ? 'Slėpti raktą' : 'Peržiūrėti tikrąjį raktą'}
+                        disabled={revealingField === field}
+                        onClick={() => void handleToggleReveal(field)}
+                      >
+                        {revealedValue !== undefined ? <EyeOff className="icon" size={14} /> : <Eye className="icon" size={14} />}
+                        {revealingField === field ? 'Kraunama…' : revealedValue !== undefined ? 'Slėpti' : 'Peržiūrėti'}
+                      </button>
+                    )}
                     {configured && (
                       <button type="button" className="danger" onClick={() => void handleClear(field, label)}>
                         <X className="icon" size={14} /> Išvalyti
                       </button>
                     )}
                   </div>
+                  {revealedValue !== undefined && (
+                    // Deliberately its own read-only row, never written
+                    // into the input above — see the `revealed` state's
+                    // own doc comment for why mixing it into `draft` would
+                    // be actively wrong (a save would then silently
+                    // resubmit an unchanged key verbatim).
+                    <div className="integrations-revealed-row">
+                      <code>{revealedValue || '(tuščia reikšmė)'}</code>
+                      {revealedValue && (
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            try {
+                              await navigator.clipboard.writeText(revealedValue);
+                              showToast('Nukopijuota');
+                            } catch {
+                              showToast('Nepavyko nukopijuoti — nėra prieigos prie iškarpinės');
+                            }
+                          }}
+                        >
+                          <Copy className="icon" size={14} /> Kopijuoti
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
               );
             })}

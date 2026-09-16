@@ -84,6 +84,17 @@ interface IntegrationsState {
    * Individual mode used to also cut the super_admin's own access to it,
    * not just a worker's. */
   saveOwnKeys: (patch: Partial<Record<OwnOverridableField, string>>) => Promise<void>;
+  /** Platform-admin-only (companyId always required — there is no
+   * self-service twin of this, on purpose, see the server route's own doc
+   * comment): fetches a secret field's REAL value, the one deliberate hole
+   * in this whole file's "a secret is never re-sent to the browser" rule.
+   * Added on explicit request, to let the Super Super Admin compare a key
+   * across two companies (e.g. confirm/rule out two companies accidentally
+   * sharing one Instantly account). Returns the value directly rather than
+   * writing it into `status` — IntegrationsView.tsx keeps it in its own,
+   * separate local state, never in `draft`, so a save afterward can't
+   * accidentally echo it back (see that file's own doc comment). */
+  reveal: (field: IntegrationField, companyId: string) => Promise<string | null>;
 }
 
 function integrationsPath(companyId: string | undefined, suffix = ''): string {
@@ -173,6 +184,19 @@ export const useIntegrationsStore = create<IntegrationsState>((set, get) => ({
       await get().load(undefined);
     } catch (err) {
       set({ saving: false, error: err instanceof Error ? err.message : 'Nepavyko išsaugoti asmeninio rakto' });
+      throw err;
+    }
+  },
+
+  reveal: async (field, companyId) => {
+    try {
+      const { value } = await superAdminApiRequest<{ field: IntegrationField; value: string | null }>(
+        `/api/admin/companies/${companyId}/integrations/reveal`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ field }) },
+      );
+      return value;
+    } catch (err) {
+      set({ error: err instanceof Error ? err.message : 'Nepavyko atskleisti rakto' });
       throw err;
     }
   },

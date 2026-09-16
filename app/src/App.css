@@ -8744,7 +8744,29 @@ tr.row-drop-end td {
 .integrations-field-row {
   display: flex;
   align-items: flex-end;
+  flex-wrap: wrap;
   gap: 0.6rem;
+}
+/* The revealed real key value (see IntegrationsView.tsx's own doc comment
+   on why it's a separate, read-only row rather than pre-filled into the
+   input above) — width: 100% is what forces it onto its own line below
+   the label+status row, in the flex-wrap row just enabled above. */
+.integrations-revealed-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+}
+.integrations-revealed-row code {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  white-space: nowrap;
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.3em 0.5em;
+  font-size: 0.75rem;
 }
 .integrations-worker-assign {
   margin-top: 0.6rem;
