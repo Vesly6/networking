@@ -44,6 +44,11 @@ const VIEW_MODE_ICONS: Record<UniboxViewMode, LucideIcon> = {
   scheduled: Clock,
 };
 
+// See the auto-load effect below (filteredThreads' own doc comment) for
+// why this lives here rather than in useInstantlyInboxStore.ts.
+const MIN_VISIBLE_THREADS = 30;
+const MAX_AUTO_LOAD_PAGES = 5;
+
 function formatTimestamp(iso: string): string {
   try {
     return new Date(iso).toLocaleString('lt-LT', { dateStyle: 'short', timeStyle: 'short' });
@@ -623,6 +628,34 @@ export function UniboxPanel() {
       );
     });
   }, [viewModeFiltered, search]);
+
+  // A busy campaign's most recent activity is mostly one-message outgoing
+  // sends, which can crowd out the handful of genuine reply threads
+  // further back in time ("зашёл в unibox, там было только три ответа") —
+  // this keeps calling loadMore() until filteredThreads (what's actually
+  // on screen, after tab/status/viewMode/search) reaches MIN_VISIBLE_THREADS,
+  // capped at MAX_AUTO_LOAD_PAGES to stay well inside Instantly's own
+  // documented 20 req/min budget. Deliberately keyed off filteredThreads,
+  // not the store's raw thread count — an earlier version of this lived
+  // in the store itself and counted raw, unfiltered threads, which let a
+  // reply-starved page 1 falsely look "done" the moment it crossed 30
+  // buckets, most of which viewModeFiltered's own outbound-only check
+  // then immediately discarded.
+  const autoLoadPagesRef = useRef(0);
+  useEffect(() => {
+    // A fresh server-side query (view mode/mailbox/campaign change, or
+    // the initial mount refresh) gets its own budget of auto-continuation
+    // pages, rather than being silently capped by a PREVIOUS query's
+    // already-spent attempts.
+    autoLoadPagesRef.current = 0;
+  }, [viewMode, filterMailbox, filterCampaignId]);
+  useEffect(() => {
+    if (!ready || loadMoreLoading || !nextCursor) return;
+    if (filteredThreads.length >= MIN_VISIBLE_THREADS) return;
+    if (autoLoadPagesRef.current >= MAX_AUTO_LOAD_PAGES) return;
+    autoLoadPagesRef.current += 1;
+    void loadMore();
+  }, [ready, loadMoreLoading, nextCursor, filteredThreads.length, loadMore]);
 
   const openThread = threads.find((t) => t.threadId === openThreadId);
 

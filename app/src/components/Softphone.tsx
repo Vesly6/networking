@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Phone } from 'lucide-react';
 import { fetchWebrtcKey } from '../utils/webrtcApi';
 import { useTableStore } from '../store/useTableStore';
@@ -71,9 +71,29 @@ export function Softphone() {
   // permissionKeys itself only ever changes on a fresh /api/auth/me
   // response, which is already infrequent.
   const zadarmaPermitted = useAuthStore((s) => can(s.user?.permissionKeys, 'integrations.zadarma.use'));
+  // Whether the widget has ACTUALLY mounted its own DOM — distinct from
+  // zadarmaPermitted (which only means "allowed to try"). A real, found
+  // bug: App.css used to reserve 380px of space in the sheet-tabs bar for
+  // the widget based purely on the hide/show preference below, regardless
+  // of whether the widget ever loaded — so a worker with no
+  // zadarmaSip/zadarmaWidgetSip configured (GET /api/webrtc/key 500s,
+  // caught silently below) got a permanent 380px hole with nothing in it,
+  // shoving the "Visos lentelės" search button toward mid-screen ("как
+  // будто я открыл виджет Zadarma"). The `data-softphone-loaded` attribute
+  // (App.css's own `.sheet-tabs-bar` rule) is what actually ties that
+  // reserved space to the widget's real presence now; `loaded` here is
+  // also what hides the otherwise-orphaned toggle button below when
+  // there's nothing for it to show/hide.
+  const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    if (!SOFTPHONE_ENABLED || !zadarmaPermitted) return;
+    if (!SOFTPHONE_ENABLED || !zadarmaPermitted) {
+      setLoaded(false);
+      document.documentElement.setAttribute('data-softphone-loaded', 'false');
+      return;
+    }
+    setLoaded(false);
+    document.documentElement.setAttribute('data-softphone-loaded', 'false');
     // Relying on `cancelled` alone (rather than an extra "ran once" ref) is
     // what actually makes this correct under StrictMode's dev-only double
     // mount→cleanup→mount: the throwaway first run's cleanup flips its own
@@ -111,6 +131,9 @@ export function Softphone() {
         // this choice either way — that's handled by Zadarma's own
         // backend, not the skin parameter.
         window.zadarmaWidgetFn!(key, sip, 'rounded', 'en', true, { right: '10px', bottom: '5px' });
+        if (cancelled) return;
+        setLoaded(true);
+        document.documentElement.setAttribute('data-softphone-loaded', 'true');
       } catch (err) {
         // No toast here on purpose — this effect runs once per app
         // session on every mount (Softphone is always rendered, see
@@ -151,7 +174,11 @@ export function Softphone() {
     });
   }, [zadarmaPermitted]);
 
-  if (!SOFTPHONE_ENABLED || !zadarmaPermitted) return null;
+  // `loaded` too — no point showing a hide/show toggle for a widget that
+  // never actually mounted (a real, found issue alongside the 380px
+  // reservation bug above: the button used to float over nothing for
+  // anyone without zadarmaSip/zadarmaWidgetSip configured).
+  if (!SOFTPHONE_ENABLED || !zadarmaPermitted || !loaded) return null;
   return (
     <button
       type="button"

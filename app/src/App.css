@@ -570,7 +570,18 @@ svg.icon {
      below adds room for the full widget whenever it's actually shown. */
   padding-right: 64px;
 }
-:root:not([data-softphone-hidden='true']) .sheet-tabs-bar {
+/* A second, real bug found the same way: this used to key off ONLY the
+   hide/show preference (:not([data-softphone-hidden='true'])), which
+   defaults to "not hidden" for everyone — so a worker with no
+   zadarmaSip/zadarmaWidgetSip configured (the widget's own init silently
+   fails, see Softphone.tsx's own doc comment on data-softphone-loaded)
+   still got the full 380px hole reserved with nothing in it, shoving this
+   button most of the way to mid-screen ("как будто я открыл виджет
+   Zadarma"). data-softphone-loaded is only ever "true" once
+   window.zadarmaWidgetFn() has actually run — requiring it here ties the
+   reservation to the widget's real presence, not just a preference that
+   exists independently of whether there's anything to show or hide. */
+:root[data-softphone-loaded='true']:not([data-softphone-hidden='true']) .sheet-tabs-bar {
   padding-right: 380px;
 }
 
