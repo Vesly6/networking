@@ -3221,6 +3221,18 @@ tr.row-drop-end td {
    than the confirm button below — two visually identical "LinkedIn
    badges" in one card read as redundant clutter. */
 .cell-hover-contact-sent-linkedin {
+  /* Light theme's --accent (#2f6fed) sits close enough in hue/lightness
+     to LinkedIn's own brand blue that this badge and the plain
+     .cell-hover-contact-sent-active one (which uses --accent, and shares
+     the exact same Send icon — see this badge's own doc comment above)
+     read as near-identical in light mode — confirmed by direct report.
+     Dark theme's much lighter --accent (#97b7f2) already contrasts fine
+     against LinkedIn blue, so only the light-theme value changes here; a
+     darker, more saturated navy keeps the "LinkedIn" association while
+     sitting well clear of --accent's own lightness. */
+  color: #004182;
+}
+:root[data-theme='dark'] .cell-hover-contact-sent-linkedin {
   color: #0a66c2;
 }
 /* The LinkedIn social icon's own "confirm sent" button — same
