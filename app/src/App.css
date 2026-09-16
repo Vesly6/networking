@@ -3229,8 +3229,13 @@ tr.row-drop-end td {
      Dark theme's much lighter --accent (#97b7f2) already contrasts fine
      against LinkedIn blue, so only the light-theme value changes here; a
      darker, more saturated navy keeps the "LinkedIn" association while
-     sitting well clear of --accent's own lightness. */
-  color: #004182;
+     sitting well clear of --accent's own lightness. Pushed a second time,
+     darker still (#062c4d) — the first attempt (#004182) tested as no
+     visible change, which points at a stale deployed build rather than
+     an insufficient color gap (#004182 vs --accent's #2f6fed already has
+     roughly double the Euclidean RGB distance of the original #0a66c2),
+     but going darker still removes any doubt once this actually ships. */
+  color: #062c4d;
 }
 :root[data-theme='dark'] .cell-hover-contact-sent-linkedin {
   color: #0a66c2;
