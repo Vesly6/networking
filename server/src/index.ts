@@ -4239,6 +4239,36 @@ app.get(
 // a status. This is deliberate and load-bearing, not an oversight to
 // "improve" later — see this module's own top-of-file doc comment.
 
+// Replaces requirePermission2('linkedin_planner.view') on every planner
+// READ route. 'linkedin_planner.view' itself is a real PermissionKey (kept
+// in the registry so old/backfilled grants aren't invalid data), but it
+// was deliberately removed from PERMISSION_GROUPS (permissions.ts) so
+// there is no checkbox for it anywhere — the account owner asked to rely
+// purely on a worker's own "Matomos skiltys" (visibleTabs) tab visibility
+// instead of a separate, redundant "can see the Planner tab" checkbox.
+// That decision was only ever applied client-side (App.tsx's allowedTabs);
+// this closes the same gap server-side, so a worker whose ONLY problem is
+// a stale/never-granted 'linkedin_planner.view' key (impossible to fix via
+// the UI, since nothing renders a checkbox for it) doesn't get silently
+// 403'd on every planner read while their tab is visibly present in the
+// nav. Mirrors App.tsx's own allowedTabs computation: a real, non-
+// impersonating admin always passes (linkedin_planner is an ALWAYS_ON
+// company feature, not something an admin's own account can be missing);
+// a worker (or an admin impersonating one, via effectiveUser) needs
+// 'linkedin_planner' in their own visibleTabs.
+function requireLinkedInPlannerViewer(req: Request, res: Response, next: NextFunction) {
+  const user = effectiveUser(req);
+  if (!user) {
+    res.status(401).json({ error: 'Neautentifikuota' });
+    return;
+  }
+  if (user.role === 'worker' && !(user.visibleTabs ?? []).includes('linkedin_planner')) {
+    res.status(403).json({ error: 'Neturite teisės atlikti šio veiksmo', permission: 'linkedin_planner.view' });
+    return;
+  }
+  next();
+}
+
 // Which tables' occurrences a requester's task list should be filtered
 // to — mirrors tableAccessibleToRequest's own real-admin bypass exactly
 // (a super_admin impersonating a worker sees what THAT worker would see,
@@ -4324,7 +4354,7 @@ function plannerStatusFilterFor(
 
 app.get(
   '/api/linkedin-planner/tasks',
-  requirePermission2('linkedin_planner.view'),
+  requireLinkedInPlannerViewer,
   asyncHandler(async (req, res) => {
     const companyId = req.auth!.companyId;
     let accessibleTableIds = accessibleTableIdsForPlanner(req);
@@ -4464,7 +4494,7 @@ app.get(
 // exactly the same row data sensitivity as the row itself.
 app.get(
   '/api/linkedin-planner/tasks/by-row',
-  requirePermission2('linkedin_planner.view'),
+  requireLinkedInPlannerViewer,
   asyncHandler(async (req, res) => {
     const { tableId, rowId } = req.query;
     if (typeof tableId !== 'string' || typeof rowId !== 'string') {
@@ -4483,7 +4513,7 @@ app.get(
 
 app.get(
   '/api/linkedin-planner/tasks/:id/history',
-  requirePermission2('linkedin_planner.view'),
+  requireLinkedInPlannerViewer,
   asyncHandler(async (req, res) => {
     const task = getTaskById(req.params.id, req.auth!.companyId);
     if (!task) {
@@ -4702,7 +4732,7 @@ app.post(
 
 app.get(
   '/api/linkedin-planner/templates',
-  requirePermission2('linkedin_planner.view'),
+  requireLinkedInPlannerViewer,
   asyncHandler(async (req, res) => {
     res.json({ templates: listTemplates(req.auth!.companyId) });
   }),
