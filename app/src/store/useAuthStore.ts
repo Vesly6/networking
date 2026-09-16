@@ -96,6 +96,15 @@ export interface AuthUser {
    * banner. Only GET /api/auth/me populates this, same "missing means
    * false" convention as `impersonating`. */
   platformActing?: boolean;
+  /** Global kill switch for the old LinkedIn Automation feature (see
+   * server/src/index.ts's LINKEDIN_AUTOMATION_ENABLED doc comment) —
+   * App.tsx force-excludes the 'linkedin' tab from allowedTabs whenever
+   * this is falsy, regardless of company.enabledFeatures/visibleTabs.
+   * Missing (login/register responses omit it) means disabled, same
+   * "missing means false" convention as platformActing above — this
+   * feature being off is the correct default even before the first
+   * GET /api/auth/me call resolves. */
+  linkedinAutomationEnabled?: boolean;
 }
 
 interface AuthState {

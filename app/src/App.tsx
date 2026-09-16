@@ -14,6 +14,7 @@ import { WorkspaceView } from './components/Workspace/WorkspaceView';
 import { CallsView } from './components/Calls/CallsView';
 import { SearchView } from './components/Search/SearchView';
 import { LinkedInView } from './components/LinkedIn/LinkedInView';
+import { LinkedInPlannerView } from './components/LinkedInPlanner/LinkedInPlannerView';
 import { InstantlyView } from './components/Instantly/InstantlyView';
 import { EmailGeneratorView } from './components/Email/EmailGeneratorView';
 import { LessonsView } from './components/Lessons/LessonsView';
@@ -44,7 +45,7 @@ import { isOverdue, isDueToday } from './utils/date';
 import { ArrowLeft, Clock, Bell, BellOff, Menu } from 'lucide-react';
 import './App.css';
 
-type Tab = 'table' | 'calendar' | 'calls' | 'search' | 'linkedin' | 'instantly' | 'email' | 'lessons';
+type Tab = 'table' | 'calendar' | 'calls' | 'search' | 'linkedin' | 'linkedin_planner' | 'instantly' | 'email' | 'lessons';
 // 'workers' (managing the company's own worker accounts) and
 // 'integrations' ("API raktai", the self-service API-credentials screen)
 // both used to be extra values this Tab-like `tab` state could take,
@@ -220,6 +221,13 @@ function App() {
   // never rendered from, since that gate already bailed out first.
   const allowedTabs = useMemo(() => {
     const companyTabs = new Set(user?.company?.enabledFeatures ?? []);
+    // Global kill switch (server/src/index.ts's LINKEDIN_AUTOMATION_ENABLED
+    // doc comment) — force-excluded here regardless of this company's own
+    // enabledFeatures/visibleTabs, so there's no menu entry, button, or
+    // settings reachable for it under any company configuration. Missing
+    // (a stale cached user, or before the first /api/auth/me resolves)
+    // means disabled, same convention as the field itself.
+    if (!user?.linkedinAutomationEnabled) companyTabs.delete('linkedin');
     // A super_admin impersonating a worker (user.impersonating set — see
     // useAuthStore.ts) keeps role === 'super_admin' throughout (full admin
     // rights while impersonating, by design), so this condition has to
@@ -759,6 +767,37 @@ function App() {
                   LinkedIn
                 </button>
               )}
+              {/* A fresh, distinctly-named tab — deliberately NOT reusing
+                  the 'linkedin' slot above (which stays hidden behind the
+                  server's own kill switch regardless of enabledFeatures),
+                  so there's no confusion between the retired automation
+                  and this manual planner. Gated purely by allowedTabs
+                  (company Funkcijos + this worker's own "Matomos skiltys"
+                  chip — linkedin_planner is one of the ALWAYS_ON_FEATURES,
+                  so no company needs a separate toggle, but an individual
+                  worker's chip can still be unchecked) — on explicit
+                  request, dropping the separate linkedin_planner.view
+                  permission checkbox from "Leidimai" once it turned out to
+                  control the exact same visible effect as this chip, which
+                  read as two redundant on/off switches for one thing. The
+                  permission key itself still exists and is still what the
+                  server's own routes actually enforce (see index.ts's
+                  requirePermission2 calls) — DEFAULT_WORKER_PERMISSION_KEYS
+                  (utils/permissions.ts) keeps granting it automatically
+                  alongside this same tab default, just with no separate
+                  UI toggle to manage. */}
+              {allowedTabs.has('linkedin_planner') && (
+                <button
+                  type="button"
+                  className={tab === 'linkedin_planner' ? 'active' : ''}
+                  onClick={() => {
+                    setTab('linkedin_planner');
+                    setMobileNavOpen(false);
+                  }}
+                >
+                  LinkedIn planuoklis
+                </button>
+              )}
               {allowedTabs.has('instantly') && (
                 <button
                   type="button"
@@ -839,6 +878,11 @@ function App() {
             {allowedTabs.has('linkedin') && (
               <div className={`tab-panel ${tab === 'linkedin' ? 'tab-panel-active' : ''}`}>
                 <LinkedInView />
+              </div>
+            )}
+            {allowedTabs.has('linkedin_planner') && (
+              <div className={`tab-panel ${tab === 'linkedin_planner' ? 'tab-panel-active' : ''}`}>
+                <LinkedInPlannerView onJumpToRow={jumpToTableRow} onJumpToContact={jumpToTableContact} />
               </div>
             )}
             {/* Same reasoning as Search/LinkedIn above — not scoped to the

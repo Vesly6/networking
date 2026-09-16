@@ -3203,6 +3203,32 @@ tr.row-drop-end td {
 .cell-hover-contact-sent-hot {
   color: #c9ef30;
 }
+/* LinkedIn Planner status badge — passive, same Send/paper-plane icon
+   family as the sentCount badge above, just LinkedIn blue instead of
+   accent. Deliberately not the real LinkedIn logo (which the social-icon
+   row right above already shows) and deliberately a different icon shape
+   than the confirm button below — two visually identical "LinkedIn
+   badges" in one card read as redundant clutter. */
+.cell-hover-contact-sent-linkedin {
+  color: #0a66c2;
+}
+/* The LinkedIn social icon's own "confirm sent" button — same
+   cell-hover-contact-sent pill shape as the other action badges, LinkedIn
+   blue to match. Unlike its siblings this one is a real button, not a
+   passive count, so it also needs its own hover/disabled treatment. */
+.cell-hover-contact-linkedin-confirm {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: #0a66c2;
+}
+.cell-hover-contact-linkedin-confirm:hover:not(:disabled) {
+  opacity: 0.75;
+}
+.cell-hover-contact-linkedin-confirm:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
 .cell-hover-contact-sent-badge {
   display: inline-block;
   margin-left: 0.15em;
@@ -4219,6 +4245,12 @@ tr.row-drop-end td {
   gap: 1rem;
   padding: 1rem 1.25rem;
   overflow: auto;
+}
+
+.calls-scope-hint {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin: 0;
 }
 
 .calls-toolbar {
@@ -9057,4 +9089,149 @@ tr.row-drop-end td {
 }
 .news-card-seen:hover {
   opacity: 0.85;
+}
+
+/* LinkedIn Planner — a manual task queue, deliberately styled plainly
+   (no risk/urgency cues, no send-button styling) to match what it
+   actually is: a checklist, not a dashboard for an automated system. */
+.linkedin-planner-view {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+  overflow: auto;
+  width: 100%;
+}
+.linkedin-planner-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.linkedin-planner-counter {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.linkedin-planner-counter-limit {
+  color: var(--danger, #d4380d);
+  font-weight: 600;
+}
+.linkedin-planner-limit-warning {
+  color: var(--danger, #d4380d);
+}
+.linkedin-planner-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.linkedin-planner-table-filter select {
+  max-width: 320px;
+}
+.linkedin-planner-worker-filter select {
+  max-width: 320px;
+}
+.planner-task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.planner-task-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.6rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.planner-task-row-opened {
+  border-color: var(--accent);
+}
+.planner-task-info {
+  flex: 1;
+  min-width: 0;
+}
+.planner-task-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.planner-task-meta {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+.planner-task-source-table {
+  display: inline-block;
+  margin-top: 0.2rem;
+  font-size: 0.72rem;
+  color: var(--accent);
+  background: var(--bg-hover);
+  border-radius: 4px;
+  padding: 0.05em 0.5em;
+}
+.planner-task-not-confirmed-badge {
+  display: inline-block;
+  margin-top: 0.2rem;
+  margin-left: 0.4rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--danger, #d4380d);
+  background: color-mix(in srgb, var(--danger, #d4380d) 12%, transparent);
+  border-radius: 4px;
+  padding: 0.05em 0.5em;
+  cursor: default;
+}
+/* Who (across every worker, not just the viewer) has already sent this
+   person a connect request — LinkedIn blue, same brand color as the
+   contact-card's own equivalent badge (cell-hover-contact-sent-linkedin). */
+.planner-task-senders {
+  display: inline-block;
+  margin-top: 0.2rem;
+  margin-left: 0.4rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #0a66c2;
+  background: rgba(10, 102, 194, 0.12);
+  border-radius: 4px;
+  padding: 0.05em 0.5em;
+  cursor: default;
+}
+.planner-task-links {
+  display: flex;
+  flex-shrink: 0;
+  gap: 0.4rem;
+}
+.planner-open-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex-shrink: 0;
+  white-space: nowrap;
+  text-decoration: none;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.3em 0.6em;
+  font-size: 0.82rem;
+  background: none;
+  cursor: pointer;
+}
+.planner-open-link:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+/* The combined "opened it, sent the connect" action — a slightly
+   stronger visual weight than the plain "Peržiūrėti" link next to it,
+   since this one actually records something, not just a lookup. */
+.planner-send-connect-link {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.planner-task-actions {
+  flex-shrink: 0;
+}
+.planner-task-status-pill {
+  font-size: 0.8rem;
+  color: var(--text-muted);
 }

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useCallsStore } from '../../store/useCallsStore';
 import { useToastStore } from '../../store/useToastStore';
 import { useTableStore } from '../../store/useTableStore';
+import { useAuthStore } from '../../store/useAuthStore';
 import { phoneMatchKey } from '../../utils/phoneMatch';
 import { buildPhoneIndex } from '../../utils/rowPhoneIndex';
 import { CallRow } from './CallRow';
@@ -37,6 +38,14 @@ interface CallsViewProps {
 }
 
 export function CallsView({ onJumpToRow, onJumpToContact }: CallsViewProps) {
+  const user = useAuthStore((s) => s.user);
+  // Server-side scoping (GET /api/calls, see index.ts) — a real,
+  // non-impersonating super_admin sees the whole account's calls; anyone
+  // else (a worker, or an admin impersonating one) only ever sees calls
+  // on their own SIP extension. This is purely an explanatory label —
+  // the actual filtering already happened server-side by the time any
+  // data reaches this component.
+  const seesOwnCallsOnly = user?.role !== 'super_admin' || !!user?.impersonating;
   const calls = useCallsStore((s) => s.calls);
   const ready = useCallsStore((s) => s.ready);
   const error = useCallsStore((s) => s.error);
@@ -184,6 +193,7 @@ export function CallsView({ onJumpToRow, onJumpToContact }: CallsViewProps) {
 
   return (
     <div className="calls-view">
+      <p className="calls-scope-hint">{seesOwnCallsOnly ? 'Rodomi tik jūsų skambučiai.' : 'Rodomi visi įmonės skambučiai.'}</p>
       <div className="calls-mode-switch">
         <button type="button" className={view === 'list' ? 'active' : ''} onClick={() => setView('list')}>
           Skambučiai

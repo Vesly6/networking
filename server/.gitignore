@@ -14,4 +14,6 @@ instantly-webhook-log.sqlite
 instantly-webhook-log.sqlite-*
 import-history.sqlite
 import-history.sqlite-*
+linkedin-planner.sqlite
+linkedin-planner.sqlite-*
 *.tsbuildinfo

@@ -33,13 +33,16 @@ import { resolveApolloPhone } from '../../utils/apolloPhonePoll';
 import { normalizeDomain } from '../../utils/domainMatch';
 import { useToastStore } from '../../store/useToastStore';
 import { useAuthStore } from '../../store/useAuthStore';
+import { can } from '../../utils/permissions';
 import { usePendingPhoneSearchStore } from '../../store/usePendingPhoneSearchStore';
 import { confirmDialog } from '../../store/useConfirmStore';
 import { getAllTranscriptions, saveSmsLogEntry, getAllSmsLog } from '../../db/db';
 import { ApolloContactSearchModal } from './ApolloContactSearchModal';
 import { SocialLookupModal } from './SocialLookupModal';
+import { HoverTooltip } from '../HoverTooltip';
 import { Popover } from '../Popover';
-import { Copy, Check, Square, Hourglass, Mic, Bot, ChevronDown, Search, ListFilter, Save, X, Mail, Phone, PenLine, Send, History } from 'lucide-react';
+import { sendPlannerTask, type PlannerTaskSender } from '../../utils/linkedinPlannerApi';
+import { Copy, Check, Square, Hourglass, Mic, Bot, ChevronDown, Search, ListFilter, Save, X, Mail, Phone, PenLine, Send, History, BadgeCheck } from 'lucide-react';
 
 interface CellHoverEditorProps {
   anchor: HTMLElement;
@@ -81,6 +84,21 @@ interface CellHoverEditorProps {
    * words — on explicit request, so a status transition is visible at a
    * glance in the note history, not just as a resulting plain-text word. */
   statusOptionColors?: Record<string, string>;
+  /** LinkedIn Planner send state per contact id (TableView.tsx fetches
+   * this fresh whenever a contact-mode cell opens — see its own doc
+   * comment on why this isn't a bulk join on every table render). Missing
+   * entry means "no LinkedIn outreach task exists for this contact" — not
+   * "loading," so neither the badge nor the confirm button render rather
+   * than showing a placeholder. `senders` can be empty (a task exists but
+   * nobody has personally sent yet) — see PlannerTaskSender's own doc
+   * comment on why sending is tracked per worker, not as one shared flag. */
+  linkedinTaskStatuses?: Record<string, { taskId: string; notConfirmedCount: number; senders: PlannerTaskSender[] }>;
+  /** Fired after the LinkedIn social icon's own "confirm sent" button
+   * (see renderSocialIcon below) successfully marks a task 'sent' — lets
+   * TableView update its own linkedinTaskStatuses map without a second
+   * round trip, so the badge/button both reflect the new status
+   * immediately. */
+  onLinkedinConfirmed?: (contactId: string) => void;
   onAddNoteEntry: (text: string) => void;
   onUpdateNoteEntry: (id: string, text: string) => void;
   onRemoveNoteEntry: (id: string) => void;
@@ -222,6 +240,15 @@ function buildSendersBadgeTooltip(c: ContactEntry): string {
   const lines = (c.senders ?? []).map((s) => (s.date ? `${s.email} (${s.date})` : s.email));
   return ['Išsiuntėm Jam/Jai laišką iš:', ...lines].join('\n');
 }
+/** The LinkedIn Planner badge, a fourth independent badge alongside the
+ * three above — shown only once at least one worker has actually sent a
+ * connect request to this contact (see linkedinTaskStatuses's own doc
+ * comment on CellHoverEditorProps). Numbered list, on explicit request,
+ * so several senders stay individually readable rather than running
+ * together on one line — same reasoning as buildSendersBadgeTooltip above. */
+function buildLinkedinBadgeTooltip(senders: PlannerTaskSender[]): string {
+  return ['Išsiuntė:', ...senders.map((s, i) => `${i + 1}. ${s.workerName}`)].join('\n');
+}
 
 /** Portaled hover tooltip for the sent/replied badge — a plain `title`
  * attribute and even a nested position:absolute + CSS :hover element
@@ -235,41 +262,10 @@ function buildSendersBadgeTooltip(c: ContactEntry): string {
  * position:absolute). Same fix as every other popover in this app
  * (Popover.tsx's own doc comment): render into document.body via a
  * portal, positioned from the anchor's live getBoundingClientRect() and
- * clamped to the viewport, so no ancestor's overflow can clip it. */
-function SentBadgeTooltip({ anchor, text }: { anchor: HTMLElement; text: string }) {
-  const ref = useRef<HTMLDivElement>(null);
-  // A real, reported bug: the initial style here used to omit
-  // `position: 'fixed'`, so the very first render (before the
-  // useLayoutEffect below ever runs) painted this div as a normal
-  // block-level element appended to document.body — full document
-  // width, not shrink-wrapped to its own text. That's the exact
-  // `offsetWidth`/`offsetHeight` the effect then measured and centered
-  // the tooltip against, landing it wildly off-position ("shows very far
-  // away") — not a race, a genuinely wrong measurement, since the effect
-  // never re-runs once `anchor`/`text` stop changing. Starting already
-  // `position: fixed` (off-screen, hidden) means the very first
-  // measurement is already the real shrink-to-fit size.
-  const [style, setStyle] = useState<CSSProperties>({ position: 'fixed', top: -9999, left: -9999, visibility: 'hidden' });
-
-  useLayoutEffect(() => {
-    if (!anchor.isConnected) return;
-    const rect = anchor.getBoundingClientRect();
-    const width = ref.current?.offsetWidth ?? 0;
-    const height = ref.current?.offsetHeight ?? 0;
-    let left = rect.left + rect.width / 2 - width / 2;
-    left = Math.max(8, Math.min(left, window.innerWidth - width - 8));
-    let top = rect.top - height - 6;
-    if (top < 8) top = rect.bottom + 6; // flip below when there's no room above
-    setStyle({ position: 'fixed', top, left, visibility: 'visible' });
-  }, [anchor, text]);
-
-  return createPortal(
-    <div ref={ref} className="cell-hover-contact-sent-tooltip" style={style}>
-      {text}
-    </div>,
-    document.body,
-  );
-}
+ * clamped to the viewport, so no ancestor's overflow can clip it. Now
+ * lives in its own file (components/HoverTooltip.tsx) since
+ * LinkedInPlannerView.tsx's own badges needed the identical instant-show
+ * behavior — see that file's own doc comment. */
 
 function parseTaggedEntry(text: string, statusOptionColors?: Record<string, string>): TaggedEntry | null {
   // Checked first, ahead of the fixed NOTE_TAG_COLORS below — a status-
@@ -357,6 +353,8 @@ export function CellHoverEditor({
   highlightEntryId,
   contactsRaw,
   statusOptionColors,
+  linkedinTaskStatuses,
+  onLinkedinConfirmed,
   onAddNoteEntry,
   onUpdateNoteEntry,
   onRemoveNoteEntry,
@@ -376,6 +374,7 @@ export function CellHoverEditor({
   const canDeleteNotes = currentUser?.role !== 'worker' || currentUser.permissions.canDeleteNotes;
   const canEditContacts = currentUser?.role !== 'worker' || currentUser.permissions.canEditContacts;
   const canDeleteContacts = currentUser?.role !== 'worker' || currentUser.permissions.canDeleteContacts;
+  const canExecuteLinkedinPlanner = can(currentUser?.permissionKeys, 'linkedin_planner.execute');
   const [pos, setPos] = useState<{ top: number; left: number; width: number; maxHeight: number } | null>(null);
   const [newEntryDraft, setNewEntryDraft] = useState('');
   const [contactDraft, setContactDraft] = useState('');
@@ -565,6 +564,10 @@ export function CellHoverEditor({
   // that survives this popup being closed and reopened mid-poll.
   const [findingEmailIds, setFindingEmailIds] = useState<Set<string>>(new Set());
   const pendingPhoneContactIds = usePendingPhoneSearchStore((s) => s.pendingContactIds);
+  // Same single-synchronous-round-trip reasoning as findingEmailIds above
+  // — the LinkedIn social icon's own "confirm sent" button (see
+  // renderSocialIcon below).
+  const [confirmingLinkedinIds, setConfirmingLinkedinIds] = useState<Set<string>>(new Set());
 
   useLayoutEffect(() => {
     const place = () => {
@@ -1027,6 +1030,33 @@ export function CellHoverEditor({
       showToast(err instanceof Error ? err.message : 'Nepavyko ieškoti el. pašto');
     } finally {
       setFindingEmailIds((prev) => {
+        const next = new Set(prev);
+        next.delete(c.id);
+        return next;
+      });
+    }
+  };
+
+  // The LinkedIn social icon's own "confirm sent" button — a shortcut for
+  // exactly the LinkedIn Planner's own "Kvietimas išsiųstas" action, so a
+  // worker who's already here reviewing a contact doesn't need to
+  // separately go find this same person in the planner tab. Records THIS
+  // worker's own send (see PlannerTaskSender's own doc comment — sending
+  // is per-worker, not a single shared flag) through the identical server
+  // route, so the same auto-logged "LinkedIn užklausa {name}" note fires
+  // either way — see index.ts's logPlannerSentNote.
+  const handleConfirmLinkedinSent = async (c: ContactEntry) => {
+    const entry = linkedinTaskStatuses?.[c.id];
+    const alreadySentByMe = entry?.senders.some((s) => s.workerId === currentUser?.id);
+    if (!entry || alreadySentByMe || confirmingLinkedinIds.has(c.id)) return;
+    setConfirmingLinkedinIds((prev) => new Set(prev).add(c.id));
+    try {
+      await sendPlannerTask(entry.taskId);
+      onLinkedinConfirmed?.(c.id);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Nepavyko pažymėti kaip išsiųsto');
+    } finally {
+      setConfirmingLinkedinIds((prev) => {
         const next = new Set(prev);
         next.delete(c.id);
         return next;
@@ -1710,6 +1740,26 @@ export function CellHoverEditor({
                     const phoneSmsCount = phone
                       ? allSmsHistory.filter((r) => phoneMatchKey(r.phone) === phoneMatchKey(phone)).length
                       : 0;
+                    // The passive LinkedIn status badge (below) only ever
+                    // shows once at least one worker has actually sent a
+                    // connect request — on explicit request, so a task
+                    // that merely EXISTS with nobody having sent yet
+                    // doesn't show a badge at all by default. It's visible
+                    // to EVERY viewer once that's true, not just the ones
+                    // who sent themselves — this worker seeing "Išsiuntė:
+                    // 1. Someone else" is the whole point (visibility into
+                    // what other workers on this table already did), and
+                    // isn't mutually exclusive with the confirm button:
+                    // that one only depends on whether THIS viewer
+                    // specifically has sent, independently (see
+                    // handleConfirmLinkedinSent's own alreadySentByMe).
+                    const linkedinSenders = linkedinTaskStatuses?.[c.id]?.senders.length ? linkedinTaskStatuses[c.id] : undefined;
+                    // Gates the confirm button below — independent of
+                    // linkedinSenders above, since that one shows/hides
+                    // based on whether ANYONE has sent, not this specific
+                    // viewer (see handleConfirmLinkedinSent's own doc
+                    // comment for the same check used on click).
+                    const linkedinAlreadySentByMe = linkedinTaskStatuses?.[c.id]?.senders.some((s) => s.workerId === currentUser?.id);
                     return (
                       <div
                         key={c.id}
@@ -1846,6 +1896,32 @@ export function CellHoverEditor({
                                 {showSocialRow && (
                                   <div className="cell-hover-contact-social-links">
                                     {renderSocialIcon('linkedin', linkedinField)}
+                                    {linkedinField && canExecuteLinkedinPlanner && linkedinTaskStatuses?.[c.id] && !linkedinAlreadySentByMe && (
+                                      // The actual clickable action: one
+                                      // click marks this exact contact's
+                                      // planner task 'sent', without
+                                      // leaving this popup to go do it from
+                                      // the LinkedIn Planner tab. A
+                                      // BadgeCheck ("confirm") icon,
+                                      // deliberately NOT the same Send/
+                                      // paper-plane icon as the passive
+                                      // status badge below (cell-hover-
+                                      // contact-sent-linkedin) — two visually
+                                      // identical LinkedIn badges in the
+                                      // same card read as redundant/
+                                      // confusing, so this one and that one
+                                      // use two different icon shapes even
+                                      // though both stay LinkedIn-blue.
+                                      <button
+                                        type="button"
+                                        className="cell-hover-contact-sent cell-hover-contact-linkedin-confirm"
+                                        title="Pažymėti: LinkedIn kvietimas išsiųstas"
+                                        disabled={confirmingLinkedinIds.has(c.id)}
+                                        onClick={() => void handleConfirmLinkedinSent(c)}
+                                      >
+                                        <BadgeCheck className="icon" size={14} />
+                                      </button>
+                                    )}
                                     {renderSocialIcon('instagram', instagramField, c.socialLookup?.instagramNotFound)}
                                     {renderSocialIcon('facebook', facebookField, c.socialLookup?.facebookNotFound)}
                                   </div>
@@ -1926,7 +2002,7 @@ export function CellHoverEditor({
                                     </button>
                                   )}
                                 </div>
-                                {(!!c.sentCount || !!c.repliedCount || !!c.senders?.length) && (
+                                {(!!c.sentCount || !!c.repliedCount || !!c.senders?.length || !!linkedinSenders) && (
                                   <div className="cell-hover-contact-badges">
                                     {/* Three independent badges, not one badge that swaps
                                         color/number — on explicit request, so all three
@@ -1945,7 +2021,7 @@ export function CellHoverEditor({
                                     {/* No `title` attribute here — a native title tooltip
                                         over a 14px icon was already tried and rejected (see
                                         this section's own doc comment above) in favor of the
-                                        portaled SentBadgeTooltip below, and adding one back
+                                        portaled HoverTooltip below, and adding one back
                                         just shows a second, unstyled browser tooltip on a
                                         long hover, with its own shorter/stale wording. */}
                                     {!!c.sentCount && (
@@ -1976,6 +2052,31 @@ export function CellHoverEditor({
                                       >
                                         <Mail className="icon" size={14} />
                                         <span className="cell-hover-contact-sent-badge">{c.senders.length}</span>
+                                      </span>
+                                    )}
+                                    {!!linkedinSenders && (
+                                      // Passive status indicator only, and
+                                      // only once at least one worker has
+                                      // actually sent — visible to every
+                                      // viewer regardless of whether THEY
+                                      // personally sent (see its own
+                                      // computation above); same
+                                      // Send/paper-plane icon family as the
+                                      // sentCount badge above (just LinkedIn
+                                      // blue instead of accent) rather than
+                                      // the real LinkedIn logo, since the
+                                      // social-icon row's own LinkedIn logo
+                                      // right above already covers that. The
+                                      // count badge is how many workers have
+                                      // sent, same convention as the
+                                      // senders/repliedCount badges.
+                                      <span
+                                        className="cell-hover-contact-sent cell-hover-contact-sent-linkedin"
+                                        onMouseEnter={(e) => setSentTooltip({ anchor: e.currentTarget, text: buildLinkedinBadgeTooltip(linkedinSenders.senders) })}
+                                        onMouseLeave={() => setSentTooltip(null)}
+                                      >
+                                        <Send className="icon" size={14} />
+                                        <span className="cell-hover-contact-sent-badge">{linkedinSenders.senders.length}</span>
                                       </span>
                                     )}
                                   </div>
@@ -2067,7 +2168,7 @@ export function CellHoverEditor({
           onClose={() => setApolloModalOpen(false)}
         />
       )}
-      {sentTooltip && <SentBadgeTooltip anchor={sentTooltip.anchor} text={sentTooltip.text} />}
+      {sentTooltip && <HoverTooltip anchor={sentTooltip.anchor} text={sentTooltip.text} />}
     </>
   );
 }

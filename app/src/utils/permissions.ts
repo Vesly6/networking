@@ -29,6 +29,13 @@ export const PERMISSIONS = {
   // feature is built around one single shared LinkedIn/Chrome session for
   // the whole deployment, not one per company.
   'integrations.linkedin.use': 'Naudoti LinkedIn automatizaciją',
+  // LinkedIn Planner — the manual (non-automated) replacement, a
+  // completely separate permission family from the retired key above.
+  'linkedin_planner.view': 'Matyti LinkedIn planuoklį',
+  'linkedin_planner.execute': 'Keisti savo LinkedIn planuoklio užduočių statusą',
+  'linkedin_planner.view_all': 'Matyti visos įmonės LinkedIn planuoklį',
+  'linkedin_planner.assign': 'Priskirti LinkedIn planuoklio užduotis',
+  'linkedin_planner.templates.edit': 'Redaguoti LinkedIn žinučių šablonus',
   'api_keys.view': 'Matyti API raktus',
   'api_keys.edit': 'Redaguoti API raktus',
   'api_keys.set_mode': 'Keisti Shared/Individual režimą',
@@ -57,6 +64,16 @@ export const PERMISSION_GROUPS: { title: string; keys: PermissionKey[] }[] = [
   { title: 'Kontaktai ir komentarai', keys: ['contacts.edit', 'contacts.delete', 'notes.delete_edit'] },
   {
     title: 'Integracijos',
+    // 'integrations.linkedin.use' (the old, retired browser-automation
+    // feature) deliberately has no entry here right now, on explicit
+    // request — same "not appear anywhere" treatment as the 'linkedin' tab
+    // itself (see tabLabels.ts's own doc comment on why that has no
+    // TAB_LABELS entry). The key itself still exists in the registry
+    // (server/src/permissions/registry.ts) and is functionally inert
+    // either way (LINKEDIN_AUTOMATION_ENABLED 404s the routes regardless
+    // of any grant) — this only hides the checkbox from this list. Re-add
+    // the line (`'integrations.linkedin.use',`) if this feature ever
+    // comes back.
     keys: [
       'integrations.apollo.use',
       'integrations.zadarma.use',
@@ -65,13 +82,38 @@ export const PERMISSION_GROUPS: { title: string; keys: PermissionKey[] }[] = [
       'integrations.openai.use',
       'integrations.anthropic.use',
       'integrations.elevenlabs.use',
-      'integrations.linkedin.use',
     ],
+  },
+  {
+    title: 'LinkedIn planuoklis',
+    // 'linkedin_planner.view' deliberately has no checkbox here, on
+    // explicit request — it turned out to control the exact same visible
+    // effect as the "LinkedIn planuoklis" chip in "Matomos skiltys"
+    // (allowedTabs, App.tsx), so having both was two redundant on/off
+    // switches for one thing. The key itself is still real and still what
+    // the server's own routes actually enforce (index.ts's
+    // requirePermission2 calls) — DEFAULT_WORKER_PERMISSION_KEYS below
+    // still grants it automatically for a brand-new worker, alongside the
+    // matching tab default (tabLabels.ts's DEFAULT_WORKER_TABS), just with
+    // no separate UI toggle to manage.
+    keys: ['linkedin_planner.execute', 'linkedin_planner.view_all', 'linkedin_planner.assign', 'linkedin_planner.templates.edit'],
   },
   { title: 'API raktai', keys: ['api_keys.view', 'api_keys.edit', 'api_keys.set_mode'] },
   { title: 'Administravimas', keys: ['workers.manage', 'tables.manage', 'backups.manage'] },
   { title: 'Eksportas', keys: ['export.execute', 'export.contacts'] },
 ];
+
+/** Pre-checked on a brand-new worker's create form (WorkersView.tsx) —
+ * same "start with a sane baseline" reasoning as tabLabels.ts's own
+ * DEFAULT_WORKER_TABS (table+calendar), on explicit request: the LinkedIn
+ * Planner nav item is gated purely by linkedin_planner.view (see App.tsx's
+ * own doc comment — deliberately not part of the visibleTabs/companyTabs
+ * chip system DEFAULT_WORKER_TABS covers), so without a form default here
+ * a brand-new worker would need the admin to remember to check it by hand
+ * every single time. Still just a form default, not a hardcoded grant —
+ * the admin can uncheck either box before creating, and it never touches
+ * an already-existing worker's own grants. */
+export const DEFAULT_WORKER_PERMISSION_KEYS: PermissionKey[] = ['linkedin_planner.view', 'linkedin_planner.execute'];
 
 /** `permissionKeys` is undefined for a not-yet-loaded user (App.tsx's
  * !user guard already keeps most of the app from rendering before then) —

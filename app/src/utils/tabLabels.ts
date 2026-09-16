@@ -13,12 +13,21 @@
  * to turn them off for a specific company at all) — also never offered in
  * a worker's own visibleTabs picker, since a worker never manages other
  * workers or backups regardless. */
+// 'linkedin' (the old, retired browser-automation feature — see
+// server/src/index.ts's LINKEDIN_AUTOMATION_ENABLED doc comment)
+// deliberately has NO entry here right now, on explicit request: while
+// it's flag-disabled, it shouldn't appear as an option ANYWHERE an admin
+// configures features — not just hidden from a worker's own nav (App.tsx's
+// allowedTabs already force-excludes it there independently), but absent
+// from AdminView's Funkcijos checkbox list (which iterates ALL_TABS below)
+// and workerGrantableTabs' own chip list (see its exclusion there) too.
+// Re-add the line (`linkedin: 'LinkedIn'`) if this feature ever comes back.
 export const TAB_LABELS: Record<string, string> = {
   table: 'Lentelė',
   calendar: 'Kalendorius',
   calls: 'Skambučiai',
   search: 'Paieška',
-  linkedin: 'LinkedIn',
+  linkedin_planner: 'LinkedIn planuoklis',
   instantly: 'Paštas',
   email: 'DI',
   lessons: 'Pamokos',
@@ -41,18 +50,30 @@ export const ALL_TABS = Object.keys(TAB_LABELS);
  * every entry of whatever companyTabs list it's given with no further
  * filtering, so both call sites (App.tsx, AdminView.tsx) route their own
  * company's enabledFeatures through this before handing it to
- * <WorkersView>, rather than duplicating the exclusion at each site. */
+ * <WorkersView>, rather than duplicating the exclusion at each site.
+ * `linkedin` is excluded here too, temporarily — a real company's stored
+ * enabledFeatures can still literally contain "linkedin" from before it
+ * was retired (see TAB_LABELS' own doc comment on why it has no entry
+ * anymore), and without this filter that raw string would still render as
+ * a chip here, just with an ugly unlabeled fallback instead of a proper
+ * name. Remove this exclusion in the same pass as re-adding the
+ * TAB_LABELS entry, if this feature ever comes back. */
 export function workerGrantableTabs(companyTabs: string[]): string[] {
-  return companyTabs.filter((t) => t !== 'workers' && t !== 'backups' && t !== 'integrations');
+  return companyTabs.filter((t) => t !== 'workers' && t !== 'backups' && t !== 'integrations' && t !== 'linkedin');
 }
 
-/** Mirrors server/src/accounts/db.ts's ALWAYS_ON_FEATURES exactly — Table
- * and Calendar are the one baseline every worker should start with, same
- * as a company itself can never have them disabled. Used to pre-check
- * those two chips on a brand-new worker's "Matomos skiltys" picker
- * (WorkersView.tsx) — a real, reported bug had a freshly-created worker
- * start with NO tabs at all (Calendar included) because the create form
- * began from an empty selection and the server defaulted a missing array
- * to `[]`, not this. Filtered against the actual company tabs before use,
- * same as any other chip, in case a table somehow isn't in the list. */
-export const DEFAULT_WORKER_TABS = ['table', 'calendar'];
+/** Mirrors server/src/accounts/db.ts's ALWAYS_ON_FEATURES exactly — Table,
+ * Calendar, and (on explicit request) LinkedIn planuoklis are the
+ * baseline every worker should start with, same as a company itself can
+ * never have them disabled. Used to pre-check those chips on a brand-new
+ * worker's "Matomos skiltys" picker (WorkersView.tsx) — a real, reported
+ * bug had a freshly-created worker start with NO tabs at all (Calendar
+ * included) because the create form began from an empty selection and the
+ * server defaulted a missing array to `[]`, not this. Filtered against the
+ * actual company tabs before use, same as any other chip, in case a table
+ * somehow isn't in the list. This is the TAB-visibility half of "on by
+ * default" for LinkedIn planuoklis — the other half, its actual data
+ * access, is still separately gated by the linkedin_planner.view/.execute
+ * PERMISSION keys (see utils/permissions.ts's own
+ * DEFAULT_WORKER_PERMISSION_KEYS), which this list doesn't touch. */
+export const DEFAULT_WORKER_TABS = ['table', 'calendar', 'linkedin_planner'];

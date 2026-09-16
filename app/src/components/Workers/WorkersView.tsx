@@ -6,7 +6,7 @@ import { useToastStore } from '../../store/useToastStore';
 import { typeToConfirmDialog } from '../../store/useTypeToConfirmStore';
 import { formatHistoryTimestamp } from '../../utils/date';
 import { TAB_LABELS, DEFAULT_WORKER_TABS } from '../../utils/tabLabels';
-import { ALL_PERMISSION_KEYS, PERMISSION_GROUPS, PERMISSIONS, type PermissionKey } from '../../utils/permissions';
+import { ALL_PERMISSION_KEYS, DEFAULT_WORKER_PERMISSION_KEYS, PERMISSION_GROUPS, PERMISSIONS, type PermissionKey } from '../../utils/permissions';
 import { ArrowRight, Key, UserCog } from 'lucide-react';
 
 const PERMISSION_LABELS: Array<{ key: keyof UserPermissions; label: string }> = [
@@ -575,6 +575,7 @@ export function WorkersView({ onJumpToRow, onJumpToContact, companyTabs, company
             companyTabs={companyTabs}
             initialTabs={DEFAULT_WORKER_TABS.filter((t) => companyTabs.includes(t))}
             initialPermissions={EMPTY_PERMISSIONS}
+            initialPermissionKeys={DEFAULT_WORKER_PERMISSION_KEYS.filter((k) => actingPermissionKeys.includes(k))}
             actingPermissionKeys={actingPermissionKeys}
             submitLabel="Sukurti"
             onSubmit={handleCreate}

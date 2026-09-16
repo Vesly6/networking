@@ -44,9 +44,14 @@ import {
 } from 'lucide-react';
 
 // Mirrors server/src/accounts/db.ts's ALWAYS_ON_FEATURES exactly — these
-// two can never be turned off, so the Funkcijos checkbox list omits them
-// entirely rather than showing a disabled/always-checked box.
-const CORE_FEATURES = new Set(['table', 'calendar']);
+// can never be turned off at the company level, so the Funkcijos checkbox
+// list omits them entirely rather than showing a disabled/always-checked
+// box. linkedin_planner joined this list on explicit request — its
+// per-worker visibility is still independently controllable via each
+// worker's own "Matomos skiltys" chip (WorkersView), this only means no
+// company needs a separate Funkcijos toggle just to make it available at
+// all.
+const CORE_FEATURES = new Set(['table', 'calendar', 'linkedin_planner']);
 
 const ROLE_LABELS: Record<string, string> = { super_admin: 'Administratorius', worker: 'Darbuotojas' };
 

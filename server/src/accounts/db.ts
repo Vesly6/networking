@@ -725,14 +725,21 @@ export function clearCompanyIntegrationField(companyId: string, field: Clearable
   return getCompanyIntegrations(companyId)!;
 }
 
-/** The only two tabs that can never be turned off — the core CRM itself.
- * Everything else (including 'lessons', which used to be hardcoded
- * always-on here too) is now a real, owner-toggleable per-company feature
- * — see updateCompanyFeatures above and index.ts's companyWithFeatures,
- * which merges this constant into whatever the company's own
- * enabledFeatures list holds so an owner can never accidentally lock a
- * company out of the app entirely by leaving both unchecked. */
-export const ALWAYS_ON_FEATURES = ['table', 'calendar'];
+/** The tabs that can never be turned off at the company level — the core
+ * CRM itself, plus (on explicit request) LinkedIn planuoklis, treated the
+ * same way so no company ever needs a separate Funkcijos toggle just to
+ * get it. Everything else (including 'lessons', which used to be
+ * hardcoded always-on here too) is now a real, owner-toggleable
+ * per-company feature — see updateCompanyFeatures above and index.ts's
+ * companyWithFeatures, which merges this constant into whatever the
+ * company's own enabledFeatures list holds so an owner can never
+ * accidentally lock a company out of the app entirely by leaving these
+ * unchecked. This is only the COMPANY-level floor, not a per-worker
+ * lock — an individual worker's own "Matomos skiltys" chips (WorkersView)
+ * can still be unchecked for any of these, same as any other tab; see
+ * app/src/utils/tabLabels.ts's DEFAULT_WORKER_TABS for the client-side
+ * mirror that pre-checks them on a brand-new worker only. */
+export const ALWAYS_ON_FEATURES = ['table', 'calendar', 'linkedin_planner'];
 // ---------------------------------------------------------------------
 
 export interface NewsTopic {

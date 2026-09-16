@@ -34,6 +34,21 @@ export const PERMISSIONS = {
   // Deliberately NOT part of DEFAULT_NEW_COMPANY_KEYS below, unlike every
   // other integration key — see that constant's own doc comment.
   'integrations.linkedin.use': 'Naudoti LinkedIn automatizaciją',
+  // LinkedIn Planner — the manual (non-automated) replacement for the key
+  // above. Deliberately its own, separate permission family: holding the
+  // old integrations.linkedin.use key means nothing here, and vice versa
+  // — one is a retired, flag-disabled automation, the other a plain task
+  // queue a human works by hand. `view`/`execute` are the everyday-worker
+  // pair (see/act on your own tasks); `view_all`/`assign` are admin-level
+  // oversight (see the whole company's queue, hand a task to someone
+  // else); `templates.edit` gates the shared message-template library
+  // separately, since editing a template a whole company sends from is a
+  // more sensitive action than just using one.
+  'linkedin_planner.view': 'Matyti LinkedIn planuoklį',
+  'linkedin_planner.execute': 'Keisti savo LinkedIn planuoklio užduočių statusą',
+  'linkedin_planner.view_all': 'Matyti visos įmonės LinkedIn planuoklį',
+  'linkedin_planner.assign': 'Priskirti LinkedIn planuoklio užduotis',
+  'linkedin_planner.templates.edit': 'Redaguoti LinkedIn žinučių šablonus',
   'api_keys.view': 'Matyti API raktus',
   'api_keys.edit': 'Redaguoti API raktus',
   'api_keys.set_mode': 'Keisti Shared/Individual režimą',

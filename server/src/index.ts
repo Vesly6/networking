@@ -230,6 +230,37 @@ import { runSchedulerTick, findStaleInvites, withdrawInvite } from './linkedin/s
 import { syncInbox } from './linkedin/inbox.js';
 import { getOrCreateTodaysVisitPlan, isWithinVisitWindow, nextVisitWindowStart } from './linkedin/visitSchedule.js';
 import { getAnalyticsSummary, getCampaignStepBreakdown, getDailyActivity } from './linkedin/analytics.js';
+import {
+  getTaskById,
+  getTasksForCompany,
+  claimTask,
+  reassignTask,
+  setTaskSchedule,
+  setTaskNote,
+  changeTaskStatus,
+  getTaskHistory,
+  countSentSince,
+  getTaskInfoForRow,
+  recordTaskSend,
+  removeTaskSend,
+  getSendersForTask,
+  getSendersForTasks,
+  getNotConfirmedForTask,
+  getNotConfirmedForTasks,
+  listTemplates,
+  createTemplate,
+  updateTemplate,
+  deleteTemplate,
+  deactivateOccurrencesForRow,
+  isBackfillDone,
+  markBackfillDone,
+  getOccurrenceTableIds,
+  type PlannerTask,
+  type PlannerTaskStatus,
+} from './linkedinPlanner/db.js';
+import { resolveTaskDisplay } from './linkedinPlanner/display.js';
+import { syncRowsAfterWrite, drainSyncQueueTick, enqueueAllRowsForBackfill } from './linkedinPlanner/sync.js';
+import { addNoteEntry as addPlannerNoteEntry, LINKEDIN_REQUEST_PREFIX } from './linkedinPlanner/noteLog.js';
 
 const PORT = Number(process.env.PORT) || 4000;
 // Binds 127.0.0.1 by default — deliberately not reachable from the local
@@ -246,6 +277,24 @@ const HOST = process.env.HOST || '127.0.0.1';
 const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(',').map((o) => o.trim())
   : ['http://localhost:5173', 'http://localhost:5174'];
+
+// Global kill switch for the LinkedIn Automation feature (real Playwright
+// browser automation sending connection requests/messages) — on explicit
+// decision, this is a LinkedIn ToS grey area not acceptable for real
+// client accounts. Same "AUTH_DISABLED"-style boolean-env-var idiom this
+// codebase already uses (server/src/auth.ts). Default (unset) is
+// DISABLED — deliberately the opposite default of every other env flag
+// here, since the point is that this feature stays off unless someone
+// deliberately opts back in. This is checked in exactly three places
+// (this constant's own call sites: requireLinkedInAccess below, the two
+// setInterval registrations near the bottom of this file, and the
+// GET /api/auth/me response the frontend reads at boot) so the whole
+// feature is provably inert with one flag, regardless of any individual
+// company's own `integrations.linkedin.use` permission grant — replacing
+// this feature with the LinkedIn Planner (see server/src/linkedinPlanner/)
+// is a product decision, not something a company admin can toggle back on
+// via the ordinary Funkcijos/permissions UI.
+const LINKEDIN_AUTOMATION_ENABLED = process.env.LINKEDIN_AUTOMATION_ENABLED === 'true';
 
 const app = express();
 app.use(cors({ origin: ALLOWED_ORIGINS }));
@@ -1469,7 +1518,7 @@ const VALID_FEATURES = new Set([
   'calendar',
   'calls',
   'search',
-  'linkedin',
+  'linkedin_planner',
   'instantly',
   'email',
   'lessons',
@@ -1796,6 +1845,12 @@ app.get(
       // doc comment).
       permissionKeys: [...effectivePermissions(user)],
       company: companyWithFeatures(user.companyId),
+      // See LINKEDIN_AUTOMATION_ENABLED's own doc comment — App.tsx's
+      // allowedTabs computation force-excludes the 'linkedin' tab when
+      // this is false, regardless of company.enabledFeatures, so the
+      // now-disabled automation has no menu entry/button/settings
+      // reachable from the UI under any company configuration.
+      linkedinAutomationEnabled: LINKEDIN_AUTOMATION_ENABLED,
       impersonating,
       // True only for a platform Super Super Admin diagnosing inside this
       // company (see auth.ts's issuePlatformImpersonationToken) — the
@@ -2302,7 +2357,7 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
 app.get(
   '/api/calls',
   asyncHandler(async (req, res) => {
-    const { start, end, sip, skip, limit } = req.query;
+    const { start, end, skip, limit } = req.query;
     if (typeof start !== 'string' || typeof end !== 'string' || !DATE_RE.test(start) || !DATE_RE.test(end)) {
       res.status(400).json({ error: 'start/end formatas turi būti „YYYY-MM-DD HH:MM:SS“' });
       return;
@@ -2313,11 +2368,43 @@ app.get(
       res.status(400).json({ error: 'Laikotarpis negali viršyti 31 dienos' });
       return;
     }
+    // Per-worker call visibility — on explicit request ("каждый работник
+    // видит свои звонки, супер админ видит все"). One Zadarma account
+    // (company-wide api key/secret, see requireZadarmaCreds) covers every
+    // worker's own SIP extension, so `/v1/statistics/pbx/` has always
+    // returned every extension's calls mixed together unless narrowed by
+    // its own `sip` param — this is what actually applies that narrowing
+    // now. A real, non-impersonating super_admin sees the whole account
+    // (same "full oversight" bypass tableAccessibleToRequest/the
+    // LinkedIn Planner's accessibleTableIdsForPlanner already use
+    // elsewhere in this file) and may still pass an explicit `?sip=` to
+    // inspect one specific extension; anyone else's own `sip` is always
+    // resolved server-side from their own account and NEVER taken from
+    // the request — a worker can't read another worker's calls by
+    // crafting a different `?sip=` value, the same "never trust a
+    // client-supplied scoping param" rule this app's other per-user data
+    // (table access, LinkedIn Planner tasks) already follows.
+    const isRealAdmin = req.auth!.role === 'super_admin' && !req.auth!.actingAs;
+    let sipFilter: string | undefined;
+    if (isRealAdmin) {
+      sipFilter = typeof req.query.sip === 'string' ? req.query.sip : undefined;
+    } else {
+      const user = effectiveUser(req);
+      sipFilter = user?.zadarmaSip || undefined;
+      // No SIP extension configured for this worker at all — there's no
+      // way to identify "their own" calls, and showing the whole
+      // account's calls instead would defeat the point of this filter
+      // entirely, so they see none rather than everyone else's.
+      if (!sipFilter) {
+        res.json({ stats: [] });
+        return;
+      }
+    }
     const result = await getStatistics(
       {
         start,
         end,
-        sip: typeof sip === 'string' ? sip : undefined,
+        sip: sipFilter,
         skip: typeof skip === 'string' ? Number(skip) : undefined,
         limit: typeof limit === 'string' ? Number(limit) : undefined,
       },
@@ -3473,6 +3560,15 @@ app.post(
 // still single-tenant. One line covers every route below since they all
 // share this one path prefix.
 function requireLinkedInAccess(req: Request, res: Response, next: NextFunction) {
+  // Checked FIRST, before the per-company permission grant below — see
+  // LINKEDIN_AUTOMATION_ENABLED's own doc comment. 404, not 403: this
+  // feature is meant to disappear entirely, not announce itself as
+  // "exists but you're not allowed," to anyone probing the API surface
+  // directly.
+  if (!LINKEDIN_AUTOMATION_ENABLED) {
+    res.status(404).json({ error: 'Not found' });
+    return;
+  }
   if (!integrationPermissionGranted(req, 'integrations.linkedin.use')) {
     res.status(403).json({ error: 'Neturite teisės naudoti LinkedIn automatizacijos' });
     return;
@@ -4092,6 +4188,524 @@ app.get(
   asyncHandler(async (req, res) => {
     const days = Number(req.query.days);
     res.json({ days: getDailyActivity(req.auth!.companyId, Number.isFinite(days) && days > 0 ? days : 30) });
+  }),
+);
+
+// --- LinkedIn Planner (server/src/linkedinPlanner/) — a manual task
+// queue and status tracker, replacing the disabled LinkedIn Automation
+// above. NO route here ever reaches linkedin.com, opens a browser, or
+// sends anything — every one of these just reads/writes plain rows in
+// linkedin-planner.sqlite. A human does the actual sending themselves, by
+// hand, in their own browser, and reports back what happened by picking
+// a status. This is deliberate and load-bearing, not an oversight to
+// "improve" later — see this module's own top-of-file doc comment.
+
+// Which tables' occurrences a requester's task list should be filtered
+// to — mirrors tableAccessibleToRequest's own real-admin bypass exactly
+// (a super_admin impersonating a worker sees what THAT worker would see,
+// same as every other per-table access check in this app), plus an
+// explicit linkedin_planner.view_all grant for a non-admin given company-
+// wide oversight. `null` means "every task in the company," matching
+// getTasksForCompany's own contract.
+function accessibleTableIdsForPlanner(req: Request): string[] | null {
+  if (req.auth!.role === 'super_admin' && !req.auth!.actingAs) return null;
+  const user = effectiveUser(req);
+  if (!user) return [];
+  if (effectivePermissions(user).has('linkedin_planner.view_all')) return null;
+  return loadTables(req.auth!.companyId, { isRealAdmin: false, ownerUserId: user.id }).map((t) => t.id);
+}
+
+const PLANNER_TASK_STATUSES: PlannerTaskStatus[] = [
+  'planned',
+  'sent',
+  'accepted',
+  'declined',
+  'no_response',
+  'replied',
+  'skipped',
+  'withdrawn',
+  'needs_review',
+  'removed',
+];
+
+const PLANNER_PAGE_SIZE = 100;
+
+// LinkedInPlannerView.tsx's "Žiūrėti kaip darbuotoją" filter's third
+// option — "Visi" (everyone), on explicit request, alongside "my own" and
+// one specific worker. Never collides with a real worker id (those are
+// UUIDs from randomUUID()).
+const PLANNER_VIEW_ALL_WORKERS_SENTINEL = '__all__';
+// A free-text search has no indexed column to run against (name/company/
+// title only exist after resolving each task's live display data — see
+// display.ts), so it can't be a cheap SQL WHERE the way status/profile-
+// type filters are below. Rather than resolve display for literally
+// every task in the company on every search keystroke, a search scans up
+// to this many most-recently-updated matches of the current status
+// filter — the same accepted "search only covers what's reasonably
+// loaded" tradeoff this app's other client-side searches already make
+// (Unibox, CampaignLeadsModal), just applied server-side here since the
+// full dataset is too large to ship to the browser at all.
+const PLANNER_SEARCH_SCAN_LIMIT = 2000;
+
+// Resolves this session's own display name for each {workerId, sentAt}
+// pair (planner_task_sends' own shape) — done at the application layer,
+// never a cross-database SQL join, since accounts.sqlite (users) and
+// linkedin-planner.sqlite are two entirely separate SQLite files (same
+// constraint documented throughout server/src/linkedinPlanner/).
+function resolveWorkerNames<T extends { workerId: string }>(entries: T[]): (T & { workerName: string })[] {
+  return entries.map((e) => {
+    const worker = getUserById(e.workerId);
+    const workerName = worker ? `${worker.firstName} ${worker.lastName}`.trim() || worker.username : 'Nežinomas darbuotojas';
+    return { ...e, workerName };
+  });
+}
+
+// Siuntimui/Išsiųsta bucketing is per-VIEWER, not a global task status —
+// on explicit request, since sending a LinkedIn connect request is
+// something each worker does from their OWN LinkedIn account: worker A
+// having already sent this person a request says nothing about whether
+// worker B has (or should be blocked from also sending their own). See
+// planner_task_sends' own doc comment in db.ts's migrate().
+function plannerStatusFilterFor(
+  filter: string,
+  viewerWorkerId: string | undefined,
+): {
+  statusIn?: PlannerTaskStatus[];
+  statusNotIn?: PlannerTaskStatus[];
+  profileTypeIn?: ('person' | 'company' | 'unrecognized')[];
+  sentFilter?: 'sent' | 'unsent';
+  viewerWorkerId?: string;
+} {
+  if (filter === 'queue') return { statusIn: ['planned'], profileTypeIn: ['person'], sentFilter: 'unsent', viewerWorkerId };
+  if (filter === 'sent') return { statusIn: ['planned'], profileTypeIn: ['person'], sentFilter: 'sent', viewerWorkerId };
+  if (filter === 'needs_review') return { statusIn: ['needs_review'] };
+  if (filter !== 'all' && (PLANNER_TASK_STATUSES as string[]).includes(filter)) return { statusIn: [filter as PlannerTaskStatus] };
+  return {};
+}
+
+app.get(
+  '/api/linkedin-planner/tasks',
+  requirePermission2('linkedin_planner.view'),
+  asyncHandler(async (req, res) => {
+    const companyId = req.auth!.companyId;
+    let accessibleTableIds = accessibleTableIdsForPlanner(req);
+    // Whether this requester has company-wide oversight at all (real
+    // admin, or a linkedin_planner.view_all holder) — captured BEFORE the
+    // tableId narrowing below, since narrowing to one table would
+    // otherwise make this look like an ordinary worker's own scoped view.
+    // This is what gates the "view as worker" filter just below: only
+    // someone who can already see the whole company's queue can usefully
+    // ask "what does worker X's own queue look like."
+    const canViewAll = accessibleTableIds === null;
+    // Optional "just this one table" narrowing (LinkedInPlannerView.tsx's
+    // table-filter dropdown) — added specifically because a super_admin
+    // or a linkedin_planner.view_all holder otherwise sees every table's
+    // people mixed into one list, which stops being usable once a company
+    // has more than a couple of tables. Validated the same way every
+    // other table-scoped route in this app is: must exist and actually be
+    // accessible to this requester, real-admin bypass included.
+    if (typeof req.query.tableId === 'string' && req.query.tableId) {
+      const table = getTable(req.query.tableId, companyId);
+      if (!table || !tableAccessibleToRequest(req, table)) {
+        res.status(404).json({ error: 'Table not found' });
+        return;
+      }
+      accessibleTableIds = [req.query.tableId];
+    }
+    const viewer = effectiveUser(req);
+    if (!viewer) {
+      res.status(401).json({ error: 'Neautentifikuota' });
+      return;
+    }
+    // "Kaip matytų šis darbuotojas" — on explicit request: a super_admin
+    // (or view_all holder) can check exactly which contacts a SPECIFIC
+    // worker still hasn't sent to (Siuntimui) or already has (Išsiųsta),
+    // rather than only ever seeing their OWN personal split. Restricted to
+    // canViewAll holders — an ordinary worker's own queue/sent is already
+    // personal to them, so "view as someone else" has no legitimate use
+    // for them and would otherwise leak another worker's send activity.
+    let sentFilterWorkerId: string | undefined = viewer.id;
+    if (typeof req.query.viewAsWorkerId === 'string' && req.query.viewAsWorkerId) {
+      if (!canViewAll) {
+        res.status(403).json({ error: 'Neturite teisės filtruoti pagal darbuotoją' });
+        return;
+      }
+      if (req.query.viewAsWorkerId === PLANNER_VIEW_ALL_WORKERS_SENTINEL) {
+        // "Visi" — widen the sentFilter to ANY worker at all (see
+        // buildStatusClause's own handling of an omitted viewerWorkerId),
+        // rather than one specific person's own split.
+        sentFilterWorkerId = undefined;
+      } else {
+        const targetWorker = getUserById(req.query.viewAsWorkerId);
+        if (!targetWorker || targetWorker.companyId !== companyId) {
+          res.status(400).json({ error: 'Invalid "viewAsWorkerId"' });
+          return;
+        }
+        sentFilterWorkerId = targetWorker.id;
+      }
+    }
+    const filter = typeof req.query.filter === 'string' ? req.query.filter : 'queue';
+    const search = typeof req.query.search === 'string' ? req.query.search.trim().toLowerCase() : '';
+    const page = Math.max(0, Number(req.query.page) || 0);
+    const statusFilter = plannerStatusFilterFor(filter, sentFilterWorkerId);
+
+    // Attaches each task's full sender list ("Išsiuntė: 1. X 2. Y") and
+    // not-confirmed history ("Nepatvirtino: 1. X 2. Y") — bulk-resolved
+    // for just this page/scan batch, same "never for the whole company"
+    // reasoning as resolveTaskDisplay itself.
+    const withSenders = (tasks: PlannerTask[]) => {
+      const taskIds = tasks.map((t) => t.id);
+      const sendersByTask = getSendersForTasks(taskIds);
+      const notConfirmedByTask = getNotConfirmedForTasks(taskIds);
+      return tasks.map((t) => ({
+        ...t,
+        display: resolveTaskDisplay(t, companyId),
+        senders: resolveWorkerNames(sendersByTask.get(t.id) ?? []),
+        notConfirmedBy: resolveWorkerNames(notConfirmedByTask.get(t.id) ?? []),
+      }));
+    };
+
+    if (!search) {
+      const { tasks, total } = getTasksForCompany(companyId, accessibleTableIds, {
+        ...statusFilter,
+        limit: PLANNER_PAGE_SIZE,
+        offset: page * PLANNER_PAGE_SIZE,
+      });
+      const items = withSenders(tasks);
+      res.json({ tasks: items, total, hasMore: (page + 1) * PLANNER_PAGE_SIZE < total });
+      return;
+    }
+
+    // Search path: scan a bounded batch matching the status filter,
+    // resolve display for just that batch, then filter/paginate in JS.
+    const { tasks: scanTasks } = getTasksForCompany(companyId, accessibleTableIds, { ...statusFilter, limit: PLANNER_SEARCH_SCAN_LIMIT, offset: 0 });
+    const items = withSenders(scanTasks);
+    const matched = items.filter((t) => [t.display.name, t.display.companyName, t.display.jobTitle].some((v) => v && v.toLowerCase().includes(search)));
+    const pageItems = matched.slice(page * PLANNER_PAGE_SIZE, (page + 1) * PLANNER_PAGE_SIZE);
+    res.json({ tasks: pageItems, total: matched.length, hasMore: (page + 1) * PLANNER_PAGE_SIZE < matched.length });
+  }),
+);
+
+// LinkedIn genuinely caps invitations per day/week — this is a
+// conservative, not-yet-per-company-configurable default (see this
+// feature's own plan doc for why a full settings UI is a later pass);
+// the point of showing it at all is to help a worker pace themselves,
+// never to block sending — sending happens in their own browser, outside
+// this app's control entirely.
+const PLANNER_DEFAULT_DAILY_LIMIT = 20;
+
+app.get(
+  '/api/linkedin-planner/today-count',
+  requirePermission2('linkedin_planner.execute'),
+  asyncHandler(async (req, res) => {
+    const user = effectiveUser(req);
+    if (!user) {
+      res.status(401).json({ error: 'Neautentifikuota' });
+      return;
+    }
+    // getTimezoneOffset()'s own sign convention: minutes to ADD to local
+    // time to reach UTC. Shifting "now" by it gives the local-clock-
+    // equivalent ms, which can be floored to a whole day and shifted back
+    // to get the real UTC instant of local midnight — this is what makes
+    // the counter reset at midnight in the REQUESTER's own timezone, not
+    // the server's.
+    const tzOffsetMinutes = Number(req.query.tzOffsetMinutes) || 0;
+    const localNow = Date.now() - tzOffsetMinutes * 60000;
+    const localMidnight = Math.floor(localNow / 86400000) * 86400000;
+    const utcMidnight = localMidnight + tzOffsetMinutes * 60000;
+    res.json({ sentToday: countSentSince(req.auth!.companyId, user.id, utcMidnight), dailyLimit: PLANNER_DEFAULT_DAILY_LIMIT });
+  }),
+);
+
+// The contact-card badge (CellHoverEditor.tsx) — fetched on demand only
+// when a row's contact editor actually opens, not as a bulk join on every
+// table render. Requires the SAME table access check as the main table
+// data itself (not just linkedin_planner.view) — this reveals which of a
+// row's contacts already has LinkedIn outreach in flight, which is
+// exactly the same row data sensitivity as the row itself.
+app.get(
+  '/api/linkedin-planner/tasks/by-row',
+  requirePermission2('linkedin_planner.view'),
+  asyncHandler(async (req, res) => {
+    const { tableId, rowId } = req.query;
+    if (typeof tableId !== 'string' || typeof rowId !== 'string') {
+      res.status(400).json({ error: 'Invalid "tableId"/"rowId"' });
+      return;
+    }
+    const table = getTable(tableId, req.auth!.companyId);
+    if (!table || !tableAccessibleToRequest(req, table)) {
+      res.status(404).json({ error: 'Table not found' });
+      return;
+    }
+    const info = getTaskInfoForRow(tableId, rowId);
+    res.json({ statuses: info.map((i) => ({ ...i, senders: resolveWorkerNames(i.senders) })) });
+  }),
+);
+
+app.get(
+  '/api/linkedin-planner/tasks/:id/history',
+  requirePermission2('linkedin_planner.view'),
+  asyncHandler(async (req, res) => {
+    const task = getTaskById(req.params.id, req.auth!.companyId);
+    if (!task) {
+      res.status(404).json({ error: 'Task not found' });
+      return;
+    }
+    res.json({ history: getTaskHistory(req.params.id, req.auth!.companyId) });
+  }),
+);
+
+// One shared queue per table, not a per-worker exclusive lock — on
+// explicit request: if worker A sends invites on a table and later moves
+// on, worker B taking over that same table needs to see and continue
+// exactly where A left off, not be blocked from acting on tasks A already
+// touched. So a task is actionable by anyone who can currently SEE it
+// (any of its active occurrences' table_id is in the requester's own
+// accessible-table set — the exact same rule the task LIST already uses,
+// see accessibleTableIdsForPlanner/getTasksForCompany), regardless of
+// assignedWorkerId. assignedWorkerId itself is no longer an access gate —
+// it's kept only for the admin-only /reassign route's own bookkeeping.
+function taskAccessibleToRequest(req: Request, task: { id: string }): boolean {
+  const accessibleTableIds = accessibleTableIdsForPlanner(req);
+  if (accessibleTableIds === null) return true; // real admin / linkedin_planner.view_all
+  if (accessibleTableIds.length === 0) return false;
+  const taskTableIds = getOccurrenceTableIds(task.id);
+  return taskTableIds.some((id) => accessibleTableIds.includes(id));
+}
+
+app.post(
+  '/api/linkedin-planner/tasks/:id/claim',
+  requirePermission2('linkedin_planner.execute'),
+  asyncHandler(async (req, res) => {
+    const user = effectiveUser(req);
+    if (!user) {
+      res.status(401).json({ error: 'Neautentifikuota' });
+      return;
+    }
+    const task = getTaskById(req.params.id, req.auth!.companyId);
+    if (!task) {
+      res.status(404).json({ error: 'Task not found' });
+      return;
+    }
+    const claimed = claimTask(req.params.id, req.auth!.companyId, user.id, Date.now());
+    if (!claimed) {
+      res.status(409).json({ error: 'Šią užduotį jau kažkas paėmė' });
+      return;
+    }
+    res.json({ ok: true });
+  }),
+);
+
+app.post(
+  '/api/linkedin-planner/tasks/:id/reassign',
+  requirePermission2('linkedin_planner.assign'),
+  asyncHandler(async (req, res) => {
+    const task = getTaskById(req.params.id, req.auth!.companyId);
+    if (!task) {
+      res.status(404).json({ error: 'Task not found' });
+      return;
+    }
+    const { workerId } = req.body ?? {};
+    if (workerId !== null && typeof workerId !== 'string') {
+      res.status(400).json({ error: 'Invalid "workerId"' });
+      return;
+    }
+    if (workerId) {
+      const worker = getUserById(workerId);
+      if (!worker || worker.companyId !== req.auth!.companyId) {
+        res.status(400).json({ error: 'Invalid worker' });
+        return;
+      }
+    }
+    reassignTask(req.params.id, req.auth!.companyId, workerId, Date.now());
+    res.json({ ok: true });
+  }),
+);
+
+app.post(
+  '/api/linkedin-planner/tasks/:id/status',
+  requirePermission2('linkedin_planner.execute'),
+  asyncHandler(async (req, res) => {
+    const task = getTaskById(req.params.id, req.auth!.companyId);
+    if (!task || !taskAccessibleToRequest(req, task)) {
+      res.status(404).json({ error: 'Task not found' });
+      return;
+    }
+    const { status, note } = req.body ?? {};
+    if (typeof status !== 'string' || !(PLANNER_TASK_STATUSES as string[]).includes(status)) {
+      res.status(400).json({ error: 'Invalid "status"' });
+      return;
+    }
+    // 'planned'/'sent' now only ever happen via the dedicated /send and
+    // /not-confirmed routes below, which track sends per-worker (see
+    // planner_task_sends) instead of as a single task-wide status —
+    // allowing either here would bypass that per-worker bookkeeping
+    // entirely, silently reverting to "one shared sent/not-sent flag."
+    if (status === 'planned' || status === 'sent') {
+      res.status(400).json({ error: 'Naudokite siuntimo veiksmus, ne bendrą statusą' });
+      return;
+    }
+    const updated = changeTaskStatus(req.params.id, req.auth!.companyId, status as PlannerTaskStatus, req.auth!.userId, typeof note === 'string' ? note : undefined, Date.now());
+    res.json({ task: updated });
+  }),
+);
+
+// Sending is a per-WORKER action, not a one-time fact about the task —
+// on explicit request: each worker sends from their own LinkedIn
+// account, so worker A already having sent this person a request
+// shouldn't hide the option from worker B, and both need to independently
+// show up as senders. Moves the task from THIS worker's own Siuntimui
+// into their own Išsiųsta (see plannerStatusFilterFor's sentFilter) and
+// auto-logs the usual "LinkedIn užklausa {name}" note — but only the
+// FIRST time this worker sends (recordTaskSend's own return value),
+// so a retried/duplicate call never double-logs.
+app.post(
+  '/api/linkedin-planner/tasks/:id/send',
+  requirePermission2('linkedin_planner.execute'),
+  asyncHandler(async (req, res) => {
+    const task = getTaskById(req.params.id, req.auth!.companyId);
+    if (!task || !taskAccessibleToRequest(req, task)) {
+      res.status(404).json({ error: 'Task not found' });
+      return;
+    }
+    const actor = effectiveUser(req);
+    if (!actor) {
+      res.status(401).json({ error: 'Neautentifikuota' });
+      return;
+    }
+    const isNewSend = recordTaskSend(req.params.id, req.auth!.companyId, actor.id, Date.now());
+    if (isNewSend) logPlannerSentNote(req, task, req.auth!.companyId);
+    const updated = getTaskById(req.params.id, req.auth!.companyId);
+    res.json({
+      task: updated && {
+        ...updated,
+        senders: resolveWorkerNames(getSendersForTask(updated.id)),
+        notConfirmedBy: resolveWorkerNames(getNotConfirmedForTask(updated.id)),
+      },
+    });
+  }),
+);
+
+// The one action available on a task THIS worker has already sent (see
+// LinkedInPlannerView.tsx's TaskRow — "Nepatvirtino" replaces the old
+// accepted/declined/no_response/replied/skipped dropdown entirely, on
+// explicit request): reverses only THIS worker's own send, sending it
+// back into their own Siuntimui — every other worker's send on the same
+// task is untouched. Also bumps the task-wide not_confirmed_count so a
+// lead that's already bounced back doesn't quietly look brand-new again.
+app.post(
+  '/api/linkedin-planner/tasks/:id/not-confirmed',
+  requirePermission2('linkedin_planner.execute'),
+  asyncHandler(async (req, res) => {
+    const task = getTaskById(req.params.id, req.auth!.companyId);
+    if (!task || !taskAccessibleToRequest(req, task)) {
+      res.status(404).json({ error: 'Task not found' });
+      return;
+    }
+    const actor = effectiveUser(req);
+    if (!actor) {
+      res.status(401).json({ error: 'Neautentifikuota' });
+      return;
+    }
+    const reversed = removeTaskSend(req.params.id, req.auth!.companyId, actor.id, Date.now());
+    if (!reversed) {
+      res.status(400).json({ error: 'Jūs dar nebuvote išsiuntę šio kvietimo' });
+      return;
+    }
+    const updated = getTaskById(req.params.id, req.auth!.companyId);
+    res.json({
+      task: updated && {
+        ...updated,
+        senders: resolveWorkerNames(getSendersForTask(updated.id)),
+        notConfirmedBy: resolveWorkerNames(getNotConfirmedForTask(updated.id)),
+      },
+    });
+  }),
+);
+
+app.post(
+  '/api/linkedin-planner/tasks/:id/schedule',
+  requirePermission2('linkedin_planner.execute'),
+  asyncHandler(async (req, res) => {
+    const task = getTaskById(req.params.id, req.auth!.companyId);
+    if (!task || !taskAccessibleToRequest(req, task)) {
+      res.status(404).json({ error: 'Task not found' });
+      return;
+    }
+    const { scheduledDate } = req.body ?? {};
+    if (scheduledDate !== null && typeof scheduledDate !== 'string') {
+      res.status(400).json({ error: 'Invalid "scheduledDate"' });
+      return;
+    }
+    setTaskSchedule(req.params.id, req.auth!.companyId, scheduledDate, Date.now());
+    res.json({ ok: true });
+  }),
+);
+
+app.post(
+  '/api/linkedin-planner/tasks/:id/note',
+  requirePermission2('linkedin_planner.execute'),
+  asyncHandler(async (req, res) => {
+    const task = getTaskById(req.params.id, req.auth!.companyId);
+    if (!task || !taskAccessibleToRequest(req, task)) {
+      res.status(404).json({ error: 'Task not found' });
+      return;
+    }
+    const { note } = req.body ?? {};
+    if (note !== null && typeof note !== 'string') {
+      res.status(400).json({ error: 'Invalid "note"' });
+      return;
+    }
+    setTaskNote(req.params.id, req.auth!.companyId, note, Date.now());
+    res.json({ ok: true });
+  }),
+);
+
+app.get(
+  '/api/linkedin-planner/templates',
+  requirePermission2('linkedin_planner.view'),
+  asyncHandler(async (req, res) => {
+    res.json({ templates: listTemplates(req.auth!.companyId) });
+  }),
+);
+
+app.post(
+  '/api/linkedin-planner/templates',
+  requirePermission2('linkedin_planner.templates.edit'),
+  asyncHandler(async (req, res) => {
+    const { name, body } = req.body ?? {};
+    if (typeof name !== 'string' || !name.trim() || typeof body !== 'string' || !body.trim()) {
+      res.status(400).json({ error: 'Užpildykite pavadinimą ir tekstą' });
+      return;
+    }
+    res.json(createTemplate(req.auth!.companyId, name.trim(), body, Date.now()));
+  }),
+);
+
+app.patch(
+  '/api/linkedin-planner/templates/:id',
+  requirePermission2('linkedin_planner.templates.edit'),
+  asyncHandler(async (req, res) => {
+    const { name, body } = req.body ?? {};
+    if (typeof name !== 'string' || !name.trim() || typeof body !== 'string' || !body.trim()) {
+      res.status(400).json({ error: 'Užpildykite pavadinimą ir tekstą' });
+      return;
+    }
+    const ok = updateTemplate(req.params.id, req.auth!.companyId, name.trim(), body, Date.now());
+    if (!ok) {
+      res.status(404).json({ error: 'Template not found' });
+      return;
+    }
+    res.json({ ok: true });
+  }),
+);
+
+app.delete(
+  '/api/linkedin-planner/templates/:id',
+  requirePermission2('linkedin_planner.templates.edit'),
+  asyncHandler(async (req, res) => {
+    deleteTemplate(req.params.id, req.auth!.companyId);
+    res.json({ ok: true });
   }),
 );
 
@@ -4761,6 +5375,56 @@ function broadcastRowsSaved(rows: Row[], companyId: string, originId: string | n
   }
 }
 
+// LinkedIn Planner sync (server/src/linkedinPlanner/sync.ts) — reuses the
+// exact same "group by table" shape as broadcastRowsSaved above, since a
+// row's own table is also exactly what its column list (needed to know
+// which cells are contact/link-typed) comes from. `tables` is whatever
+// the calling route already fetched via getTablesByIds — no extra query.
+function syncPlannerAfterRowsSaved(rows: Row[], tables: TableMeta[], companyId: string): void {
+  const columnsByTableId = new Map(tables.map((t) => [t.id, t.columns as { id: string; type: string }[]]));
+  const byTable = new Map<string, Row[]>();
+  for (const row of rows) {
+    const list = byTable.get(row.tableId) ?? [];
+    list.push(row);
+    byTable.set(row.tableId, list);
+  }
+  const now = Date.now();
+  for (const [tableId, tableRows] of byTable) {
+    const columns = columnsByTableId.get(tableId);
+    if (columns) syncRowsAfterWrite(companyId, tableRows, columns, now);
+  }
+}
+
+// Auto-logs a "LinkedIn užklausa {name}" note (see noteLog.ts's own doc
+// comment on why this exact text) on the underlying row the instant a
+// planner task moves planned -> sent via the "Kvietimas išsiųstas"
+// button — on explicit request, so every send (worker or super_admin
+// alike) is traceable from the row's own History column, not just from
+// the Planner's own task_history table. Best-effort: a table with no
+// note-type column, or whose row/table has since been deleted, just skips
+// silently rather than failing the status change itself — the status
+// change is the operation the caller actually asked for; this is a side
+// effect of it, not a precondition.
+function logPlannerSentNote(req: Request, task: PlannerTask, companyId: string): void {
+  const table = getTable(task.primaryTableId, companyId);
+  const row = table && getRowById(task.primaryRowId, companyId);
+  if (!table || !row) return;
+  const noteColumn = (table.columns as Array<{ id: string; type: string }>).find((c) => c.type === 'note');
+  if (!noteColumn) return;
+
+  const actor = effectiveUser(req);
+  const actorName = actor ? `${actor.firstName} ${actor.lastName}`.trim() || actor.username : undefined;
+  const contactName = resolveTaskDisplay(task, companyId).name || task.normalizedLinkedinUrl;
+
+  const updatedRow: Row = {
+    ...row,
+    cells: { ...row.cells, [noteColumn.id]: addPlannerNoteEntry(row.cells[noteColumn.id] ?? '', `${LINKEDIN_REQUEST_PREFIX} ${contactName}`, actorName) },
+    updatedAt: Date.now(),
+  };
+  saveRow(updatedRow, companyId, rowActionAttribution(req));
+  broadcastToTable(updatedRow.tableId, companyId, { type: 'rows_upserted', tableId: updatedRow.tableId, rows: [updatedRow] }, originClientId(req));
+}
+
 // Bulk save — the one endpoint that actually matters for real usage at
 // scale: useTableStore.ts's moveRows/insertRows/applySortOrder all rewrite
 // `order` across *every* row on a single drag-reorder or sort click, so
@@ -4791,6 +5455,7 @@ app.put(
     }
     saveRows(req.body.rows, companyId, rowActionAttribution(req));
     broadcastRowsSaved(req.body.rows, companyId, originClientId(req));
+    syncPlannerAfterRowsSaved(req.body.rows, tables, companyId);
     res.json({ ok: true });
   }),
 );
@@ -4819,6 +5484,7 @@ app.post(
     }
     saveRows(req.body.rows, companyId, rowActionAttribution(req));
     broadcastRowsSaved(req.body.rows, companyId, originClientId(req));
+    syncPlannerAfterRowsSaved(req.body.rows, tables, companyId);
     res.json({ ok: true });
   }),
 );
@@ -4839,6 +5505,7 @@ app.put(
     }
     saveRow(row, companyId, rowActionAttribution(req));
     broadcastToTable(row.tableId, companyId, { type: 'rows_upserted', tableId: row.tableId, rows: [row] }, originClientId(req));
+    syncPlannerAfterRowsSaved([row], tables, companyId);
     res.json({ ok: true });
   }),
 );
@@ -4885,8 +5552,10 @@ app.delete(
       byTable.set(row.tableId, list);
     }
     const originId = originClientId(req);
+    const now = Date.now();
     for (const [tableId, rowIds] of byTable) {
       broadcastToTable(tableId, companyId, { type: 'rows_deleted', tableId, rowIds }, originId);
+      for (const rowId of rowIds) deactivateOccurrencesForRow(tableId, rowId, now);
     }
     res.json({ ok: true, deleted: validIds.length });
   }),
@@ -4909,6 +5578,7 @@ app.delete(
     }
     deleteRow(req.params.id, companyId);
     broadcastToTable(row.tableId, companyId, { type: 'rows_deleted', tableId: row.tableId, rowIds: [req.params.id] }, originClientId(req));
+    deactivateOccurrencesForRow(row.tableId, req.params.id, Date.now());
     res.json({ ok: true });
   }),
 );
@@ -5071,6 +5741,26 @@ const { companyId: firstCompanyId } = bootstrapFirstCompanyIfNeeded();
 backfillCompanyId(firstCompanyId);
 backfillTableOwners();
 
+// LinkedIn Planner's one-time historical backfill — every table/row that
+// already existed before this feature shipped needs to be scanned once
+// for LinkedIn links (the real, already-in-production scale is ~17,000
+// contacts across a handful of tables — see linkedinPlanner/sync.ts's own
+// doc comment for why this is queued rather than scanned inline here).
+// Guarded by isBackfillDone() so a restart doesn't repeat this — building
+// the id list itself is cheap (a plain SELECT per table), the actual
+// per-row LinkedIn scanning happens later, incrementally, via the
+// drainSyncQueueTick interval below.
+if (!isBackfillDone()) {
+  const backfillNow = Date.now();
+  for (const company of listCompanies()) {
+    for (const table of loadTables(company.id)) {
+      const rowIds = loadRowsForTable(table.id, company.id).map((r) => r.id);
+      if (rowIds.length > 0) enqueueAllRowsForBackfill(company.id, table.id, rowIds, backfillNow);
+    }
+  }
+  markBackfillDone();
+}
+
 // One-time, run-once-ever migration (see accounts/db.ts's own doc comment
 // on permission_migration_done) — converts every existing company's
 // implicit "super_admin can do everything" into an explicit full
@@ -5114,6 +5804,11 @@ backfillSmsInboxCompanyId(firstCompanyId);
 // migratePermissionsIfNeeded, which is a strict one-time snapshot).
 backfillNewPermissionKeyForExistingCompanies('export.execute');
 backfillNewPermissionKeyForExistingCompanies('export.contacts');
+backfillNewPermissionKeyForExistingCompanies('linkedin_planner.view');
+backfillNewPermissionKeyForExistingCompanies('linkedin_planner.execute');
+backfillNewPermissionKeyForExistingCompanies('linkedin_planner.view_all');
+backfillNewPermissionKeyForExistingCompanies('linkedin_planner.assign');
+backfillNewPermissionKeyForExistingCompanies('linkedin_planner.templates.edit');
 
 // Fixes every existing worker stuck at zero visible tabs (a real, reported
 // bug — see accounts/db.ts's own doc comment on this function and the two
@@ -5231,33 +5926,42 @@ function companiesWithLinkedInAccess(): string[] {
     .map((c) => c.id);
 }
 
-setInterval(() => {
-  for (const companyId of companiesWithLinkedInAccess()) {
-    // Resolved fresh on every tick, not captured once at startup — lets a
-    // key added/changed later via the Integrations UI take effect on the
-    // very next automatic tick rather than needing a server restart.
-    const openaiApiKey = getCompanyIntegrations(companyId)?.openaiApiKey ?? undefined;
-    runSchedulerTick(companyId, true, openaiApiKey)
-      .then((result) => {
-        if (result.autoExecuted > 0 || result.circuitBreakerTripped || result.errors > 0) {
-          console.log('[linkedin/scheduler] automatic tick for company', companyId, ':', result);
-        }
-      })
-      .catch((err) => console.error('[linkedin/scheduler] automatic tick failed for company', companyId, ':', err));
-  }
-}, SCHEDULER_TICK_INTERVAL_MS);
+// Both intervals below are only ever REGISTERED when LINKEDIN_AUTOMATION_ENABLED
+// is explicitly set — see that constant's own doc comment. This is
+// deliberately not a per-tick early-return inside the callback (which
+// would still register a live timer that just no-ops every 5/10 minutes
+// forever) — with the flag off, neither setInterval call happens at all,
+// so there is no timer to find in a process inspection, no log line ever
+// printed by either, and nothing running in the background whatsoever.
+if (LINKEDIN_AUTOMATION_ENABLED) {
+  setInterval(() => {
+    for (const companyId of companiesWithLinkedInAccess()) {
+      // Resolved fresh on every tick, not captured once at startup — lets a
+      // key added/changed later via the Integrations UI take effect on the
+      // very next automatic tick rather than needing a server restart.
+      const openaiApiKey = getCompanyIntegrations(companyId)?.openaiApiKey ?? undefined;
+      runSchedulerTick(companyId, true, openaiApiKey)
+        .then((result) => {
+          if (result.autoExecuted > 0 || result.circuitBreakerTripped || result.errors > 0) {
+            console.log('[linkedin/scheduler] automatic tick for company', companyId, ':', result);
+          }
+        })
+        .catch((err) => console.error('[linkedin/scheduler] automatic tick failed for company', companyId, ':', err));
+    }
+  }, SCHEDULER_TICK_INTERVAL_MS);
 
-setInterval(() => {
-  for (const companyId of companiesWithLinkedInAccess()) {
-    syncInbox(companyId, true)
-      .then((result) => {
-        if (result.newMessages > 0 || result.leadsPromoted > 0 || result.leadsMarkedReplied > 0) {
-          console.log('[linkedin/inbox] automatic sync for company', companyId, ':', result);
-        }
-      })
-      .catch((err) => console.error('[linkedin/inbox] automatic sync failed for company', companyId, ':', err));
-  }
-}, INBOX_SYNC_INTERVAL_MS);
+  setInterval(() => {
+    for (const companyId of companiesWithLinkedInAccess()) {
+      syncInbox(companyId, true)
+        .then((result) => {
+          if (result.newMessages > 0 || result.leadsPromoted > 0 || result.leadsMarkedReplied > 0) {
+            console.log('[linkedin/inbox] automatic sync for company', companyId, ':', result);
+          }
+        })
+        .catch((err) => console.error('[linkedin/inbox] automatic sync failed for company', companyId, ':', err));
+    }
+  }, INBOX_SYNC_INTERVAL_MS);
+}
 
 // Daily table backups (see tableData/db.ts's own doc comments on the
 // backups table) — hourly polling, same lightweight shape as the two
@@ -5306,3 +6010,24 @@ setInterval(() => {
     console.error('[backups] automatic daily tick failed:', err);
   }
 }, BACKUP_TICK_INTERVAL_MS);
+
+// LinkedIn Planner's background sync-queue drain — see
+// linkedinPlanner/sync.ts's own doc comment. A short interval is safe
+// here (unlike the disabled LinkedIn automation's own ticks above, this
+// never reaches an external service — it's a plain local SQLite read/
+// write), so it drains steadily rather than waiting on a long timer even
+// while the one-time historical backfill (~17,000 real contacts as of
+// this feature's rollout) is still working through the queue.
+const PLANNER_SYNC_TICK_INTERVAL_MS = 15 * 1000;
+setInterval(() => {
+  try {
+    drainSyncQueueTick((tableId, rowId, companyId) => {
+      const table = getTable(tableId, companyId);
+      const row = getRowById(rowId, companyId);
+      if (!table || !row) return null;
+      return { row, columns: table.columns as { id: string; type: string }[] };
+    });
+  } catch (err) {
+    console.error('[linkedin-planner] sync queue drain tick failed:', err);
+  }
+}, PLANNER_SYNC_TICK_INTERVAL_MS);

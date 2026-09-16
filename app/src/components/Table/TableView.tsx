@@ -49,6 +49,7 @@ import { normalizePhoneDigits } from '../../utils/phoneMatch';
 import { VISI_ATSAKYMAI_TABLE_NAME } from '../../utils/instantlyReplySync';
 import { matchesNumericRange, parseNumericCellValue, type NumericRangeFilter } from '../../utils/numericFilter';
 import { isCellLockedForWorker } from '../../utils/workerCellLock';
+import { fetchPlannerTaskStatusesForRow, type PlannerTaskSender } from '../../utils/linkedinPlannerApi';
 import {
   ADD_COLUMN_WIDTH,
   DEFAULT_COLUMN_WIDTH,
@@ -409,6 +410,7 @@ export function TableView({
   // its own, more granular pair of keys).
   const canExportExecute = useAuthStore((s) => can(s.user?.permissionKeys, 'export.execute'));
   const canExportContacts = useAuthStore((s) => can(s.user?.permissionKeys, 'export.contacts'));
+  const canViewLinkedInPlanner = useAuthStore((s) => can(s.user?.permissionKeys, 'linkedin_planner.view'));
   // The (⋮) column menu (ColumnMenu.tsx) is a hard block for every worker,
   // not gated per-field — on explicit request ("nenoriu, kad jis isvis
   // turėtų galimybę užeiti į (⋮)"). ColumnMenu itself already disables the
@@ -501,6 +503,57 @@ export function TableView({
   // matched the missed call, since a Contacts column can hold several
   // people and the row/cell-level jump alone doesn't say which one.
   const [highlightContactId, setHighlightContactId] = useState<string | null>(null);
+  // LinkedIn Planner status badge (CellHoverEditor's contact list) — keyed
+  // by contact id, fetched fresh each time a contact-mode cell opens (not
+  // a bulk join on every table render — real scale here can be thousands
+  // of contacts, most of which are never opened in a given session).
+  // Silently stays empty for a user without linkedin_planner.view, or if
+  // the fetch fails — this is a badge, not core cell functionality.
+  const [linkedinTaskStatuses, setLinkedinTaskStatuses] = useState<Record<string, { taskId: string; notConfirmedCount: number; senders: PlannerTaskSender[] }>>(
+    {},
+  );
+  useEffect(() => {
+    if (!expandedCell || !tableId || !canViewLinkedInPlanner) {
+      setLinkedinTaskStatuses({});
+      return;
+    }
+    const column = columns.find((c) => c.id === expandedCell.columnId);
+    if (column?.type !== 'contact') {
+      setLinkedinTaskStatuses({});
+      return;
+    }
+    let cancelled = false;
+    fetchPlannerTaskStatusesForRow(tableId, expandedCell.rowId)
+      .then(({ statuses }) => {
+        if (!cancelled) {
+          setLinkedinTaskStatuses(
+            Object.fromEntries(statuses.map((s) => [s.contactId, { taskId: s.taskId, notConfirmedCount: s.notConfirmedCount, senders: s.senders }])),
+          );
+        }
+      })
+      .catch(() => {
+        // Non-critical — the badge just doesn't show for this row.
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expandedCell, tableId, canViewLinkedInPlanner]);
+  // Fired by CellHoverEditor's own LinkedIn "confirm sent" button right
+  // after the server call succeeds — updates this same map in place by
+  // adding the CURRENT user as a new sender, so the badge/button both
+  // reflect it immediately, without a second round trip back to
+  // fetchPlannerTaskStatusesForRow. Sending is per-worker (see
+  // PlannerTaskSender's own doc comment), so this only ever appends —
+  // it never overwrites another worker's own send.
+  const handleLinkedinConfirmed = (contactId: string) => {
+    setLinkedinTaskStatuses((prev) => {
+      const entry = prev[contactId];
+      if (!entry || !currentUser) return prev;
+      const sender: PlannerTaskSender = { workerId: currentUser.id, workerName: currentUserName || currentUser.username, sentAt: Date.now() };
+      return { ...prev, [contactId]: { ...entry, senders: [...entry.senders, sender] } };
+    });
+  };
   // The next-action-date cell's own 📝 note / 👤 "who to call" mini-popovers
   // (DataCell.tsx) — lifted up here, rather than local state inside
   // DataCell, specifically so they close the same way every other popover
@@ -3757,6 +3810,8 @@ export function TableView({
               websiteUrl={rowWebsiteUrl}
               contactsRaw={rowContactsRaw}
               statusOptionColors={statusColumn?.optionColors}
+              linkedinTaskStatuses={linkedinTaskStatuses}
+              onLinkedinConfirmed={handleLinkedinConfirmed}
               highlightEntryId={highlightContactId}
               onAddNoteEntry={(text) => updateCell(row.id, column.id, addNoteEntry(currentCellValue(), text, currentUserName))}
               onUpdateNoteEntry={(id, text) => updateCell(row.id, column.id, updateNoteEntry(currentCellValue(), id, text))}
