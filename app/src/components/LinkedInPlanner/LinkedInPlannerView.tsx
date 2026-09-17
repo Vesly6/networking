@@ -3,6 +3,7 @@ import { useLinkedInPlannerStore } from '../../store/useLinkedInPlannerStore';
 import { useWorkspaceStore } from '../../store/useWorkspaceStore';
 import { useWorkersStore } from '../../store/useWorkersStore';
 import { useAuthStore } from '../../store/useAuthStore';
+import { subscribeToCompanyEvents } from '../../utils/companyEventBus';
 import { can } from '../../utils/permissions';
 import { getColumnByType } from '../../utils/row';
 import { DEMO_MODE } from '../../utils/demoMode';
@@ -262,6 +263,22 @@ export function LinkedInPlannerView({ onJumpToRow, onJumpToContact }: LinkedInPl
   useEffect(() => {
     void refresh();
     void refreshTodayCount();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Live update — another worker claiming/sending/changing a task's status
+  // used to be invisible here until a manual refresh/re-filter, a real
+  // collision risk during active outreach (two people not realizing a
+  // lead was already taken). refresh()/refreshTodayCount() re-run with
+  // whatever filter/search/page is currently active, so this doesn't reset
+  // the view, just refreshes it in place.
+  useEffect(() => {
+    return subscribeToCompanyEvents((event) => {
+      if (event.type === 'planner_task_changed') {
+        void refresh();
+        void refreshTodayCount();
+      }
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

@@ -177,6 +177,12 @@ export interface ReplySyncResult {
   skippedDuplicate: number;
   tableId: string;
   tableName: string;
+  /** One entry per genuinely NEW reply this call actually created a row
+   * for (never for a duplicate skip) — index.ts's webhook handler uses
+   * this to drive both the live Unibox refresh and the "Lead/Interested/
+   * Wrong person" sound-notification broadcast, without needing a second
+   * round trip to re-derive who just replied. */
+  newReplies: { leadEmail: string; interestStatus: number | null }[];
 }
 
 /** `campaignId` is required — one campaign at a time, same as the client
@@ -216,18 +222,21 @@ export async function syncInstantlyCampaignReplies(
 
   const now = Date.now();
   const newRows: Row[] = [];
+  const newReplies: { leadEmail: string; interestStatus: number | null }[] = [];
   for (const email of replies) {
     const key = `${email.from_address_email}|${email.timestamp_email}`;
     if (existingKeys.has(key)) continue;
     existingKeys.add(key);
 
     const lead = leadIndex.get(email.from_address_email.toLowerCase());
+    const interestStatus = lead?.lt_interest_status ?? email.i_status ?? null;
+    newReplies.push({ leadEmail: email.from_address_email, interestStatus });
     const cells: Record<string, string> = {};
     cells[colByName.get('reply_snippet')!] = email.content_preview ?? '';
     cells[colByName.get('lead_email')!] = email.from_address_email;
     cells[colByName.get('first_name')!] = lead?.first_name ?? '';
     cells[colByName.get('company_name')!] = lead?.company_name ?? '';
-    cells[colByName.get('lead_status')!] = statusLabel(lead?.lt_interest_status ?? email.i_status ?? null);
+    cells[colByName.get('lead_status')!] = statusLabel(interestStatus);
     cells[colByName.get('campaign_name')!] = campaign.name;
     cells[colByName.get('reply_text')!] = email.body?.text || (email.body?.html ? stripHtml(email.body.html) : '') || email.content_preview || '';
     // A real, reported bug: this used to duplicate lead_email
@@ -259,5 +268,6 @@ export async function syncInstantlyCampaignReplies(
     skippedDuplicate: replies.length - newRows.length,
     tableId: table.id,
     tableName: table.name,
+    newReplies,
   };
 }

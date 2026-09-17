@@ -6,6 +6,7 @@ import { getAllSmsLog, saveSmsLogEntry } from '../../db/db';
 import { phoneMatchKey } from '../../utils/phoneMatch';
 import { formatHistoryTimestamp } from '../../utils/date';
 import { randomUUID } from '../../utils/uuid';
+import { subscribeToCompanyEvents } from '../../utils/companyEventBus';
 import { Mail, X, Building2, CornerUpLeft, RefreshCw, Settings } from 'lucide-react';
 
 const UNKNOWN_KEY = '__unknown__';
@@ -257,21 +258,38 @@ export function SmsInboxView({ phoneToRow, phoneToContact, onJumpToRow, onJumpTo
   const [composingNew, setComposingNew] = useState(false);
   const showToast = useToastStore((s) => s.show);
 
-  const load = () => {
-    setLoading(true);
+  const load = (silent = false) => {
+    if (!silent) setLoading(true);
     Promise.all([fetchSmsInbox(), getAllSmsLog()])
       .then(([inboxRes, log]) => {
         setIncoming(inboxRes.messages);
         setOutgoing(log);
       })
-      .catch((err) => showToast(err instanceof Error ? err.message : 'Nepavyko įkelti SMS'))
-      .finally(() => setLoading(false));
+      .catch((err) => {
+        if (!silent) showToast(err instanceof Error ? err.message : 'Nepavyko įkelti SMS');
+      })
+      .finally(() => {
+        if (!silent) setLoading(false);
+      });
   };
 
   // Load once on mount only — showToast is a stable Zustand action
   // reference, not a real dependency.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(load, []);
+  useEffect(() => load(), []);
+
+  // Live update — a new incoming SMS arrives via a server-side webhook
+  // (see CLAUDE.md's own doc on why this needs its own receiver) while
+  // this tab may already be open; without this it silently sat unseen
+  // until a manual reload, the exact same staleness class Instantly
+  // Unibox had before its own fix. Silent (no loading-spinner flash) since
+  // this can fire at any moment while someone's mid-scroll.
+  useEffect(() => {
+    return subscribeToCompanyEvents((event) => {
+      if (event.type === 'sms_received') load(true);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleSetupWebhook = async () => {
     setSettingUpWebhook(true);
@@ -332,7 +350,7 @@ export function SmsInboxView({ phoneToRow, phoneToContact, onJumpToRow, onJumpTo
   return (
     <div className="sms-inbox-view">
       <div className="calls-toolbar">
-        <button type="button" onClick={load} disabled={loading}>
+        <button type="button" onClick={() => load()} disabled={loading}>
           {loading ? 'Kraunama…' : <><RefreshCw className="icon" size={16} /> Atnaujinti</>}
         </button>
         <button type="button" onClick={() => setComposingNew((v) => !v)}>

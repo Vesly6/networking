@@ -717,6 +717,23 @@ export function countSentSince(companyId: string, workerId: string, sinceTs: num
   return row.n;
 }
 
+/** Team Activity Dashboard's "LinkedIn connections sent" metric — same
+ * `to_status = 'sent'` filter as countSentSince above (a status change
+ * back to 'sent', not any touch of the task), grouped by who sent it
+ * within one bounded [since, until) window (a single calendar day, when
+ * called from the dashboard's rollup job) rather than one query per
+ * worker. */
+export function countSentGroupedByWorker(companyId: string, range: { since: number; until: number }): { workerId: string; count: number }[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT changed_by_user_id AS worker_id, COUNT(*) AS n FROM planner_task_history
+       WHERE company_id = ? AND to_status = 'sent' AND changed_at >= ? AND changed_at < ?
+       GROUP BY changed_by_user_id`,
+    )
+    .all(companyId, range.since, range.until) as { worker_id: string; n: number }[];
+  return rows.map((r) => ({ workerId: r.worker_id, count: r.n }));
+}
+
 export function getTaskHistory(taskId: string, companyId: string): PlannerTaskHistoryEntry[] {
   const rows = getDb()
     .prepare(`SELECT * FROM planner_task_history WHERE task_id = ? AND company_id = ? ORDER BY changed_at ASC`)

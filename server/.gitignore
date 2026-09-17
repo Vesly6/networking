@@ -16,4 +16,6 @@ import-history.sqlite
 import-history.sqlite-*
 linkedin-planner.sqlite
 linkedin-planner.sqlite-*
+dashboard-metrics.sqlite
+dashboard-metrics.sqlite-*
 *.tsbuildinfo

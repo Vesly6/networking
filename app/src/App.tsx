@@ -41,6 +41,7 @@ import { DEMO_MODE } from './utils/demoMode';
 import { workerGrantableTabs } from './utils/tabLabels';
 import { can } from './utils/permissions';
 import { useTableRealtimeSync } from './utils/tableRealtime';
+import { useCompanyRealtimeSync } from './utils/companyRealtime';
 import { isOverdue, isDueToday } from './utils/date';
 import { ArrowLeft, Clock, Bell, BellOff, Menu } from 'lucide-react';
 import './App.css';
@@ -92,6 +93,11 @@ function App() {
   // wrong id (still the previous table's) or a table that turns out not
   // to exist. See utils/tableRealtime.ts's own doc comment.
   useTableRealtimeSync(tableReady ? loadedTableId : null);
+  // Company-wide, unconditional — unlike the per-table sync above, this
+  // isn't scoped to whatever table happens to be open, since a colleague's
+  // action anywhere or a new Instantly reply should be caught regardless
+  // of which tab/table the current user is currently looking at.
+  useCompanyRealtimeSync();
 
   const [tab, setTab] = useState<AppScreen>('table');
   // Only meaningful while !activeTable — lets "Darbuotojai" be reached from

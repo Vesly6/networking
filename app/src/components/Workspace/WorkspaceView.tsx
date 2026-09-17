@@ -10,6 +10,8 @@ import { ThemeToggle } from '../ThemeToggle';
 import { ImportHistoryModal } from './ImportHistoryModal';
 import { Popover } from '../Popover';
 import { Package, Users } from 'lucide-react';
+import { ActivityDashboard } from '../Dashboard/ActivityDashboard';
+import { can } from '../../utils/permissions';
 
 interface WorkspaceViewProps {
   onOpenTable: (id: string) => void;
@@ -198,6 +200,8 @@ export function WorkspaceView({
           </button>
         </div>
       </div>
+
+      {can(currentUser?.permissionKeys, 'dashboard.view_own') && <ActivityDashboard />}
 
       {tables.length === 0 ? (
         <div className="empty-state">Kol kas nėra lentelių — sukurkite pirmąją.</div>

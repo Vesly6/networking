@@ -777,7 +777,7 @@ function sanitizeRowForWorker(existing: Row | null, incoming: Row, columns: unkn
 // blocked change never happened as far as the stored data is concerned, so
 // it shouldn't show up in the log as if it did either.
 
-export type WorkerActionType = 'row_created' | 'cell_edited' | 'note_added' | 'contact_added';
+export type WorkerActionType = 'row_created' | 'cell_edited' | 'note_added' | 'contact_added' | 'company_added';
 
 export interface WorkerActionRecord {
   actionType: WorkerActionType;
@@ -832,11 +832,32 @@ function detectWorkerActions(
     }
   };
 
+  // Team Activity Dashboard's "companies added" metric — a company-type
+  // cell going from empty to non-empty, regardless of actor. Its own
+  // actionType (not a cell_edited filtered by column type afterward) keeps
+  // the dashboard's rollup query a plain WHERE action_type = 'company_added'
+  // rather than needing to also join/inspect column metadata per row.
+  const pushCompanyAdded = (column: (typeof columnList)[number], newValue: string) => {
+    actions.push({
+      actionType: 'company_added',
+      tableId,
+      tableName,
+      rowId: sanitized.id,
+      columnId: column.id,
+      columnName: column.name,
+      detail: truncateDetail(newValue),
+    });
+  };
+
   if (!existing) {
     actions.push({ actionType: 'row_created', tableId, tableName, rowId: sanitized.id, detail: 'Nauja eilutė' });
     for (const column of columnList) {
-      if (column.type !== 'note' && column.type !== 'contact') continue;
-      detectEntryAdditions(column, '', sanitized.cells[column.id] ?? '');
+      if (column.type === 'note' || column.type === 'contact') {
+        detectEntryAdditions(column, '', sanitized.cells[column.id] ?? '');
+      } else if (column.type === 'company') {
+        const newValue = sanitized.cells[column.id] ?? '';
+        if (newValue !== '') pushCompanyAdded(column, newValue);
+      }
     }
     return actions;
   }
@@ -846,6 +867,8 @@ function detectWorkerActions(
     const newValue = sanitized.cells[column.id] ?? '';
     if (column.type === 'note' || column.type === 'contact') {
       detectEntryAdditions(column, oldValue, newValue);
+    } else if (column.type === 'company' && oldValue === '' && newValue !== '') {
+      pushCompanyAdded(column, newValue);
     } else if (oldValue !== newValue) {
       actions.push({
         actionType: 'cell_edited',
@@ -960,16 +983,62 @@ function logWorkerActions(
  * see index.ts's GET /api/worker-actions). No pruning/rotation, matching
  * this codebase's existing insert-only audit log (linkedin/db.ts's own
  * actions_log) — an audit trail is expected to keep growing. */
-export function listWorkerActions(companyId: string, userId: string | undefined, limit: number): WorkerActionLogEntry[] {
+/** `since`/`until` (epoch ms, both optional) added for the Team Activity
+ * Dashboard's aggregation job — it needs "everything for company X between
+ * these two instants," not the flat newest-N-only shape the Workers panel's
+ * own activity feed originally needed this for. Bounded by
+ * worker_actions_by_company's existing (company_id, created_at) index either
+ * way, so a date-ranged call here is never a full-table scan regardless of
+ * how large the audit log has grown. */
+export function listWorkerActions(
+  companyId: string,
+  userId: string | undefined,
+  limit: number,
+  range?: { since?: number; until?: number },
+): WorkerActionLogEntry[] {
   const database = getDb();
-  const rows = userId
-    ? (database
-        .prepare(`SELECT * FROM worker_actions WHERE company_id = ? AND user_id = ? ORDER BY created_at DESC LIMIT ?`)
-        .all(companyId, userId, limit) as WorkerActionRow[])
-    : (database
-        .prepare(`SELECT * FROM worker_actions WHERE company_id = ? ORDER BY created_at DESC LIMIT ?`)
-        .all(companyId, limit) as WorkerActionRow[]);
+  const clauses = ['company_id = ?'];
+  const params: (string | number)[] = [companyId];
+  if (userId) {
+    clauses.push('user_id = ?');
+    params.push(userId);
+  }
+  if (range?.since !== undefined) {
+    clauses.push('created_at >= ?');
+    params.push(range.since);
+  }
+  if (range?.until !== undefined) {
+    clauses.push('created_at < ?');
+    params.push(range.until);
+  }
+  const rows = database
+    .prepare(`SELECT * FROM worker_actions WHERE ${clauses.join(' AND ')} ORDER BY created_at DESC LIMIT ?`)
+    .all(...params, limit) as WorkerActionRow[];
   return rows.map(workerActionFromRow);
+}
+
+/** Team Activity Dashboard's actual read path for internal metrics — a
+ * SQL GROUP BY count, not "fetch every matching row and count in JS" (what
+ * looping listWorkerActions with a huge limit would amount to). Used both
+ * by the live-today path (a narrow same-day range) and the periodic rollup
+ * job (one calendar day at a time), so this never scans more than one
+ * day's worth of rows per call regardless of how large the audit log as a
+ * whole has grown. */
+export function countWorkerActionsGrouped(
+  companyId: string,
+  range: { since: number; until: number },
+  actionTypes: WorkerActionType[],
+): { userId: string; actionType: WorkerActionType; count: number }[] {
+  if (actionTypes.length === 0) return [];
+  const placeholders = actionTypes.map(() => '?').join(', ');
+  const rows = getDb()
+    .prepare(
+      `SELECT user_id, action_type, COUNT(*) AS n FROM worker_actions
+       WHERE company_id = ? AND created_at >= ? AND created_at < ? AND action_type IN (${placeholders})
+       GROUP BY user_id, action_type`,
+    )
+    .all(companyId, range.since, range.until, ...actionTypes) as { user_id: string; action_type: string; n: number }[];
+  return rows.map((r) => ({ userId: r.user_id, actionType: r.action_type as WorkerActionType, count: r.n }));
 }
 // ---------------------------------------------------------------------------
 

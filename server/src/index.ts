@@ -138,7 +138,7 @@ import {
   issuePlatformImpersonationToken,
   resolveAuthFromToken,
 } from './auth.js';
-import { subscribeToTable, broadcastToTable } from './realtime.js';
+import { subscribeToTable, broadcastToTable, subscribeToCompany, broadcastToCompany } from './realtime.js';
 import { can, effectivePermissions, companyCeiling } from './permissions/effective.js';
 import { ALL_PERMISSION_KEYS, isPermissionKey, PERMISSIONS, type PermissionKey } from './permissions/registry.js';
 import { buildExportRows, XLSX_MAX_ROWS, type ExportMode } from './export/buildExportRows.js';
@@ -261,6 +261,18 @@ import {
 import { resolveTaskDisplay } from './linkedinPlanner/display.js';
 import { syncRowsAfterWrite, drainSyncQueueTick, enqueueAllRowsForBackfill } from './linkedinPlanner/sync.js';
 import { addNoteEntry as addPlannerNoteEntry, LINKEDIN_REQUEST_PREFIX } from './linkedinPlanner/noteLog.js';
+import {
+  rollupInternalMetricsForCompany,
+  todayDateStrForCompany,
+  yesterdayDateStrForCompany,
+  resolvePeriodRange,
+  previousPeriodRange,
+  summarizeMetrics,
+  oldestSuccessfulSyncAt,
+  getWorkerRows,
+  type DashboardPeriod,
+} from './dashboard/aggregate.js';
+import { syncZadarmaCallsForCompany } from './dashboard/externalSync.js';
 
 const PORT = Number(process.env.PORT) || 4000;
 // Binds 127.0.0.1 by default — deliberately not reachable from the local
@@ -823,6 +835,7 @@ app.post('/api/zadarma/sms-webhook', (req, res) => {
     signature: str(req.headers['signature']),
   });
   console.log('[sms-webhook] saved to incoming_sms (legacy, company-less URL)', { fromNumber, toNumber, message });
+  broadcastToCompany(firstCompanyId, { type: 'sms_received' }, null);
   res.status(200).json({ ok: true });
 });
 
@@ -875,6 +888,7 @@ app.post('/api/zadarma/sms-webhook/:companyId', (req, res) => {
     signature: str(req.headers['signature']),
   });
   console.log('[sms-webhook] saved to incoming_sms', { companyId: req.params.companyId, fromNumber, toNumber, message });
+  broadcastToCompany(req.params.companyId, { type: 'sms_received' }, null);
   res.status(200).json({ ok: true });
 });
 
@@ -977,6 +991,19 @@ async function runInstantlyWebhookSync(companyId: string, campaignId: string, ev
       tableId: result.tableId,
       tableName: result.tableName,
     });
+    // Live Unibox refresh + the Lead/Interested/Wrong-person sound alert —
+    // one event per genuinely new reply (never for a duplicate skip, see
+    // ReplySyncResult's own doc comment). The client decides whether a
+    // given interestStatus is one of the ones that should make noise
+    // (INTEREST_STATUS_LABELS is already duplicated client-side); this
+    // just carries the raw fact "a new reply arrived, here's its status."
+    for (const reply of result.newReplies) {
+      broadcastToCompany(
+        companyId,
+        { type: 'instantly_reply', interestStatus: reply.interestStatus === null ? null : String(reply.interestStatus), leadEmail: reply.leadEmail },
+        null,
+      );
+    }
   } catch (err) {
     console.error('[instantly-webhook] sync failed for campaign', campaignId, 'company', companyId, err);
     recordError(eventLogId, err instanceof Error ? err.message : String(err));
@@ -1712,6 +1739,38 @@ app.get('/api/tables/:id/events', (req, res) => {
   req.on('close', unsubscribe);
 });
 
+// Company-wide sibling of the table-scoped stream above — for things not
+// tied to any one open table: the Team Activity Dashboard (any worker's
+// row/note/contact/company/LinkedIn action should make every currently-
+// open dashboard view refresh itself) and live Instantly reply
+// notifications. No tableAccessibleToRequest check needed here — unlike a
+// table, company-wide membership is exactly what a valid auth token
+// already proves, nothing further to check.
+app.get('/api/company/events', (req, res) => {
+  const token = typeof req.query.token === 'string' ? req.query.token : null;
+  const auth = token ? resolveAuthFromToken(token) : null;
+  if (!auth) {
+    res.status(401).json({ error: 'Neautentifikuota' });
+    return;
+  }
+  if (getCompany(auth.companyId)?.blockedAt) {
+    res.status(403).json({ error: 'Ši įmonė yra užblokuota' });
+    return;
+  }
+  const clientId = typeof req.query.clientId === 'string' ? req.query.clientId : null;
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  res.write(': connected\n\n');
+
+  const unsubscribe = subscribeToCompany(auth.companyId, clientId, res);
+  req.on('close', unsubscribe);
+});
+
 // Everything below requires a valid session token — a visitor who never
 // loads the frontend at all (hits these routes directly) is blocked here
 // too, not just by the login screen.
@@ -2235,6 +2294,115 @@ app.get(
     res.json({
       actions: listWorkerActions(req.auth!.companyId, typeof userId === 'string' ? userId : undefined, effectiveLimit),
     });
+  }),
+);
+
+// --- Team Activity Dashboard -----------------------------------------------
+// A view-style permission check (dashboard.view_own/view_team), not an
+// admin-management-action one — resolves through effectiveUser(req), same
+// as requireLinkedInPlannerViewer above, so a super_admin impersonating one
+// of their own workers correctly sees THAT WORKER's own restricted view,
+// not the real admin's full one. requirePermission2 is deliberately NOT
+// used here: its own doc comment states it always resolves the REAL
+// session, which is right for "manage workers"-shaped actions but wrong
+// for "what does the currently-acting person's own dashboard show."
+const DASHBOARD_PERIODS: DashboardPeriod[] = ['today', 'yesterday', '7d', '30d', 'month', 'custom'];
+
+function requireDashboardPermission(key: PermissionKey) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const user = effectiveUser(req);
+    if (!user) {
+      res.status(401).json({ error: 'Neautentifikuota' });
+      return;
+    }
+    if (!effectivePermissions(user).has(key)) {
+      res.status(403).json({ error: 'Neturite teisės atlikti šio veiksmo', permission: key });
+      return;
+    }
+    next();
+  };
+}
+
+function parseDashboardPeriod(req: Request): { period: DashboardPeriod; custom?: { from: string; to: string } } {
+  const raw = req.query.period;
+  const period = typeof raw === 'string' && (DASHBOARD_PERIODS as string[]).includes(raw) ? (raw as DashboardPeriod) : 'today';
+  const from = req.query.from;
+  const to = req.query.to;
+  const custom = period === 'custom' && typeof from === 'string' && typeof to === 'string' ? { from, to } : undefined;
+  return { period, custom };
+}
+
+app.get(
+  '/api/dashboard/summary',
+  requireDashboardPermission('dashboard.view_own'),
+  asyncHandler(async (req, res) => {
+    const companyId = req.auth!.companyId;
+    const viewer = effectiveUser(req);
+    if (!viewer) {
+      res.status(401).json({ error: 'Neautentifikuota' });
+      return;
+    }
+    const { period, custom } = parseDashboardPeriod(req);
+    const range = resolvePeriodRange(companyId, period, custom);
+    const prevRange = previousPeriodRange(range);
+    const canViewTeam = effectivePermissions(viewer).has('dashboard.view_team');
+    const own = summarizeMetrics(companyId, range, viewer.id);
+    const ownPrevious = summarizeMetrics(companyId, prevRange, viewer.id);
+    const team = canViewTeam ? summarizeMetrics(companyId, range, null) : null;
+    const teamPrevious = canViewTeam ? summarizeMetrics(companyId, prevRange, null) : null;
+    res.json({
+      period: range,
+      previousPeriod: prevRange,
+      own,
+      ownPrevious,
+      team,
+      teamPrevious,
+      canViewTeam,
+      updatedAt: oldestSuccessfulSyncAt(companyId),
+    });
+  }),
+);
+
+app.get(
+  '/api/dashboard/workers',
+  requireDashboardPermission('dashboard.view_team'),
+  asyncHandler(async (req, res) => {
+    const companyId = req.auth!.companyId;
+    const { period, custom } = parseDashboardPeriod(req);
+    const range = resolvePeriodRange(companyId, period, custom);
+    res.json({ period: range, workers: getWorkerRows(companyId, range) });
+  }),
+);
+
+// Manual "Обновить" — forces a fresh internal rollup (today + yesterday)
+// and, if configured, an immediate Zadarma sync, rather than waiting for
+// the next periodic tick. Cooldown is keyed by companyId (not per-user),
+// server-side (not just a disabled client button) — a shared company
+// resource getting hammered by several people clicking around the same
+// time is exactly what this guards against, same spam-protection intent
+// as the Calls tab's own cooldown, just enforced where it actually
+// matters given multiple users can trigger this independently.
+const DASHBOARD_REFRESH_COOLDOWN_MS = 60_000;
+const dashboardLastManualRefreshAt = new Map<string, number>();
+
+app.post(
+  '/api/dashboard/refresh',
+  requireDashboardPermission('dashboard.view_own'),
+  asyncHandler(async (req, res) => {
+    const companyId = req.auth!.companyId;
+    const now = Date.now();
+    const last = dashboardLastManualRefreshAt.get(companyId) ?? 0;
+    if (now - last < DASHBOARD_REFRESH_COOLDOWN_MS) {
+      res.status(429).json({ error: 'Palaukite prieš atnaujindami dar kartą', retryAfterMs: DASHBOARD_REFRESH_COOLDOWN_MS - (now - last) });
+      return;
+    }
+    dashboardLastManualRefreshAt.set(companyId, now);
+    rollupInternalMetricsForCompany(companyId, todayDateStrForCompany(companyId));
+    rollupInternalMetricsForCompany(companyId, yesterdayDateStrForCompany(companyId));
+    if (companyCeiling(companyId).has('integrations.zadarma.use')) {
+      await syncZadarmaCallsForCompany(companyId);
+    }
+    res.json({ ok: true });
   }),
 );
 
@@ -4561,6 +4729,7 @@ app.post(
       res.status(409).json({ error: 'Šią užduotį jau kažkas paėmė' });
       return;
     }
+    broadcastToCompany(req.auth!.companyId, { type: 'planner_task_changed' }, originClientId(req));
     res.json({ ok: true });
   }),
 );
@@ -4587,6 +4756,7 @@ app.post(
       }
     }
     reassignTask(req.params.id, req.auth!.companyId, workerId, Date.now());
+    broadcastToCompany(req.auth!.companyId, { type: 'planner_task_changed' }, originClientId(req));
     res.json({ ok: true });
   }),
 );
@@ -4615,6 +4785,7 @@ app.post(
       return;
     }
     const updated = changeTaskStatus(req.params.id, req.auth!.companyId, status as PlannerTaskStatus, req.auth!.userId, typeof note === 'string' ? note : undefined, Date.now());
+    broadcastToCompany(req.auth!.companyId, { type: 'planner_task_changed' }, originClientId(req));
     res.json({ task: updated });
   }),
 );
@@ -4643,7 +4814,11 @@ app.post(
       return;
     }
     const isNewSend = recordTaskSend(req.params.id, req.auth!.companyId, actor.id, Date.now());
-    if (isNewSend) logPlannerSentNote(req, task, req.auth!.companyId);
+    if (isNewSend) {
+      logPlannerSentNote(req, task, req.auth!.companyId);
+      broadcastToCompany(req.auth!.companyId, { type: 'dashboard_metrics_changed' }, originClientId(req));
+      broadcastToCompany(req.auth!.companyId, { type: 'planner_task_changed' }, originClientId(req));
+    }
     const updated = getTaskById(req.params.id, req.auth!.companyId);
     res.json({
       task: updated && {
@@ -4681,6 +4856,7 @@ app.post(
       res.status(400).json({ error: 'Jūs dar nebuvote išsiuntę šio kvietimo' });
       return;
     }
+    broadcastToCompany(req.auth!.companyId, { type: 'planner_task_changed' }, originClientId(req));
     const updated = getTaskById(req.params.id, req.auth!.companyId);
     res.json({
       task: updated && {
@@ -4707,6 +4883,7 @@ app.post(
       return;
     }
     setTaskSchedule(req.params.id, req.auth!.companyId, scheduledDate, Date.now());
+    broadcastToCompany(req.auth!.companyId, { type: 'planner_task_changed' }, originClientId(req));
     res.json({ ok: true });
   }),
 );
@@ -5411,7 +5588,18 @@ function rowActionAttribution(req: Request): RowActionAttribution | null {
       realUserName: `${admin.firstName} ${admin.lastName}`.trim(),
     };
   }
-  return null;
+  // A real, non-impersonating owner/super_admin. Used to return null here
+  // (their own row/note/contact/company edits were invisible to
+  // worker_actions entirely) — changed for the Team Activity Dashboard,
+  // which reads this same table for "what did the whole company do," and
+  // an admin's own contribution shouldn't be a blind spot. restriction
+  // stays null (never sanitized, unchanged); only the missing attribution
+  // is added. Purely additive — every existing worker-only view of this
+  // data is unaffected, it will simply start also showing the admin's own
+  // rows.
+  const admin = getUserById(auth.userId);
+  if (!admin) return null;
+  return { restriction: null, actingUserId: admin.id, actingUserName: `${admin.firstName} ${admin.lastName}`.trim() };
 }
 
 // Live table sync (see realtime.ts's own doc comment) — the writer's own
@@ -5442,6 +5630,15 @@ function broadcastRowsSaved(rows: Row[], companyId: string, originId: string | n
   for (const [tableId, tableRows] of byTable) {
     broadcastToTable(tableId, companyId, { type: 'rows_upserted', tableId, rows: tableRows }, originId);
   }
+  // Team Activity Dashboard — any row save can plausibly have logged a
+  // note/contact/company_added action (see rowActionAttribution/
+  // detectWorkerActions), so every open dashboard view in this company
+  // refetches its (cheap, day-bounded) numbers. Firing even when nothing
+  // dashboard-relevant actually changed (a pure reorder, say) is harmless
+  // — the refetch is a few indexed range queries, not an external call —
+  // and far simpler/safer than threading "did anything get logged" back
+  // out of saveRow/saveRows just for this.
+  broadcastToCompany(companyId, { type: 'dashboard_metrics_changed' }, originId);
 }
 
 // LinkedIn Planner sync (server/src/linkedinPlanner/sync.ts) — reuses the
@@ -5492,6 +5689,7 @@ function logPlannerSentNote(req: Request, task: PlannerTask, companyId: string):
   };
   saveRow(updatedRow, companyId, rowActionAttribution(req));
   broadcastToTable(updatedRow.tableId, companyId, { type: 'rows_upserted', tableId: updatedRow.tableId, rows: [updatedRow] }, originClientId(req));
+  broadcastToCompany(companyId, { type: 'dashboard_metrics_changed' }, originClientId(req));
 }
 
 // Bulk save — the one endpoint that actually matters for real usage at
@@ -5574,6 +5772,7 @@ app.put(
     }
     saveRow(row, companyId, rowActionAttribution(req));
     broadcastToTable(row.tableId, companyId, { type: 'rows_upserted', tableId: row.tableId, rows: [row] }, originClientId(req));
+    broadcastToCompany(companyId, { type: 'dashboard_metrics_changed' }, originClientId(req));
     syncPlannerAfterRowsSaved([row], tables, companyId);
     res.json({ ok: true });
   }),
@@ -5878,6 +6077,11 @@ backfillNewPermissionKeyForExistingCompanies('linkedin_planner.execute');
 backfillNewPermissionKeyForExistingCompanies('linkedin_planner.view_all');
 backfillNewPermissionKeyForExistingCompanies('linkedin_planner.assign');
 backfillNewPermissionKeyForExistingCompanies('linkedin_planner.templates.edit');
+backfillNewPermissionKeyForExistingCompanies('dashboard.view_own');
+backfillNewPermissionKeyForExistingCompanies('dashboard.view_team');
+backfillNewPermissionKeyForExistingCompanies('dashboard.view_credits');
+backfillNewPermissionKeyForExistingCompanies('dashboard.settings.edit');
+backfillNewPermissionKeyForExistingCompanies('dashboard.integrations.diagnose');
 
 // Fixes every existing worker stuck at zero visible tabs (a real, reported
 // bug — see accounts/db.ts's own doc comment on this function and the two
@@ -6100,3 +6304,57 @@ setInterval(() => {
     console.error('[linkedin-planner] sync queue drain tick failed:', err);
   }
 }, PLANNER_SYNC_TICK_INTERVAL_MS);
+
+// Team Activity Dashboard — internal metrics (notes/contacts/companies
+// added/LinkedIn connections sent) for EVERY company, unconditionally (no
+// feature flag/permission gate like the LinkedIn scheduler above needs —
+// this reads this app's own already-existing tables, nothing external, so
+// there's no per-company key/grant to check before it's safe to run).
+// Refreshes TODAY (idempotent — a live dashboard read may have already
+// written a more current value moments ago; this just keeps it fresh even
+// if nobody's looking) and finalizes YESTERDAY (catches a company whose
+// dashboard nobody happened to load right around midnight — see
+// yesterdayDateStrForCompany's own doc comment). One company's failure is
+// caught and logged without aborting the rest of the tick, same isolation
+// principle as the LinkedIn scheduler loop above.
+const DASHBOARD_INTERNAL_ROLLUP_INTERVAL_MS = 10 * 60 * 1000;
+setInterval(() => {
+  for (const company of listCompanies()) {
+    try {
+      rollupInternalMetricsForCompany(company.id, todayDateStrForCompany(company.id));
+      rollupInternalMetricsForCompany(company.id, yesterdayDateStrForCompany(company.id));
+    } catch (err) {
+      console.error('[dashboard] internal metrics rollup failed for company', company.id, ':', err);
+    }
+  }
+}, DASHBOARD_INTERNAL_ROLLUP_INTERVAL_MS);
+
+// Team Activity Dashboard — Zadarma calls, external-API-backed so this
+// NEVER runs on a page load (see the plan's own "external metrics only
+// ever read from daily_metrics" rule) — only from this periodic tick.
+// companiesWithCallsAccess() mirrors companiesWithLinkedInAccess() above
+// exactly: a company only enters the loop if its OWN live permission
+// ceiling currently grants integrations.zadarma.use, checked fresh every
+// tick — and syncZadarmaCallsForCompany itself separately no-ops if that
+// company has no Zadarma key configured at all. One company-wide
+// (unfiltered) statistics call per company per tick keeps this
+// comfortably inside Zadarma's documented 10-req/minute cap regardless of
+// worker count — a 20-minute interval is far more headroom than that
+// alone requires, chosen for "close enough to real-time" rather than to
+// dodge the rate limit. Every lookup inside the loop is re-scoped to that
+// iteration's own `companyId` — never a key cached/reused across
+// companies — the same isolation precedent as every other per-company
+// background job in this file.
+const DASHBOARD_ZADARMA_SYNC_INTERVAL_MS = 20 * 60 * 1000;
+
+function companiesWithCallsAccess(): string[] {
+  return listCompanies()
+    .filter((c) => companyCeiling(c.id).has('integrations.zadarma.use'))
+    .map((c) => c.id);
+}
+
+setInterval(() => {
+  for (const companyId of companiesWithCallsAccess()) {
+    syncZadarmaCallsForCompany(companyId).catch((err) => console.error('[dashboard] Zadarma calls sync failed for company', companyId, ':', err));
+  }
+}, DASHBOARD_ZADARMA_SYNC_INTERVAL_MS);

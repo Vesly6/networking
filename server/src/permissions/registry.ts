@@ -68,6 +68,21 @@ export const PERMISSIONS = {
   // to share.
   'export.execute': 'Eksportuoti duomenis (CSV/XLSX)',
   'export.contacts': 'Eksportuoti su kontaktais (kontaktų/el. pašto duomenimis)',
+  // Team Activity Dashboard. `view_own` deliberately DOES get a checkbox
+  // in PERMISSION_GROUPS (app/src/utils/permissions.ts) even though it's
+  // on by default for every worker (see DEFAULT_WORKER_PERMISSION_KEYS) —
+  // linkedin_planner.view was made checkbox-less earlier this project and
+  // that turned into a real bug (an affected worker's grant could never
+  // be inspected or fixed via the UI, fixed twice server+client-side).
+  // Not repeating that mistake here.
+  'dashboard.view_own': 'Matyti savo aktyvumo statistiką',
+  'dashboard.view_team': 'Matyti visos komandos aktyvumo statistiką',
+  // Split from view_team: remaining enrichment credits are financially
+  // sensitive in a way plain activity counts aren't, per the account
+  // owner's own explicit request.
+  'dashboard.view_credits': 'Matyti likusius kreditus',
+  'dashboard.settings.edit': 'Keisti aktyvumo skydelio nustatymus',
+  'dashboard.integrations.diagnose': 'Tikrinti duomenų šaltinių būseną',
 } as const;
 
 export type PermissionKey = keyof typeof PERMISSIONS;

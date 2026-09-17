@@ -47,6 +47,12 @@ export const PERMISSIONS = {
   // materially more sensitive action than importing rows.
   'export.execute': 'Eksportuoti duomenis (CSV/XLSX)',
   'export.contacts': 'Eksportuoti su kontaktais (kontaktų/el. pašto duomenimis)',
+  // Team Activity Dashboard.
+  'dashboard.view_own': 'Matyti savo aktyvumo statistiką',
+  'dashboard.view_team': 'Matyti visos komandos aktyvumo statistiką',
+  'dashboard.view_credits': 'Matyti likusius kreditus',
+  'dashboard.settings.edit': 'Keisti aktyvumo skydelio nustatymus',
+  'dashboard.integrations.diagnose': 'Tikrinti duomenų šaltinių būseną',
 } as const;
 
 export type PermissionKey = keyof typeof PERMISSIONS;
@@ -101,6 +107,17 @@ export const PERMISSION_GROUPS: { title: string; keys: PermissionKey[] }[] = [
   { title: 'API raktai', keys: ['api_keys.view', 'api_keys.edit', 'api_keys.set_mode'] },
   { title: 'Administravimas', keys: ['workers.manage', 'tables.manage', 'backups.manage'] },
   { title: 'Eksportas', keys: ['export.execute', 'export.contacts'] },
+  {
+    title: 'Aktyvumo skydelis',
+    // Unlike linkedin_planner.view above, dashboard.view_own DOES get a
+    // real checkbox here even though it's also pre-checked by default on
+    // every new worker (DEFAULT_WORKER_PERMISSION_KEYS below) — that
+    // checkbox-less shortcut turned into a real bug for linkedin_planner.view
+    // (an affected worker's grant could never be inspected or fixed via the
+    // UI). Keeping every dashboard.* key independently visible/toggleable
+    // here avoids repeating that mistake.
+    keys: ['dashboard.view_own', 'dashboard.view_team', 'dashboard.view_credits', 'dashboard.settings.edit', 'dashboard.integrations.diagnose'],
+  },
 ];
 
 /** Pre-checked on a brand-new worker's create form (WorkersView.tsx) —
@@ -113,7 +130,14 @@ export const PERMISSION_GROUPS: { title: string; keys: PermissionKey[] }[] = [
  * every single time. Still just a form default, not a hardcoded grant —
  * the admin can uncheck either box before creating, and it never touches
  * an already-existing worker's own grants. */
-export const DEFAULT_WORKER_PERMISSION_KEYS: PermissionKey[] = ['linkedin_planner.view', 'linkedin_planner.execute'];
+export const DEFAULT_WORKER_PERMISSION_KEYS: PermissionKey[] = [
+  'linkedin_planner.view',
+  'linkedin_planner.execute',
+  // Every worker sees their OWN activity dashboard numbers by default —
+  // seeing teammates' numbers (dashboard.view_team) stays opt-in, per the
+  // account owner's own explicit "off by default" requirement.
+  'dashboard.view_own',
+];
 
 /** `permissionKeys` is undefined for a not-yet-loaded user (App.tsx's
  * !user guard already keeps most of the app from rendering before then) —

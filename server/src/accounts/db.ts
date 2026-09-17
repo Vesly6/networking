@@ -354,6 +354,18 @@ function migrate(database: Database.Database): void {
       // Column already exists — nothing to do.
     }
   }
+  // Team Activity Dashboard — every "today"/day-bucket computation (both
+  // the live-today internal-metrics path and the external-sync rollups)
+  // needs to bucket by THIS company's own day, not the server's UTC clock
+  // or a per-request browser offset (there's no request in a background
+  // sync tick to read one from). NULL = not yet set by this company's own
+  // admin; getCompanyTimezone() below falls back to a sane default rather
+  // than every call site needing its own null-check.
+  try {
+    database.exec(`ALTER TABLE companies ADD COLUMN timezone TEXT`);
+  } catch {
+    // Column already exists — nothing to do.
+  }
 }
 
 function getDb(): Database.Database {
@@ -402,6 +414,10 @@ export interface Company {
    * so blocking takes effect immediately for every one of that company's
    * users, including one already mid-session with a live token. */
   blockedAt: number | null;
+  /** Null until this company's own admin sets one (dashboard settings, a
+   * later phase) — see getCompanyTimezone() for the fallback default used
+   * everywhere this matters in the meantime. */
+  timezone: string | null;
 }
 
 interface CompanyRow {
@@ -410,6 +426,7 @@ interface CompanyRow {
   enabled_features: string;
   created_at: number;
   blocked_at: number | null;
+  timezone: string | null;
 }
 
 /** Parses a JSON array column, tolerating a NULL/empty/corrupted value
@@ -438,7 +455,23 @@ function companyFromRow(r: CompanyRow): Company {
     enabledFeatures: parseJsonArray(r.enabled_features),
     createdAt: r.created_at,
     blockedAt: r.blocked_at ?? null,
+    timezone: r.timezone ?? null,
   };
+}
+
+/** Default for every company that hasn't set its own timezone yet — this
+ * product's actual user base today, not a neutral "UTC" that would make a
+ * brand-new company's "today" bucket silently wrong from day one. Editable
+ * per company later (dashboard settings). */
+const DEFAULT_COMPANY_TIMEZONE = 'Europe/Vilnius';
+
+export function getCompanyTimezone(id: string): string {
+  const row = getDb().prepare(`SELECT timezone FROM companies WHERE id = ?`).get(id) as { timezone: string | null } | undefined;
+  return row?.timezone || DEFAULT_COMPANY_TIMEZONE;
+}
+
+export function setCompanyTimezone(id: string, timezone: string): void {
+  getDb().prepare(`UPDATE companies SET timezone = ? WHERE id = ?`).run(timezone, id);
 }
 
 export function getCompany(id: string): Company | null {
@@ -456,7 +489,7 @@ export function getCompany(id: string): Company | null {
  * now too, so there's no self-service moment for a feature to "just
  * appear" from anymore. */
 export function createCompany(name: string): Company {
-  const company: Company = { id: randomUUID(), name, enabledFeatures: [], createdAt: Date.now(), blockedAt: null };
+  const company: Company = { id: randomUUID(), name, enabledFeatures: [], createdAt: Date.now(), blockedAt: null, timezone: null };
   getDb()
     .prepare(`INSERT INTO companies (id, name, enabled_features, created_at) VALUES (?, ?, '[]', ?)`)
     .run(company.id, company.name, company.createdAt);
