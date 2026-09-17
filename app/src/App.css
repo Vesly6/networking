@@ -4079,9 +4079,16 @@ tr.row-drop-end td {
 
 .workspace-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
+  gap: 1rem;
   margin-bottom: 1.5rem;
+  /* The brand logo and the actions group are two independent-width
+     things sharing one row — letting the row itself wrap (in addition to
+     .workspace-header-actions wrapping internally, below) means a very
+     narrow desktop window degrades to "brand, then actions underneath"
+     before either one has to squish. */
+  flex-wrap: wrap;
 }
 
 .workspace-header h2 {
@@ -4089,10 +4096,31 @@ tr.row-drop-end td {
   font-size: 1.3rem;
 }
 
+/* Wraps onto as many rows as needed at ANY width, not just the ≤640px
+   breakpoint below — real, reported bug: this list keeps growing (every
+   button here — Darbuotojai/Naujienos/Pamokos/Duomenys/Integracijos/
+   Importų istorija — is independently gated by its own company feature
+   toggle in the admin panel, so a company with several enabled at once
+   already reaches 7-9 buttons), and a plain nowrap row either squished
+   every button's own padding/text to fit or silently overflowed past
+   .workspace-view's 960px max-width. flex-wrap here means it instead
+   settles into a clean second (or third) row, buttons kept at their
+   natural, un-squished size throughout. justify-content: flex-end keeps
+   a short row flush against the brand's side rather than drifting toward
+   the middle; white-space: nowrap on each button stops an individual
+   button's own label from wrapping mid-word now that wrapping happens at
+   the container level instead. */
 .workspace-header-actions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 0.5rem;
+  max-width: 100%;
+}
+
+.workspace-header-actions button {
+  white-space: nowrap;
 }
 
 @media (max-width: 640px) {
@@ -4108,11 +4136,17 @@ tr.row-drop-end td {
     gap: 0.75rem;
   }
   .workspace-header-actions {
-    flex-wrap: wrap;
+    justify-content: flex-start;
   }
   .workspace-header-actions button {
     flex: 1 1 auto;
     min-width: 8em;
+    /* A button's own label CAN wrap here (unlike the desktop nowrap rule
+       above) — at flex: 1 1 auto equal widths, a long label like
+       "Importų istorija" sharing a row with "+ Nauja lentelė" can end up
+       narrower than its own natural text width, and forcing nowrap there
+       would just clip/overflow it instead of wrapping to a second line. */
+    white-space: normal;
   }
 }
 
