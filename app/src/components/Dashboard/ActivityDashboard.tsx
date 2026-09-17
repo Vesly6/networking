@@ -3,8 +3,13 @@ import { FileText, Users, Building2, Phone, Send, RefreshCw, ArrowUp, ArrowDown 
 import { useDashboardStore } from '../../store/useDashboardStore';
 import { DASHBOARD_METRICS, type DashboardMetric, type DashboardPeriod } from '../../utils/dashboardApi';
 
+// 'Komentarai', not 'Pastabos' — matches this app's own already-established
+// term for the note-type column everywhere else (permissions.ts's
+// notes.delete_edit label is literally "Trinti/redaguoti komentarus", the
+// "Kontaktai ir komentarai" permission group), so the dashboard doesn't
+// introduce a second, inconsistent name for the same thing.
 const METRIC_LABELS: Record<DashboardMetric, string> = {
-  notes: 'Pastabos',
+  notes: 'Komentarai',
   contacts: 'Kontaktai',
   companies_added: 'Pridėta įmonių',
   calls: 'Skambučiai',
