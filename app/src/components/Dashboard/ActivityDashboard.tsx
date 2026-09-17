@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { FileText, Users, Phone, Send, Mail, RefreshCw, ArrowUp, ArrowDown, ChevronDown, ChevronUp } from 'lucide-react';
+import { FileText, Users, Phone, Send, Mail, MailCheck, Percent, RefreshCw, ArrowUp, ArrowDown, ChevronDown, ChevronUp, ChevronRight } from 'lucide-react';
 import { useDashboardStore } from '../../store/useDashboardStore';
 import { useAuthStore } from '../../store/useAuthStore';
 import { can } from '../../utils/permissions';
@@ -30,6 +30,23 @@ const METRIC_ICONS: Record<DashboardMetric, typeof FileText> = {
   linkedin_sent: Send,
 };
 
+// A distinct accent per card — on explicit request ("иконки... пометить с
+// каким-то цветом, думаю было бы более интерактивно"). Fixed hex values,
+// not theme tokens — same reasoning as the LinkedIn badge colors and the
+// "hot lead" flag elsewhere in this app's CSS: these are meant to read as
+// the same distinct color in both light and dark mode, not shift with the
+// theme. linkedin_sent reuses this session's own established LinkedIn
+// brand blue (#0a66c2) for consistency with the LinkedIn Planner's own
+// badges rather than inventing a second "LinkedIn color."
+const METRIC_COLORS: Record<DashboardMetric, string> = {
+  notes: '#2f6fed',
+  contacts: '#1a9e6b',
+  calls: '#e08a2c',
+  linkedin_sent: '#0a66c2',
+};
+
+const EMAIL_CARD_COLOR = '#8b5cf6';
+
 const PERIOD_LABELS: Record<DashboardPeriod, string> = {
   today: 'Šiandien',
   yesterday: 'Vakar',
@@ -39,7 +56,14 @@ const PERIOD_LABELS: Record<DashboardPeriod, string> = {
   custom: 'Pasirinktas laikotarpis',
 };
 
-const PERIOD_OPTIONS: DashboardPeriod[] = ['today', 'yesterday', '7d', '30d', 'month'];
+const PERIOD_OPTIONS: DashboardPeriod[] = ['today', 'yesterday', '7d', '30d', 'month', 'custom'];
+
+function todayStr(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+function daysAgoStr(days: number): string {
+  return new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
+}
 
 /** "Обновлено N minučių atgal" — deliberately not a generic date-fns-style
  * library dependency for one label; this app already avoids heavy date
@@ -69,6 +93,40 @@ function ChangeIndicator({ current, previous }: { current: number; previous: num
       <Icon className="icon" size={12} />
       {Math.abs(pct)}%
     </span>
+  );
+}
+
+/** A colored, tinted icon chip — the "more interactive"-looking card
+ * accent requested. `color-mix()` derives the tinted background from the
+ * same solid color as the icon itself, so light/dark theme (whatever
+ * `--bg`/`--border` currently are) is blended in automatically instead of
+ * needing separate light/dark hex pairs per metric. */
+function MetricIcon({ Icon, color }: { Icon: typeof FileText; color: string }) {
+  return (
+    <span className="activity-dashboard-icon" style={{ color, backgroundColor: `color-mix(in srgb, ${color} 16%, var(--bg))` }}>
+      <Icon className="icon" size={15} />
+    </span>
+  );
+}
+
+interface MetricCardProps {
+  icon: typeof FileText;
+  color: string;
+  label: string;
+  value: number | string;
+  change?: { current: number; previous: number };
+}
+
+function MetricCard({ icon, color, label, value, change }: MetricCardProps) {
+  return (
+    <div className="activity-dashboard-card" data-tutorial-id="dashboard-metric-card">
+      <MetricIcon Icon={icon} color={color} />
+      <div className="activity-dashboard-card-body">
+        <div className="activity-dashboard-card-label">{label}</div>
+        <div className="activity-dashboard-card-value">{value}</div>
+        {change && <ChangeIndicator current={change.current} previous={change.previous} />}
+      </div>
+    </div>
   );
 }
 
@@ -115,11 +173,7 @@ function SourceLogToggle({ source }: { source: 'instantly' | 'zadarma' }) {
       {open && (
         <div className="activity-dashboard-sync-log-body">
           {loading && <div className="activity-dashboard-loading">Kraunama…</div>}
-          {!loading && lastError && (
-            <div className="activity-dashboard-error">
-              Paskutinė sinchronizacija nepavyko: {lastError}
-            </div>
-          )}
+          {!loading && lastError && <div className="activity-dashboard-error">Paskutinė sinchronizacija nepavyko: {lastError}</div>}
           {!loading && entry === null && !lastError && <div className="activity-dashboard-empty">Dar nesinchronizuota — nėra ką rodyti.</div>}
           {!loading && entry && (
             <>
@@ -155,15 +209,78 @@ export function ActivityDashboard() {
   const forceRefresh = useDashboardStore((s) => s.forceRefresh);
   const canDiagnose = useAuthStore((s) => can(s.user?.permissionKeys, 'dashboard.integrations.diagnose'));
 
+  // A specific-date-to-specific-date (or specific-year-to-specific-year,
+  // since a plain <input type="date"> already lets you pick any year, not
+  // just navigate day-by-day) range — on explicit request, alongside the
+  // existing preset buttons. Local draft state so partially-typed dates
+  // (only "from" picked yet) don't fire a request with a missing "to."
+  const [customFrom, setCustomFrom] = useState(daysAgoStr(30));
+  const [customTo, setCustomTo] = useState(todayStr());
+
+  // Collapse/expand the whole block — on explicit request ("чтобы можно
+  // было бы сворачивать... когда мне это захочется увидеть"). Persisted
+  // per-browser (localStorage) — a per-viewer convenience, not real state
+  // (see CLAUDE.md's own established "localStorage is fine for a
+  // remembered collapsed section" convention), so it survives a reload
+  // but never needs a server round trip. Still loads its own data in the
+  // background even while collapsed (below), so expanding it later shows
+  // fresh numbers immediately instead of a loading flash.
+  const [collapsed, setCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem('activity-dashboard-collapsed') === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const toggleCollapsed = () => {
+    setCollapsed((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('activity-dashboard-collapsed', String(next));
+      } catch {
+        // Private window / blocked storage — collapsing still works for
+        // this session, it just won't be remembered next visit.
+      }
+      return next;
+    });
+  };
+
   useEffect(() => {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const handlePeriodChange = (next: DashboardPeriod) => {
+    if (next === 'custom') {
+      setPeriod('custom', { from: customFrom, to: customTo });
+    } else {
+      setPeriod(next);
+    }
+  };
+
+  const applyCustomRange = (from: string, to: string) => {
+    setCustomFrom(from);
+    setCustomTo(to);
+    if (from && to) setPeriod('custom', { from, to });
+  };
+
+// Reused by every branch below (loading/error/loaded) so the collapse
+  // toggle is always there regardless of load state — collapsing shouldn't
+  // require the data to have finished loading first.
+  const collapseHeader = (
+    <div className="activity-dashboard-header">
+      <button type="button" className="activity-dashboard-collapse-toggle" onClick={toggleCollapsed}>
+        {collapsed ? <ChevronRight className="icon" size={16} /> : <ChevronDown className="icon" size={16} />}
+        <h3>Komandos aktyvumas</h3>
+      </button>
+    </div>
+  );
+
   if (!ready) {
     return (
       <div className="activity-dashboard" data-tutorial-id="activity-dashboard">
-        <div className="activity-dashboard-loading">Kraunama aktyvumo statistika…</div>
+        {collapseHeader}
+        {!collapsed && <div className="activity-dashboard-loading">Kraunama aktyvumo statistika…</div>}
       </div>
     );
   }
@@ -171,7 +288,8 @@ export function ActivityDashboard() {
   if (error && !summary) {
     return (
       <div className="activity-dashboard" data-tutorial-id="activity-dashboard">
-        <div className="activity-dashboard-error">{error}</div>
+        {collapseHeader}
+        {!collapsed && <div className="activity-dashboard-error">{error}</div>}
       </div>
     );
   }
@@ -182,106 +300,119 @@ export function ActivityDashboard() {
   const totals = showTeam ? summary.team! : summary.own;
   const previousTotals = showTeam ? summary.teamPrevious! : summary.ownPrevious;
   const hasAnyActivity = DASHBOARD_METRICS.some((m) => totals[m] > 0);
+  const hasEmail = showTeam && summary.email && summary.emailPrevious;
 
   return (
     <div className="activity-dashboard" data-tutorial-id="activity-dashboard">
       <div className="activity-dashboard-header">
-        <h3>Komandos aktyvumas</h3>
-        <div className="activity-dashboard-controls" data-tutorial-id="dashboard-period-selector">
-          <select value={period} onChange={(e) => setPeriod(e.target.value as DashboardPeriod)}>
-            {PERIOD_OPTIONS.map((p) => (
-              <option key={p} value={p}>
-                {PERIOD_LABELS[p]}
-              </option>
-            ))}
-          </select>
-          <span className="activity-dashboard-updated">{timeAgoLabel(summary.updatedAt)}</span>
-          <button type="button" onClick={() => void forceRefresh()} disabled={refreshing} title="Priverstinai atnaujinti">
-            <RefreshCw className={`icon${refreshing ? ' activity-dashboard-spinning' : ''}`} size={14} />
-            Atnaujinti
-          </button>
-        </div>
+        <button type="button" className="activity-dashboard-collapse-toggle" onClick={toggleCollapsed}>
+          {collapsed ? <ChevronRight className="icon" size={16} /> : <ChevronDown className="icon" size={16} />}
+          <h3>Komandos aktyvumas</h3>
+        </button>
+        {!collapsed && (
+          <div className="activity-dashboard-controls" data-tutorial-id="dashboard-period-selector">
+            <select value={period} onChange={(e) => handlePeriodChange(e.target.value as DashboardPeriod)}>
+              {PERIOD_OPTIONS.map((p) => (
+                <option key={p} value={p}>
+                  {PERIOD_LABELS[p]}
+                </option>
+              ))}
+            </select>
+            {period === 'custom' && (
+              <span className="activity-dashboard-custom-range">
+                <input type="date" value={customFrom} max={customTo} onChange={(e) => applyCustomRange(e.target.value, customTo)} />
+                <span>—</span>
+                <input type="date" value={customTo} min={customFrom} max={todayStr()} onChange={(e) => applyCustomRange(customFrom, e.target.value)} />
+              </span>
+            )}
+            <span className="activity-dashboard-updated">{timeAgoLabel(summary.updatedAt)}</span>
+            <button type="button" onClick={() => void forceRefresh()} disabled={refreshing} title="Priverstinai atnaujinti">
+              <RefreshCw className={`icon${refreshing ? ' activity-dashboard-spinning' : ''}`} size={14} />
+              Atnaujinti
+            </button>
+          </div>
+        )}
       </div>
 
-      {error && <div className="activity-dashboard-error activity-dashboard-error-inline">{error}</div>}
+      {!collapsed && (
+        <>
+          {error && <div className="activity-dashboard-error activity-dashboard-error-inline">{error}</div>}
 
-      {!hasAnyActivity ? (
-        <div className="activity-dashboard-empty">Šiuo laikotarpiu veiklos dar nėra.</div>
-      ) : (
-        <div className="activity-dashboard-cards">
-          {DASHBOARD_METRICS.map((metric) => {
-            const Icon = METRIC_ICONS[metric];
-            return (
-              <div className="activity-dashboard-card" key={metric} data-tutorial-id="dashboard-metric-card">
-                <div className="activity-dashboard-card-label">
-                  <Icon className="icon" size={14} />
-                  {METRIC_LABELS[metric]}
-                </div>
-                <div className="activity-dashboard-card-value">{totals[metric]}</div>
-                <ChangeIndicator current={totals[metric]} previous={previousTotals[metric]} />
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {showTeam && summary.email && summary.emailPrevious && (
-        <div className="activity-dashboard-cards activity-dashboard-cards-secondary">
-          <div className="activity-dashboard-card" data-tutorial-id="dashboard-metric-card">
-            <div className="activity-dashboard-card-label">
-              <Mail className="icon" size={14} />
-              Laiškai išsiųsta
-            </div>
-            <div className="activity-dashboard-card-value">{summary.email.sent}</div>
-            <ChangeIndicator current={summary.email.sent} previous={summary.emailPrevious.sent} />
-          </div>
-          <div className="activity-dashboard-card" data-tutorial-id="dashboard-metric-card">
-            <div className="activity-dashboard-card-label">
-              <Mail className="icon" size={14} />
-              Gauta atsakymų
-            </div>
-            <div className="activity-dashboard-card-value">{summary.email.replies}</div>
-            <ChangeIndicator current={summary.email.replies} previous={summary.emailPrevious.replies} />
-          </div>
-          <div className="activity-dashboard-card" data-tutorial-id="dashboard-metric-card">
-            <div className="activity-dashboard-card-label">
-              <Mail className="icon" size={14} />
-              Atsakymų rodiklis
-            </div>
-            <div className="activity-dashboard-card-value">
-              {summary.email.sent > 0 ? `${Math.round((summary.email.replies / summary.email.sent) * 1000) / 10}%` : '—'}
-            </div>
-          </div>
-          {canDiagnose && <SourceLogToggle source="instantly" />}
-        </div>
-      )}
-
-      {showTeam && workers && workers.length > 0 && (
-        <div className="activity-dashboard-workers">
-          <h4>Pagal darbuotoją</h4>
-          <div className="activity-dashboard-table-wrap">
-            <table className="activity-dashboard-table" data-tutorial-id="dashboard-employee-table">
-              <thead>
-                <tr>
-                  <th>Darbuotojas</th>
-                  {DASHBOARD_METRICS.map((m) => (
-                    <th key={m}>{METRIC_LABELS[m]}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {workers.map((w) => (
-                  <tr key={w.workerId}>
-                    <td>{w.workerName}</td>
-                    {DASHBOARD_METRICS.map((m) => (
-                      <td key={m}>{w.metrics[m]}</td>
-                    ))}
-                  </tr>
+          {!hasAnyActivity && !hasEmail ? (
+            <div className="activity-dashboard-empty">Šiuo laikotarpiu veiklos dar nėra.</div>
+          ) : (
+            <>
+              <div className="activity-dashboard-cards">
+                {DASHBOARD_METRICS.map((metric) => (
+                  <MetricCard
+                    key={metric}
+                    icon={METRIC_ICONS[metric]}
+                    color={METRIC_COLORS[metric]}
+                    label={METRIC_LABELS[metric]}
+                    value={totals[metric]}
+                    change={{ current: totals[metric], previous: previousTotals[metric] }}
+                  />
                 ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
+              </div>
+              {hasEmail && (
+                <div className="activity-dashboard-section">
+                  <h4>El. paštas</h4>
+                  <div className="activity-dashboard-cards">
+                    <MetricCard
+                      icon={Mail}
+                      color={EMAIL_CARD_COLOR}
+                      label="Laiškai išsiųsta"
+                      value={summary.email!.sent}
+                      change={{ current: summary.email!.sent, previous: summary.emailPrevious!.sent }}
+                    />
+                    <MetricCard
+                      icon={MailCheck}
+                      color={EMAIL_CARD_COLOR}
+                      label="Gauta atsakymų"
+                      value={summary.email!.replies}
+                      change={{ current: summary.email!.replies, previous: summary.emailPrevious!.replies }}
+                    />
+                    <MetricCard
+                      icon={Percent}
+                      color={EMAIL_CARD_COLOR}
+                      label="Atsakymų rodiklis"
+                      value={summary.email!.sent > 0 ? `${Math.round((summary.email!.replies / summary.email!.sent) * 1000) / 10}%` : '—'}
+                    />
+                  </div>
+                  {canDiagnose && <SourceLogToggle source="instantly" />}
+                </div>
+              )}
+            </>
+          )}
+
+          {showTeam && workers && workers.length > 0 && (
+            <div className="activity-dashboard-workers">
+              <h4>Pagal darbuotoją</h4>
+              <div className="activity-dashboard-table-wrap">
+                <table className="activity-dashboard-table" data-tutorial-id="dashboard-employee-table">
+                  <thead>
+                    <tr>
+                      <th>Darbuotojas</th>
+                      {DASHBOARD_METRICS.map((m) => (
+                        <th key={m}>{METRIC_LABELS[m]}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {workers.map((w) => (
+                      <tr key={w.workerId}>
+                        <td>{w.workerName}</td>
+                        {DASHBOARD_METRICS.map((m) => (
+                          <td key={m}>{w.metrics[m]}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
