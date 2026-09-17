@@ -21,6 +21,11 @@ export type DashboardMetric = (typeof DASHBOARD_METRICS)[number];
 
 export type MetricTotals = Record<DashboardMetric, number>;
 
+export interface EmailStats {
+  sent: number;
+  replies: number;
+}
+
 export interface DashboardSummary {
   period: { from: string; to: string };
   previousPeriod: { from: string; to: string };
@@ -28,6 +33,11 @@ export interface DashboardSummary {
   ownPrevious: MetricTotals;
   team: MetricTotals | null;
   teamPrevious: MetricTotals | null;
+  /** Company-wide only — see server/src/dashboard/externalSync.ts's own
+   * doc comment for why there's no per-worker split for email. Null
+   * exactly when `team` is (same canViewTeam gate). */
+  email: EmailStats | null;
+  emailPrevious: EmailStats | null;
   canViewTeam: boolean;
   /** Epoch ms of the OLDEST successful sync across every data source this
    * company has ever run — what "Обновлено N minučių atgal" reads. Null
@@ -60,4 +70,22 @@ export function fetchDashboardWorkers(period: DashboardPeriod, custom?: { from: 
 
 export function refreshDashboard() {
   return localApiRequest<{ ok: true }>('/api/dashboard/refresh', { method: 'POST' });
+}
+
+export interface DashboardSyncLogEntry {
+  companyId: string;
+  source: string;
+  requestedAt: number;
+  requestParams: unknown;
+  rawResponse: unknown;
+}
+
+/** The account owner's own explicit "let me see how this looks from the
+ * real side" request — the exact params/raw response the last background
+ * sync got back from the provider, for cross-checking a computed number
+ * against the provider's own dashboard. `source` is an internal id
+ * ('instantly'/'zadarma'), never shown to the user as such — see
+ * ActivityDashboard.tsx's own generic button label. */
+export function fetchDashboardSyncLog(source: 'instantly' | 'zadarma') {
+  return localApiRequest<{ entry: DashboardSyncLogEntry | null; lastError: string | null }>(`/api/dashboard/sync-log/${source}`);
 }

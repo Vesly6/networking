@@ -268,11 +268,13 @@ import {
   resolvePeriodRange,
   previousPeriodRange,
   summarizeMetrics,
+  summarizeEmailStats,
   oldestSuccessfulSyncAt,
   getWorkerRows,
   type DashboardPeriod,
 } from './dashboard/aggregate.js';
-import { syncZadarmaCallsForCompany } from './dashboard/externalSync.js';
+import { syncZadarmaCallsForCompany, syncInstantlyEmailStatsForCompany } from './dashboard/externalSync.js';
+import { getSyncLog as getDashboardSyncLog, getSyncState as getDashboardSyncState } from './dashboard/db.js';
 
 const PORT = Number(process.env.PORT) || 4000;
 // Binds 127.0.0.1 by default — deliberately not reachable from the local
@@ -2350,6 +2352,12 @@ app.get(
     const ownPrevious = summarizeMetrics(companyId, prevRange, viewer.id);
     const team = canViewTeam ? summarizeMetrics(companyId, range, null) : null;
     const teamPrevious = canViewTeam ? summarizeMetrics(companyId, prevRange, null) : null;
+    // Email stats are company-wide only (no per-worker split — see
+    // externalSync.ts's syncInstantlyEmailStatsForCompany doc comment), so
+    // they ride the same canViewTeam gate as the team totals rather than
+    // ever appearing in the personal "own" numbers.
+    const email = canViewTeam ? summarizeEmailStats(companyId, range) : null;
+    const emailPrevious = canViewTeam ? summarizeEmailStats(companyId, prevRange) : null;
     res.json({
       period: range,
       previousPeriod: prevRange,
@@ -2357,6 +2365,8 @@ app.get(
       ownPrevious,
       team,
       teamPrevious,
+      email,
+      emailPrevious,
       canViewTeam,
       updatedAt: oldestSuccessfulSyncAt(companyId),
     });
@@ -2402,7 +2412,33 @@ app.post(
     if (companyCeiling(companyId).has('integrations.zadarma.use')) {
       await syncZadarmaCallsForCompany(companyId);
     }
+    if (companyCeiling(companyId).has('integrations.instantly.use')) {
+      await syncInstantlyEmailStatsForCompany(companyId);
+    }
     res.json({ ok: true });
+  }),
+);
+
+// The account owner's own explicit request — "logs" to see exactly how
+// this looks from the real (provider's own) side, not just a computed
+// number they have to trust blind. Returns the LAST real request params +
+// raw response body Instantly's own /campaigns/analytics/daily returned
+// (see externalSync.ts's setSyncLog call site) — gated by the same
+// diagnose permission the later full diagnostics screen will use, since
+// this is exactly that screen's kind of information, just shipped early
+// for one provider.
+app.get(
+  '/api/dashboard/sync-log/:source',
+  requireDashboardPermission('dashboard.integrations.diagnose'),
+  asyncHandler(async (req, res) => {
+    const source = req.params.source;
+    if (source !== 'instantly' && source !== 'zadarma') {
+      res.status(400).json({ error: 'Invalid "source"' });
+      return;
+    }
+    const entry = getDashboardSyncLog(req.auth!.companyId, source);
+    const state = getDashboardSyncState(req.auth!.companyId, source);
+    res.json({ entry, lastError: state?.lastError ?? null });
   }),
 );
 
@@ -6358,3 +6394,26 @@ setInterval(() => {
     syncZadarmaCallsForCompany(companyId).catch((err) => console.error('[dashboard] Zadarma calls sync failed for company', companyId, ':', err));
   }
 }, DASHBOARD_ZADARMA_SYNC_INTERVAL_MS);
+
+// Team Activity Dashboard — Instantly email stats (sent/replies), same
+// external-API-backed/tick-only rule as Zadarma above. One account-wide
+// /campaigns/analytics/daily call per company per tick refills a rolling
+// 30-day window (see externalSync.ts's own INSTANTLY_SYNC_WINDOW_DAYS doc
+// comment) — no per-campaign fan-out, so this stays a single request
+// regardless of how many campaigns a company runs. 30 minutes is well
+// clear of Instantly's own account-wide budget (documented elsewhere in
+// this file as 20 req/min, already shared with the Unibox/reply-sync
+// paths) for a single extra call per company.
+const DASHBOARD_INSTANTLY_SYNC_INTERVAL_MS = 30 * 60 * 1000;
+
+function companiesWithInstantlyAccess(): string[] {
+  return listCompanies()
+    .filter((c) => companyCeiling(c.id).has('integrations.instantly.use'))
+    .map((c) => c.id);
+}
+
+setInterval(() => {
+  for (const companyId of companiesWithInstantlyAccess()) {
+    syncInstantlyEmailStatsForCompany(companyId).catch((err) => console.error('[dashboard] Instantly email stats sync failed for company', companyId, ':', err));
+  }
+}, DASHBOARD_INSTANTLY_SYNC_INTERVAL_MS);

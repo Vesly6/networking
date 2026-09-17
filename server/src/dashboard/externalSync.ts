@@ -1,7 +1,8 @@
 import { getCompanyIntegrations, getCompanyTimezone, listWorkers, getCompanySuperAdmin } from '../accounts/db.js';
 import { getStatistics } from '../zadarma.js';
-import { upsertDailyMetrics, setSyncState } from './db.js';
-import { todayDateStrForCompany } from './aggregate.js';
+import { getCampaignAnalyticsDaily } from '../instantly.js';
+import { upsertDailyMetrics, setSyncState, setSyncLog } from './db.js';
+import { todayDateStrForCompany, addCalendarDays } from './aggregate.js';
 
 /** "YYYY-MM-DD HH:MM:SS" in an arbitrary IANA zone — the exact literal
  * wall-clock string format getStatistics()/Zadarma's own API expects (see
@@ -71,5 +72,59 @@ export async function syncZadarmaCallsForCompany(companyId: string): Promise<voi
     setSyncState(companyId, 'zadarma', { ok: true });
   } catch (err) {
     setSyncState(companyId, 'zadarma', { ok: false, error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+// How many trailing days get refreshed on every sync tick — one API call
+// (Instantly's own /campaigns/analytics/daily, already broken down per day
+// account-wide, no per-campaign fan-out needed) refills this whole window
+// every time, so the dashboard's 7d/30d/month periods are always backed by
+// real, already-bucketed daily numbers without needing 30 separate calls.
+// Bounded, not "since account creation," for the same reason every other
+// backfill window in this app is bounded (see useCallsStore.ts's own
+// BACKFILL_DEFAULT_DAYS) — a custom range older than this simply won't
+// have synced data yet, an accepted MVP scope cut.
+const INSTANTLY_SYNC_WINDOW_DAYS = 30;
+
+/** Company-wide only, no per-worker split — an explicit, deliberate scope
+ * decision (see the account owner's own reasoning): Instantly campaign
+ * sends fire automatically from Instantly's own sequence engine, never
+ * from a button inside IRMS, so there is no real "which worker did this"
+ * signal to attribute email activity to, unlike calls (SIP extension) or
+ * LinkedIn (a real send button). Only synced in the company's default
+ * Shared key mode — Individual mode would mean each worker's own separate
+ * Instantly account/workspace, and summing those into one "company" total
+ * is exactly the added complexity the account owner asked to skip for
+ * now ("просто общую статистику того что происходит в инстантли
+ * акаунте"). */
+export async function syncInstantlyEmailStatsForCompany(companyId: string): Promise<void> {
+  const integrations = getCompanyIntegrations(companyId);
+  if (!integrations?.instantlyApiKey) return; // not configured — nothing to sync, not an error
+  if ((integrations.instantlyMode ?? 'shared') !== 'shared') return; // Individual mode — see doc comment above
+
+  const today = todayDateStrForCompany(companyId);
+  const from = addCalendarDays(today, -(INSTANTLY_SYNC_WINDOW_DAYS - 1));
+  const params = { start_date: from, end_date: today };
+
+  try {
+    const days = await getCampaignAnalyticsDaily(params, integrations.instantlyApiKey);
+    // The account owner's own explicit request — a way to cross-check a
+    // computed dashboard number against exactly what Instantly's API
+    // returned for the identical request, not just trust it blind.
+    setSyncLog(companyId, 'instantly', params, days);
+
+    const entries: { companyId: string; workerId: null; metric: 'emails_sent' | 'email_replies'; date: string; value: number }[] = [];
+    for (const day of days) {
+      entries.push({ companyId, workerId: null, metric: 'emails_sent', date: day.date, value: day.sent });
+      // unique_replies (distinct leads who replied), not the raw `replies`
+      // count — a reply rate should read as "what fraction of the people
+      // I emailed wrote back," not be inflated by one lead replying twice
+      // in the same thread.
+      entries.push({ companyId, workerId: null, metric: 'email_replies', date: day.date, value: day.unique_replies });
+    }
+    upsertDailyMetrics(entries);
+    setSyncState(companyId, 'instantly', { ok: true });
+  } catch (err) {
+    setSyncState(companyId, 'instantly', { ok: false, error: err instanceof Error ? err.message : String(err) });
   }
 }

@@ -4254,6 +4254,53 @@ tr.row-drop-end td {
   line-height: 1.1;
 }
 
+/* Email (Instantly) stats — a second, distinct card row: company-wide
+   only (no per-worker split), so keeping it visually separate from the
+   main per-metric row avoids implying these are also personal numbers. */
+.activity-dashboard-cards-secondary {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px dashed var(--border);
+  position: relative;
+}
+
+.activity-dashboard-sync-log {
+  grid-column: 1 / -1;
+}
+.activity-dashboard-sync-log-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  padding: 0.2rem 0;
+  cursor: pointer;
+}
+.activity-dashboard-sync-log-toggle:hover {
+  color: var(--text);
+}
+.activity-dashboard-sync-log-body {
+  margin-top: 0.4rem;
+}
+.activity-dashboard-sync-log-meta {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-top: 0.5rem;
+}
+.activity-dashboard-sync-log-json {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.5rem 0.65rem;
+  font-size: 0.72rem;
+  overflow-x: auto;
+  max-height: 240px;
+  overflow-y: auto;
+  white-space: pre;
+}
+
 .activity-dashboard-change {
   display: inline-flex;
   align-items: center;

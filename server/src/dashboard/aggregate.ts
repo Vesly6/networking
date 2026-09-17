@@ -218,6 +218,26 @@ export function summarizeMetrics(companyId: string, range: DateRange, workerId: 
   return totals;
 }
 
+export interface EmailStats {
+  sent: number;
+  replies: number;
+}
+
+/** Company-wide only (workerId always null — see externalSync.ts's
+ * syncInstantlyEmailStatsForCompany doc comment for why there's no
+ * per-worker split for email). Never live-refreshed here — external data
+ * only ever reflects the last background sync, same rule as calls. */
+export function summarizeEmailStats(companyId: string, range: DateRange): EmailStats {
+  const rows = getMetricsForRange(companyId, { workerId: null, metrics: ['emails_sent', 'email_replies'], from: range.from, to: range.to });
+  let sent = 0;
+  let replies = 0;
+  for (const row of rows) {
+    if (row.metric === 'emails_sent') sent += row.value;
+    else if (row.metric === 'email_replies') replies += row.value;
+  }
+  return { sent, replies };
+}
+
 /** The single "Обновлено N minučių atgal" freshness label — the OLDEST
  * successful sync across every source this company has ever run (internal
  * rollup + Zadarma, later Apollo/Instantly), not just one of them. A

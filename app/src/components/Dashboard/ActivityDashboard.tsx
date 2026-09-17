@@ -1,7 +1,9 @@
-import { useEffect } from 'react';
-import { FileText, Users, Phone, Send, RefreshCw, ArrowUp, ArrowDown } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { FileText, Users, Phone, Send, Mail, RefreshCw, ArrowUp, ArrowDown, ChevronDown, ChevronUp } from 'lucide-react';
 import { useDashboardStore } from '../../store/useDashboardStore';
-import { DASHBOARD_METRICS, type DashboardMetric, type DashboardPeriod } from '../../utils/dashboardApi';
+import { useAuthStore } from '../../store/useAuthStore';
+import { can } from '../../utils/permissions';
+import { DASHBOARD_METRICS, fetchDashboardSyncLog, type DashboardMetric, type DashboardPeriod, type DashboardSyncLogEntry } from '../../utils/dashboardApi';
 
 // 'Komentarai', not 'Pastabos' — matches this app's own already-established
 // term for the note-type column everywhere else (permissions.ts's
@@ -70,6 +72,70 @@ function ChangeIndicator({ current, previous }: { current: number; previous: num
   );
 }
 
+/** "Rodyti šaltinio duomenis" — the account owner's own explicit "let me
+ * see how this looks from the real side" request: expands to the exact
+ * request params + raw response body the last background sync got back,
+ * so a computed number here can be cross-checked against the provider's
+ * own dashboard for the identical range. Deliberately generic wording
+ * ("šaltinis"/source), not the provider's own name — matches this
+ * dashboard's existing convention of functional, not brand, labels.
+ * Follows WebhookLogPanel.tsx's existing expand-to-see-raw-JSON pattern
+ * rather than inventing a new one. */
+function SourceLogToggle({ source }: { source: 'instantly' | 'zadarma' }) {
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [entry, setEntry] = useState<DashboardSyncLogEntry | null | undefined>(undefined);
+  const [lastError, setLastError] = useState<string | null>(null);
+
+  const toggle = async () => {
+    if (open) {
+      setOpen(false);
+      return;
+    }
+    setOpen(true);
+    if (entry !== undefined) return;
+    setLoading(true);
+    try {
+      const res = await fetchDashboardSyncLog(source);
+      setEntry(res.entry);
+      setLastError(res.lastError);
+    } catch {
+      setEntry(null);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="activity-dashboard-sync-log">
+      <button type="button" className="activity-dashboard-sync-log-toggle" onClick={() => void toggle()}>
+        {open ? <ChevronUp className="icon" size={13} /> : <ChevronDown className="icon" size={13} />}
+        Rodyti šaltinio duomenis
+      </button>
+      {open && (
+        <div className="activity-dashboard-sync-log-body">
+          {loading && <div className="activity-dashboard-loading">Kraunama…</div>}
+          {!loading && lastError && (
+            <div className="activity-dashboard-error">
+              Paskutinė sinchronizacija nepavyko: {lastError}
+            </div>
+          )}
+          {!loading && entry === null && !lastError && <div className="activity-dashboard-empty">Dar nesinchronizuota — nėra ką rodyti.</div>}
+          {!loading && entry && (
+            <>
+              <div className="activity-dashboard-sync-log-meta">Užklausta: {new Date(entry.requestedAt).toLocaleString('lt-LT')}</div>
+              <div className="activity-dashboard-sync-log-meta">Parametrai:</div>
+              <pre className="activity-dashboard-sync-log-json">{JSON.stringify(entry.requestParams, null, 2)}</pre>
+              <div className="activity-dashboard-sync-log-meta">Gautas atsakymas (be pakeitimų):</div>
+              <pre className="activity-dashboard-sync-log-json">{JSON.stringify(entry.rawResponse, null, 2)}</pre>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** The home-screen Team Activity Dashboard — see server/src/dashboard/
  * aggregate.ts's own doc comments for where every number actually comes
  * from. Rendered inline on WorkspaceView.tsx (not a separate nav tab),
@@ -87,6 +153,7 @@ export function ActivityDashboard() {
   const setPeriod = useDashboardStore((s) => s.setPeriod);
   const load = useDashboardStore((s) => s.load);
   const forceRefresh = useDashboardStore((s) => s.forceRefresh);
+  const canDiagnose = useAuthStore((s) => can(s.user?.permissionKeys, 'dashboard.integrations.diagnose'));
 
   useEffect(() => {
     void load();
@@ -155,6 +222,37 @@ export function ActivityDashboard() {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {showTeam && summary.email && summary.emailPrevious && (
+        <div className="activity-dashboard-cards activity-dashboard-cards-secondary">
+          <div className="activity-dashboard-card" data-tutorial-id="dashboard-metric-card">
+            <div className="activity-dashboard-card-label">
+              <Mail className="icon" size={14} />
+              Laiškai išsiųsta
+            </div>
+            <div className="activity-dashboard-card-value">{summary.email.sent}</div>
+            <ChangeIndicator current={summary.email.sent} previous={summary.emailPrevious.sent} />
+          </div>
+          <div className="activity-dashboard-card" data-tutorial-id="dashboard-metric-card">
+            <div className="activity-dashboard-card-label">
+              <Mail className="icon" size={14} />
+              Gauta atsakymų
+            </div>
+            <div className="activity-dashboard-card-value">{summary.email.replies}</div>
+            <ChangeIndicator current={summary.email.replies} previous={summary.emailPrevious.replies} />
+          </div>
+          <div className="activity-dashboard-card" data-tutorial-id="dashboard-metric-card">
+            <div className="activity-dashboard-card-label">
+              <Mail className="icon" size={14} />
+              Atsakymų rodiklis
+            </div>
+            <div className="activity-dashboard-card-value">
+              {summary.email.sent > 0 ? `${Math.round((summary.email.replies / summary.email.sent) * 1000) / 10}%` : '—'}
+            </div>
+          </div>
+          {canDiagnose && <SourceLogToggle source="instantly" />}
         </div>
       )}
 

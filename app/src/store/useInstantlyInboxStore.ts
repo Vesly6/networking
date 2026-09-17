@@ -20,6 +20,19 @@ export interface UniboxThread {
   messages: UniboxThreadEmail[];
   latest: UniboxThreadEmail;
   hasUnread: boolean;
+  /** What the thread LIST is actually sorted by — the newest INCOMING
+   * message's timestamp when the thread has one, falling back to `latest`
+   * (the newest message overall, incoming or outgoing) only for a thread
+   * that's never had a reply at all. Kept separate from `latest` (which
+   * stays "the truly newest message," still used for the row's own
+   * preview/timestamp display) — see this file's own groupIntoThreads doc
+   * comment for the real, reported bug this fixes: an automated campaign
+   * follow-up (Instantly's own sequence engine, not a human action in
+   * IRMS) has no unread badge (hasUnreadIncoming already excludes it
+   * correctly) but WAS still re-sorting that lead's thread to the top of
+   * the list on every send, reading as fresh/notable activity when
+   * nothing happened on the lead's side. */
+  sortKey: string;
 }
 
 /** Originally mirrored all 5 options in Instantly's own "More" menu
@@ -61,9 +74,11 @@ function groupIntoThreads(emails: UniboxThreadEmail[]): UniboxThread[] {
   const threads: UniboxThread[] = [];
   for (const [threadId, messages] of byThread) {
     const sorted = [...messages].sort((a, b) => b.timestamp_email.localeCompare(a.timestamp_email));
-    threads.push({ threadId, messages: sorted, latest: sorted[0], hasUnread: hasUnreadIncoming(sorted) });
+    const latest = sorted[0];
+    const newestIncoming = sorted.find((m) => !isOutgoingInstantlyEmail(m));
+    threads.push({ threadId, messages: sorted, latest, hasUnread: hasUnreadIncoming(sorted), sortKey: newestIncoming?.timestamp_email ?? latest.timestamp_email });
   }
-  return threads.sort((a, b) => b.latest.timestamp_email.localeCompare(a.latest.timestamp_email));
+  return threads.sort((a, b) => b.sortKey.localeCompare(a.sortKey));
 }
 
 interface InstantlyInboxState {

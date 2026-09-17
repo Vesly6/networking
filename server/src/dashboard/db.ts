@@ -14,7 +14,7 @@ const DB_PATH = dataFilePath('dashboard-metrics.sqlite');
 
 let db: Database.Database | null = null;
 
-export type DashboardMetric = 'notes' | 'contacts' | 'companies_added' | 'linkedin_sent' | 'calls';
+export type DashboardMetric = 'notes' | 'contacts' | 'companies_added' | 'linkedin_sent' | 'calls' | 'emails_sent' | 'email_replies';
 
 /** Sources this app can sync into daily_metrics — kept as an open string
  * union (not restricted to a DB CHECK) since new external providers get
@@ -58,6 +58,22 @@ function migrate(database: Database.Database): void {
       source TEXT NOT NULL,
       last_synced_at INTEGER,
       last_error TEXT,
+      PRIMARY KEY (company_id, source)
+    );
+
+    -- The account owner's own explicit request: a way to see "how this
+    -- actually looks from the real side" — the exact request params and
+    -- raw response body a sync call got back from an external provider,
+    -- so a computed dashboard number can be cross-checked against the
+    -- provider's own real dashboard for the same range. One row per
+    -- (company, source), overwritten on every sync — this is a snapshot
+    -- of "the last real call and what it returned," not a growing log.
+    CREATE TABLE IF NOT EXISTS dashboard_sync_log (
+      company_id TEXT NOT NULL,
+      source TEXT NOT NULL,
+      requested_at INTEGER NOT NULL,
+      request_params TEXT NOT NULL,
+      raw_response TEXT NOT NULL,
       PRIMARY KEY (company_id, source)
     );
   `);
@@ -207,4 +223,41 @@ export function setSyncState(companyId: string, source: DashboardSyncSource, res
       lastSyncedAt: result.ok ? Date.now() : (getSyncState(companyId, source)?.lastSyncedAt ?? null),
       lastError: result.ok ? null : result.error,
     });
+}
+
+export interface DashboardSyncLogEntry {
+  companyId: string;
+  source: DashboardSyncSource;
+  requestedAt: number;
+  requestParams: unknown;
+  rawResponse: unknown;
+}
+
+/** Overwrites this (company, source)'s log with the exact params sent and
+ * exact raw body received on the LAST real call — the account owner's own
+ * "let me see how this actually looks from the real side" request, so a
+ * computed dashboard number can be cross-checked against the provider's
+ * own dashboard for the identical request. */
+export function setSyncLog(companyId: string, source: DashboardSyncSource, requestParams: unknown, rawResponse: unknown): void {
+  getDb()
+    .prepare(
+      `INSERT INTO dashboard_sync_log (company_id, source, requested_at, request_params, raw_response)
+       VALUES (@companyId, @source, @requestedAt, @requestParams, @rawResponse)
+       ON CONFLICT(company_id, source) DO UPDATE SET requested_at = excluded.requested_at, request_params = excluded.request_params, raw_response = excluded.raw_response`,
+    )
+    .run({ companyId, source, requestedAt: Date.now(), requestParams: JSON.stringify(requestParams), rawResponse: JSON.stringify(rawResponse) });
+}
+
+export function getSyncLog(companyId: string, source: DashboardSyncSource): DashboardSyncLogEntry | null {
+  const row = getDb().prepare(`SELECT * FROM dashboard_sync_log WHERE company_id = ? AND source = ?`).get(companyId, source) as
+    | { company_id: string; source: string; requested_at: number; request_params: string; raw_response: string }
+    | undefined;
+  if (!row) return null;
+  return {
+    companyId: row.company_id,
+    source: row.source as DashboardSyncSource,
+    requestedAt: row.requested_at,
+    requestParams: JSON.parse(row.request_params),
+    rawResponse: JSON.parse(row.raw_response),
+  };
 }
