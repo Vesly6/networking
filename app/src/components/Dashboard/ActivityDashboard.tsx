@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { FileText, Users, Building2, Phone, Send, RefreshCw, ArrowUp, ArrowDown } from 'lucide-react';
+import { FileText, Users, Phone, Send, RefreshCw, ArrowUp, ArrowDown } from 'lucide-react';
 import { useDashboardStore } from '../../store/useDashboardStore';
 import { DASHBOARD_METRICS, type DashboardMetric, type DashboardPeriod } from '../../utils/dashboardApi';
 
@@ -7,11 +7,16 @@ import { DASHBOARD_METRICS, type DashboardMetric, type DashboardPeriod } from '.
 // term for the note-type column everywhere else (permissions.ts's
 // notes.delete_edit label is literally "Trinti/redaguoti komentarus", the
 // "Kontaktai ir komentarai" permission group), so the dashboard doesn't
-// introduce a second, inconsistent name for the same thing.
+// introduce a second, inconsistent name for the same thing. 'contacts' is
+// labeled "Pridėta kontaktų" (not bare "Kontaktai") on explicit request —
+// there is deliberately no "companies added" metric at all (see
+// aggregate.ts's own doc comment: a table's rows are an exact, pre-built
+// list this CRM works from the start, not something that grows the way
+// contacts genuinely do), so "Pridėta X" now applies to the one thing
+// that's actually true of.
 const METRIC_LABELS: Record<DashboardMetric, string> = {
   notes: 'Komentarai',
-  contacts: 'Kontaktai',
-  companies_added: 'Pridėta įmonių',
+  contacts: 'Pridėta kontaktų',
   calls: 'Skambučiai',
   linkedin_sent: 'LinkedIn užklausos',
 };
@@ -19,7 +24,6 @@ const METRIC_LABELS: Record<DashboardMetric, string> = {
 const METRIC_ICONS: Record<DashboardMetric, typeof FileText> = {
   notes: FileText,
   contacts: Users,
-  companies_added: Building2,
   calls: Phone,
   linkedin_sent: Send,
 };

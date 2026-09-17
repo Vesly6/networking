@@ -5,11 +5,19 @@ import { localApiRequest } from './localApi';
  * kept in sync, same convention as every other server/client boundary in
  * this app). */
 
-export type DashboardMetric = 'notes' | 'contacts' | 'companies_added' | 'linkedin_sent' | 'calls';
-
 export type DashboardPeriod = 'today' | 'yesterday' | '7d' | '30d' | 'month' | 'custom';
 
-export const DASHBOARD_METRICS: DashboardMetric[] = ['notes', 'contacts', 'companies_added', 'calls', 'linkedin_sent'];
+// Server's own DashboardMetric type (server/src/dashboard/db.ts) is
+// broader — it still includes 'companies_added' for the underlying
+// daily_metrics rows, which are still tracked, just never surfaced on the
+// dashboard itself (see server/src/dashboard/aggregate.ts's own doc
+// comment on why: a table's rows are an exact, pre-built list worked from
+// the start in this CRM, not something that grows incrementally the way
+// contacts do). The client never needs to represent that excluded metric
+// at all, so DashboardMetric here is derived straight from the displayed
+// list instead of being a separately hand-kept superset.
+export const DASHBOARD_METRICS = ['notes', 'contacts', 'calls', 'linkedin_sent'] as const;
+export type DashboardMetric = (typeof DASHBOARD_METRICS)[number];
 
 export type MetricTotals = Record<DashboardMetric, number>;
 

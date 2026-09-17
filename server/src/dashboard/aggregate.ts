@@ -148,8 +148,16 @@ export type DashboardPeriod = 'today' | 'yesterday' | '7d' | '30d' | 'month' | '
 
 /** Every metric the MVP dashboard shows, in the order the UI lists them —
  * a single source of truth so the summary/per-worker routes and the
- * frontend can't drift out of sync on "which metrics exist." */
-export const DASHBOARD_METRICS: DashboardMetric[] = ['notes', 'contacts', 'companies_added', 'calls', 'linkedin_sent'];
+ * frontend can't drift out of sync on "which metrics exist." Deliberately
+ * excludes 'companies_added' (still a real DashboardMetric/tracked
+ * WorkerActionType, still rolled up into daily_metrics — see
+ * computeInternalMetricsForDay below — just never surfaced here): the
+ * account owner pointed out it doesn't fit how this CRM is actually used
+ * — a table's rows (companies) are an exact, pre-built list worked from
+ * the start, not something that grows incrementally the way contacts
+ * genuinely do, so "companies added" isn't a meaningful ongoing activity
+ * metric here. */
+export const DASHBOARD_METRICS: DashboardMetric[] = ['notes', 'contacts', 'calls', 'linkedin_sent'];
 
 export interface DateRange {
   from: string;
