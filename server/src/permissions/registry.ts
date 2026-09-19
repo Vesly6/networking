@@ -68,6 +68,12 @@ export const PERMISSIONS = {
   // to share.
   'export.execute': 'Eksportuoti duomenis (CSV/XLSX)',
   'export.contacts': 'Eksportuoti su kontaktais (kontaktų/el. pašto duomenimis)',
+  // A third, independent split from export.contacts — exporting reply/
+  // email-thread content is more sensitive than a plain contact list per
+  // the account owner's own explicit call ("отдельно рассмотреть право на
+  // выгрузку истории переписки"), so granting export.contacts never
+  // implicitly grants this too.
+  'export.replies': 'Eksportuoti atsakymų / el. laiškų istoriją',
   // Team Activity Dashboard. `view_own` deliberately DOES get a checkbox
   // in PERMISSION_GROUPS (app/src/utils/permissions.ts) even though it's
   // on by default for every worker (see DEFAULT_WORKER_PERMISSION_KEYS) —

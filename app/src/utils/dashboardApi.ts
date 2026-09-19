@@ -24,6 +24,10 @@ export type MetricTotals = Record<DashboardMetric, number>;
 export interface EmailStats {
   sent: number;
   replies: number;
+  /** Instantly's own "opportunities" count for the period — see
+   * server/src/dashboard/aggregate.ts's own EmailStats.positiveReplies doc
+   * comment for why this is a proxy, not an exact "positive reply" count. */
+  positiveReplies: number;
 }
 
 export interface DashboardSummary {
@@ -88,4 +92,34 @@ export interface DashboardSyncLogEntry {
  * ActivityDashboard.tsx's own generic button label. */
 export function fetchDashboardSyncLog(source: 'instantly' | 'zadarma') {
   return localApiRequest<{ entry: DashboardSyncLogEntry | null; lastError: string | null }>(`/api/dashboard/sync-log/${source}`);
+}
+
+/** The "Atverti" drill-down — one worker's metric total (e.g. "4
+ * comments") expanded into the exact underlying events, each carrying
+ * enough to jump to it (tableId/rowId, optionally columnId+contactId for
+ * a note/contact/LinkedIn entry). `kind` discriminates what `detail`
+ * actually describes and which jump fields are populated — a call item
+ * never has columnId/contactId (no CRM concept of "which cell"), and its
+ * tableId/rowId are only present when the call's phone number matched a
+ * row somewhere in the company (see server/src/index.ts's
+ * buildCompanyPhoneIndex — best-effort, not guaranteed). */
+export interface DashboardDrillDownItem {
+  kind: 'action' | 'linkedin' | 'call';
+  id: string;
+  createdAt: number;
+  detail: string;
+  tableId?: string;
+  tableName?: string;
+  rowId?: string;
+  columnId?: string;
+  contactId?: string;
+}
+
+export function fetchDashboardWorkerDetail(workerId: string, metric: DashboardMetric, period: DashboardPeriod, custom?: { from: string; to: string }) {
+  const q = new URLSearchParams({ workerId, metric, period });
+  if (period === 'custom' && custom) {
+    q.set('from', custom.from);
+    q.set('to', custom.to);
+  }
+  return localApiRequest<{ metric: DashboardMetric; items: DashboardDrillDownItem[] }>(`/api/dashboard/worker-detail?${q.toString()}`);
 }

@@ -272,6 +272,24 @@ svg.icon {
   font-size: 0.85rem;
 }
 
+/* Wraps EVERYTHING the app used to render directly under the root
+   fragment, so the pinned employee-tasks panel (App.tsx) can sit beside
+   it as a real flex sibling — a side-by-side reflow, not a floating
+   overlay covering content. `height: 100dvh` (not 100vh — see .modal's
+   own comment elsewhere in this file on why dvh matters on mobile) is
+   what `.app`'s own `height: 100%` below needs to resolve against; with
+   the panel closed (EmployeeTasksPanel renders null) this is a single
+   flex child stretching to fill, visually identical to before this
+   wrapper existed. */
+.app-with-side-panel {
+  display: flex;
+  height: 100dvh;
+}
+.app-main-content {
+  flex: 1;
+  min-width: 0;
+}
+
 .app {
   height: 100%;
   display: flex;
@@ -1297,13 +1315,35 @@ tr.row-flash td.cell-row-bg {
   background-color: var(--bg);
 }
 
+/* box-shadow (inset), not `outline` — a real, reported bug: an `outline`
+   doesn't participate in the table's own border/paint model the way
+   box-shadow does, so on a `border-collapse` table it could visibly bleed
+   a pixel or two into whichever neighboring cell paints after it in DOM
+   order ("немного заходит за рамку другой ячейки"). `box-shadow: inset`
+   is guaranteed to stay strictly inside this cell's own box, same
+   technique .cell-in-range below (and the editing-input focus ring above)
+   already use, so this is just bringing the selected-cell indicator in
+   line with them rather than introducing a new technique. */
 .cell-selected {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
+  box-shadow: inset 0 0 0 2px var(--accent);
 }
 
 .cell-in-range {
   box-shadow: inset 0 0 0 999px rgba(47, 111, 237, 0.12);
+}
+/* A cell can be both — the focused cell of a multi-cell range still needs
+   its own distinct accent border ON TOP OF the range's pale tint, not one
+   replacing the other. `box-shadow` isn't additive across separate rules
+   the way `outline` + `box-shadow` used to be (two different properties
+   could coexist automatically) — now that both are box-shadow, the two
+   single-class rules above have equal specificity, so whichever is later
+   in the stylesheet would otherwise win outright and hide the other. This
+   explicit two-class combination (higher specificity, wins regardless of
+   source order) layers both shadows in one declaration instead. */
+.cell-in-range.cell-selected {
+  box-shadow:
+    inset 0 0 0 999px rgba(47, 111, 237, 0.12),
+    inset 0 0 0 2px var(--accent);
 }
 
 .cell-text,
@@ -1416,6 +1456,16 @@ tr.row-flash td.cell-row-bg {
 .cell-preview-hoverable:hover {
   background: var(--bg-hover);
 }
+/* A real, reported bug: the button fills the whole cell, so its own
+   opaque hover background painted right over .cell-in-range's inset blue
+   tint on the <td> underneath — hovering any cell inside a multi-cell
+   selection replaced the blue "this is selected" color with a plain
+   gray/white flash, specifically the one place that hover tint shouldn't
+   appear at all ("именно в этом случае"). Two classes + :hover (0,3,0)
+   outranks the plain rule above (0,2,0) regardless of source order. */
+.cell-in-range .cell-preview-hoverable:hover {
+  background: transparent;
+}
 
 .cell-empty {
   color: var(--text-muted);
@@ -1511,6 +1561,9 @@ tr.row-flash td.cell-row-bg {
    .date-cell-add-time, opening a small Popover (not shown inline in the
    table) with a single freeform textarea. See Row.nextActionNote. */
 .date-cell-note-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
   border: none;
   background: transparent;
   padding: 0.15em 0.3em;
@@ -1525,6 +1578,35 @@ tr.row-flash td.cell-row-bg {
 .date-cell-note-set {
   opacity: 1;
   color: var(--accent);
+}
+/* The active next-action quick-tag's own color, shown right on the 📝
+   trigger button so it's visible without opening the popover. */
+.date-cell-tag-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* The Paskambinti/Parašyti/Susitikti quick-tag row inside the note
+   popover — same "single click sets a fixed value" interaction as
+   CellHoverEditor.tsx's own NOTE_TAGS buttons for the note column,
+   reused here for the date cell's own next-action tag. */
+.date-cell-tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+.date-cell-tag-btn {
+  padding: 0.2rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  font-size: 0.78rem;
+  font-weight: 500;
+}
+.date-cell-tag-btn-active {
+  color: #fff;
 }
 
 /* One clear button for the whole cell — date, time, and linked contact
@@ -2395,6 +2477,180 @@ tr.row-drop-end td {
   align-items: center;
   gap: 0.5rem;
   font-size: 0.9rem;
+}
+
+/* Three independent axes (contacts/notes/replies) needed real width to
+   lay out readably — the original dialog's default .modal max-width was
+   sized for the old two-mode, few-checkbox shape. */
+.export-dialog-wide {
+  max-width: 620px;
+}
+/* The scrolling middle section — see ExportDialog.tsx's own doc comment
+   right above this wrapper's opening tag for the real bug this fixes
+   (the shared .modal base class has a max-height but no overflow-y, so
+   tall content used to spill out past the dialog's own bottom border
+   instead of scrolling, carrying the footer buttons down with it).
+   min-height: 0 is load-bearing, not decorative — a flex item's default
+   min-height is `auto` (its content's own height), which would keep this
+   element exactly as tall as its content and defeat the max-height/
+   overflow-y entirely; same class of fix as .calendar-day's own
+   min-width: 0 elsewhere in this file. */
+.export-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  /* .modal already pads itself by 1.25rem on every side; without this,
+     the scrollbar (when one actually appears) would sit flush against
+     the dialog's own text instead of its outer edge. */
+  margin: 0 -1.25rem;
+  padding: 0 1.25rem;
+}
+
+.export-dialog-section-title {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-top: 0.2rem;
+}
+
+.export-dialog-presets {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--border);
+}
+.export-dialog-preset-name {
+  flex: 1;
+  min-width: 120px;
+}
+
+/* One block per axis (Kontaktai / Pastabos / Atsakymų istorija) — same
+   bordered-box treatment so three independent, freely-combinable checkbox
+   groups read as clearly separate decisions, not one long undifferentiated
+   list. */
+.export-dialog-axis {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.85rem;
+}
+.export-dialog-axis-title {
+  font-weight: 600;
+  font-size: 0.82rem;
+}
+.export-dialog-axis-disabled-hint {
+  font-weight: 400;
+  color: var(--text-muted);
+  font-size: 0.76rem;
+}
+.export-dialog-axis label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.export-dialog-limit {
+  margin-left: 1.4rem;
+  gap: 0.5rem !important;
+  color: var(--text-muted);
+}
+.export-dialog-limit input[type='number'] {
+  width: 4.5em;
+}
+
+.export-dialog-structure-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  align-self: flex-start;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  padding: 0;
+}
+.export-dialog-structure-toggle:hover {
+  color: var(--text);
+}
+/* A real spreadsheet-shaped preview (header row + a handful of real data
+   rows), not just a bare list of column names — on explicit request
+   ("надо сделать по типу ексель примера"). Both scroll axes are
+   independent: horizontal for however many columns the current axis
+   selection produces (can be well past what fits), vertical capped so 5
+   preview rows never take over the whole dialog on their own. */
+.export-dialog-structure-table-wrap {
+  max-height: 220px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  /* Load-bearing, not decorative — a flex item's automatic minimum size
+     (what normally keeps it from shrinking below its own content) resets
+     to 0 the moment it has any overflow other than `visible`, per the
+     flexbox spec. Without this, .export-dialog-body's flex-shrink
+     silently crushed this ONE child (the only one here with overflow:
+     auto — every sibling axis box uses the default overflow: visible, so
+     none of them were at risk) down to 1-2px tall instead of showing its
+     real content, a real, live-reproduced bug: the table existed in the
+     DOM with correct rows the whole time, just rendered invisibly thin. */
+  flex-shrink: 0;
+}
+.export-dialog-structure-table {
+  border-collapse: collapse;
+  font-size: 0.76rem;
+  white-space: nowrap;
+}
+.export-dialog-structure-table th,
+.export-dialog-structure-table td {
+  padding: 0.3rem 0.55rem;
+  border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.export-dialog-structure-table th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-alt);
+  color: var(--text-muted);
+  font-weight: 600;
+  text-align: left;
+  white-space: normal;
+  min-width: 90px;
+}
+.export-dialog-structure-table td {
+  color: var(--text);
+}
+.export-dialog-structure-more {
+  padding: 0.3rem 0.55rem;
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  background: var(--bg-alt);
+}
+
+.export-dialog-overflow-warning {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  background: var(--bg-alt);
+  border-radius: 6px;
+  padding: 0.4rem 0.6rem;
+}
+.export-dialog-overflow-warning p {
+  margin: 0.15rem 0;
+}
+.export-dialog-column-warning {
+  font-size: 0.8rem;
+  color: var(--text-muted);
 }
 
 .csv-import-mapping-hint {
@@ -3910,6 +4166,16 @@ tr.row-drop-end td {
   white-space: nowrap;
 }
 
+.task-row-tag {
+  flex: 0 0 auto;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #fff;
+  border-radius: 999px;
+  padding: 0.15em 0.6em;
+  white-space: nowrap;
+}
+
 .task-open {
   flex: 0 0 auto;
   font-size: 0.75rem;
@@ -4059,6 +4325,14 @@ tr.row-drop-end td {
   font-weight: 700;
   color: var(--accent);
   margin-right: 0.35em;
+}
+
+.calendar-chip-tag-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  margin-right: 0.3em;
 }
 
 .calendar-chip-more {
@@ -4417,6 +4691,265 @@ tr.row-drop-end td {
   color: var(--text-muted);
   font-weight: 600;
   font-size: 0.78rem;
+}
+
+/* Each per-worker metric cell pairs its raw count with an "Atverti"
+   drill-down trigger — laid out as a row so the button sits right next to
+   the number it opens, not stacked (which would double every row's
+   height across a table that can have many workers).
+   This is a plain <span> INSIDE the <td>, deliberately not on the <td>
+   itself — a real, reported bug: `display: flex` directly on a table
+   cell breaks it out of table layout entirely (the browser treats it as
+   a block-level flex container and stacks every cell in the row
+   vertically in the first column instead of laying them out side by
+   side as columns) — the exact same trap already documented elsewhere in
+   this file for the Calls tab and the link/company cell's own inner
+   wrapper. Never apply `display: flex`/`grid` straight to a `<td>`. */
+.activity-dashboard-table-cell {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  white-space: nowrap;
+}
+.activity-dashboard-open-btn {
+  font-size: 0.72rem;
+  padding: 0.1rem 0.45rem;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
+.activity-dashboard-open-btn:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+/* The pinned Employee Tasks Panel (EmployeeTasksPanel.tsx) — replaced the
+   old per-click "Atverti" drill-down modal (its .activity-dashboard-
+   drilldown* rules lived here before; superseded, not just hidden). A
+   real flex sibling of the app's main content (see .app-with-side-panel
+   above), not a positioned overlay — collapsing/resizing it is meant to
+   visibly push the table over, not float on top of it. */
+.employee-tasks-panel {
+  position: relative;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg);
+  border-right: 1px solid var(--border);
+  overflow: hidden;
+}
+.employee-tasks-panel-collapsed {
+  width: 34px !important;
+  align-items: center;
+  padding-top: 0.6rem;
+}
+.employee-tasks-panel-collapsed button {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  padding: 0.3rem;
+}
+.employee-tasks-panel-collapsed button:hover {
+  color: var(--text);
+}
+
+.etp-header {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.6rem 0.6rem 0.4rem;
+  border-bottom: 1px solid var(--border);
+}
+.etp-worker-select {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+}
+.etp-icon-btn {
+  flex-shrink: 0;
+  padding: 0.25rem;
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+}
+.etp-icon-btn:hover {
+  color: var(--text);
+}
+
+.etp-metrics {
+  display: flex;
+  flex-direction: column;
+  padding: 0.4rem 0.6rem;
+  gap: 0.15rem;
+  border-bottom: 1px solid var(--border);
+}
+.etp-metric-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 0.85rem;
+  text-align: left;
+}
+.etp-metric-btn:hover {
+  background: var(--bg-hover);
+}
+.etp-metric-btn-active {
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg));
+  color: var(--accent);
+  font-weight: 600;
+}
+.etp-metric-count {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+.etp-metric-btn-active .etp-metric-count {
+  color: inherit;
+}
+
+.etp-filters {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.5rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+}
+.etp-search {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-muted);
+}
+.etp-search input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  padding: 0;
+  color: var(--text);
+}
+.etp-unseen-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.etp-loading,
+.etp-error,
+.etp-empty {
+  padding: 0.8rem 0.6rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+.etp-error {
+  color: var(--danger);
+}
+
+.etp-list {
+  list-style: none;
+  margin: 0;
+  padding: 0.3rem;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+.etp-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.45rem 0.5rem;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.etp-item:hover {
+  background: var(--bg-hover);
+}
+.etp-item-active {
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg));
+  outline: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+}
+.etp-item-index {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+  padding-top: 0.1rem;
+}
+.etp-item-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+.etp-item-detail {
+  font-size: 0.84rem;
+  color: var(--text);
+  overflow-wrap: break-word;
+}
+.etp-item-meta {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+.etp-item-seen {
+  flex-shrink: 0;
+  color: var(--accent);
+  margin-top: 0.15rem;
+}
+
+.etp-footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  padding: 0.5rem;
+  border-top: 1px solid var(--border);
+}
+.etp-footer button {
+  padding: 0.25rem 0.4rem;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text-muted);
+}
+.etp-footer button:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+.etp-footer button:disabled {
+  opacity: 0.4;
+}
+.etp-footer-count {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  min-width: 5.5em;
+  text-align: center;
+}
+
+.etp-resize-handle {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 1;
+}
+.etp-resize-handle:hover {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
 .table-cards {

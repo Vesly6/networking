@@ -43,6 +43,18 @@ function zonedMidnightUtc(dateStr: string, timeZone: string): number {
   return corrected;
 }
 
+/** Converts an inclusive [from, to] date-string range into a UTC-ms
+ * [since, until) bound, in this company's own timezone — what the
+ * dashboard's "Atverti" drill-down route uses to query raw tables
+ * (worker_actions, planner_task_history) directly, so a drill-down list's
+ * item count always matches the summary card's own total for the
+ * identical range (same day-boundary logic as dayRangeUtc above, just for
+ * an arbitrary multi-day range instead of one calendar day). */
+export function periodToUtcRange(companyId: string, range: DateRange): { since: number; until: number } {
+  const tz = getCompanyTimezone(companyId);
+  return { since: zonedMidnightUtc(range.from, tz), until: zonedMidnightUtc(addCalendarDays(range.to, 1), tz) };
+}
+
 export function addCalendarDays(dateStr: string, days: number): string {
   const [y, m, d] = dateStr.split('-').map(Number);
   const dt = new Date(Date.UTC(y, m - 1, d + days));
@@ -221,6 +233,16 @@ export function summarizeMetrics(companyId: string, range: DateRange, workerId: 
 export interface EmailStats {
   sent: number;
   replies: number;
+  /** Instantly's own "opportunities" count for the period — the closest
+   * per-day-bucketed signal this API exposes for a reply that actually
+   * turned positive (Interested/Meeting booked/Won), fetched from the
+   * exact same daily-analytics call as sent/replies (see
+   * externalSync.ts's own doc comment — no extra API cost). An
+   * approximation, not an exact "positive reply" count: it reflects
+   * however this Instantly workspace's own CRM/opportunity feature is
+   * actually used, which the raw sync-log viewer lets an admin
+   * cross-check directly rather than trusting blind. */
+  positiveReplies: number;
 }
 
 /** Company-wide only (workerId always null — see externalSync.ts's
@@ -228,14 +250,16 @@ export interface EmailStats {
  * per-worker split for email). Never live-refreshed here — external data
  * only ever reflects the last background sync, same rule as calls. */
 export function summarizeEmailStats(companyId: string, range: DateRange): EmailStats {
-  const rows = getMetricsForRange(companyId, { workerId: null, metrics: ['emails_sent', 'email_replies'], from: range.from, to: range.to });
+  const rows = getMetricsForRange(companyId, { workerId: null, metrics: ['emails_sent', 'email_replies', 'positive_replies'], from: range.from, to: range.to });
   let sent = 0;
   let replies = 0;
+  let positiveReplies = 0;
   for (const row of rows) {
     if (row.metric === 'emails_sent') sent += row.value;
     else if (row.metric === 'email_replies') replies += row.value;
+    else if (row.metric === 'positive_replies') positiveReplies += row.value;
   }
-  return { sent, replies };
+  return { sent, replies, positiveReplies };
 }
 
 /** The single "Обновлено N minučių atgal" freshness label — the OLDEST

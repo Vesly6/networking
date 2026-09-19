@@ -47,6 +47,12 @@ export const PERMISSIONS = {
   // materially more sensitive action than importing rows.
   'export.execute': 'Eksportuoti duomenis (CSV/XLSX)',
   'export.contacts': 'Eksportuoti su kontaktais (kontaktų/el. pašto duomenimis)',
+  // A third, independent split from export.contacts — reply/email-thread
+  // content is more sensitive than a plain contact list per the account
+  // owner's own explicit call, so granting export.contacts never
+  // implicitly grants this too. Not in DEFAULT_WORKER_PERMISSION_KEYS
+  // below, same fail-closed default as export.contacts itself.
+  'export.replies': 'Eksportuoti atsakymų / el. laiškų istoriją',
   // Team Activity Dashboard.
   'dashboard.view_own': 'Matyti savo aktyvumo statistiką',
   'dashboard.view_team': 'Matyti visos komandos aktyvumo statistiką',
@@ -106,7 +112,7 @@ export const PERMISSION_GROUPS: { title: string; keys: PermissionKey[] }[] = [
   },
   { title: 'API raktai', keys: ['api_keys.view', 'api_keys.edit', 'api_keys.set_mode'] },
   { title: 'Administravimas', keys: ['workers.manage', 'tables.manage', 'backups.manage'] },
-  { title: 'Eksportas', keys: ['export.execute', 'export.contacts'] },
+  { title: 'Eksportas', keys: ['export.execute', 'export.contacts', 'export.replies'] },
   {
     title: 'Aktyvumo skydelis',
     // Unlike linkedin_planner.view above, dashboard.view_own DOES get a

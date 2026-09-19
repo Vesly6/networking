@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useTableStore } from '../../store/useTableStore';
-import { getLinkedContactName, getNextActionColumn, getNextActionPhone, getPrimaryLabel } from '../../utils/row';
+import { getLinkedContactName, getNextActionColumn, getNextActionPhone, getNextActionTagMeta, getPrimaryLabel } from '../../utils/row';
 import { formatDisplayDate, getTimePart, isDueToday, isOverdue } from '../../utils/date';
 import type { Row } from '../../types';
 import { MoreHorizontal, ArrowRight } from 'lucide-react';
@@ -67,12 +67,18 @@ export function TaskListView({ onJumpToRow }: TaskListViewProps) {
     const phone = getNextActionPhone(row, columns);
     const whoLabel = contactName && phone ? `${contactName} · ${phone}` : contactName || phone;
     const expanded = expandedRowIds.has(row.id);
+    const tagMeta = getNextActionTagMeta(row.nextActionTag);
     return (
       <li key={row.id} className={`task-row ${expanded ? 'task-row-expanded' : ''}`}>
         <span className="task-row-label">
           {getPrimaryLabel(row, columns)}
           {whoLabel && <span className="task-row-contact"> | {whoLabel}</span>}
         </span>
+        {tagMeta && (
+          <span className="task-row-tag" style={{ backgroundColor: tagMeta.color }}>
+            {tagMeta.label}
+          </span>
+        )}
         {row.nextActionNote && (
           <span className="task-row-note" title={row.nextActionNote}>
             {row.nextActionNote}

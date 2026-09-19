@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useTableStore } from '../../store/useTableStore';
-import { getLinkedContactName, getNextActionColumn, getNextActionPhone, getPrimaryLabel } from '../../utils/row';
+import { getLinkedContactName, getNextActionColumn, getNextActionPhone, getNextActionTagMeta, getPrimaryLabel } from '../../utils/row';
 import { getDatePart, getMonthGrid, getTimePart, monthLabel, nextMonth, prevMonth, todayISO } from '../../utils/date';
 import { ArrowLeft, ArrowRight } from 'lucide-react';
 
@@ -96,7 +96,8 @@ export function CalendarGridView({ onJumpToRow }: CalendarGridViewProps) {
                   const contactName = getLinkedContactName(row, columns);
                   const phone = getNextActionPhone(row, columns);
                   const whoLabel = contactName && phone ? `${contactName} · ${phone}` : contactName || phone;
-                  const title = [label, whoLabel, row.nextActionNote].filter(Boolean).join(' | ');
+                  const tagMeta = getNextActionTagMeta(row.nextActionTag);
+                  const title = [tagMeta?.label, label, whoLabel, row.nextActionNote].filter(Boolean).join(' | ');
                   return (
                     <button
                       key={row.id}
@@ -105,6 +106,7 @@ export function CalendarGridView({ onJumpToRow }: CalendarGridViewProps) {
                       onClick={() => onJumpToRow(row.id)}
                       title={title}
                     >
+                      {tagMeta && <span className="calendar-chip-tag-dot" style={{ backgroundColor: tagMeta.color }} />}
                       {time && <span className="calendar-chip-time">{time}</span>}
                       {truncateLabel(label)}
                     </button>

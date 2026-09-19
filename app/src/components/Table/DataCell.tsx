@@ -13,6 +13,7 @@ import { useAuthStore } from '../../store/useAuthStore';
 import { useToastStore } from '../../store/useToastStore';
 import { combineDateTime, getDatePart, getTimePart } from '../../utils/date';
 import { getLatestNoteText } from '../../utils/noteHistory';
+import { NEXT_ACTION_TAGS, getNextActionTagMeta } from '../../utils/row';
 import { getContactsSummary, parseContacts, contactTextToFields } from '../../utils/contacts';
 import { contrastTextColor } from '../../utils/color';
 import { Popover } from '../Popover';
@@ -85,6 +86,7 @@ function DataCellImpl({
   const updateCell = useTableStore((s) => s.updateCell);
   const setLinkedContact = useTableStore((s) => s.setLinkedContact);
   const setNextActionNote = useTableStore((s) => s.setNextActionNote);
+  const setNextActionTag = useTableStore((s) => s.setNextActionTag);
   const showToast = useToastStore((s) => s.show);
   const currentUser = useAuthStore((s) => s.user);
   const storedValue = row.cells[column.id] ?? '';
@@ -200,6 +202,18 @@ function DataCellImpl({
   // colored cell's own text became light-on-light-pastel and unreadable.
   const cellStyle: CSSProperties | undefined = color ? { backgroundColor: color, color: contrastTextColor(color) } : undefined;
 
+  // `data-row-id`/`data-column-id` on every `<td>` below (every column
+  // type, not just note/contact — a real, reported bug: they were
+  // originally added only for note/contact's own jump-to-contact anchor
+  // lookup, which meant TableView.tsx's fill-drag preview rectangle could
+  // never find a *text/phone/company/dropdown/date* cell's real DOM rect
+  // by row/column id, silently falling back to a less precise position).
+  // Cheap — plain string attributes, no extra render cost — and this is
+  // the one thing that lets anything outside the normal click flow (the
+  // fill-drag preview, the Calls tab's contact-jump anchor, the reply
+  // sync's row-flash) locate a specific cell's DOM node without a
+  // ref-per-cell, even for a row that isn't mounted yet (virtualized).
+
   if (column.type === 'dropdown') {
     const optionColor = storedValue ? column.optionColors?.[storedValue] : undefined;
     // The option's own badge color wins if set; otherwise fall back to the
@@ -212,6 +226,8 @@ function DataCellImpl({
       <td
         className={cellClassName}
         style={cellStyle}
+        data-row-id={row.id}
+        data-column-id={column.id}
         onMouseDown={onSelect}
         onMouseEnter={onExtend}
         onContextMenu={onContextMenu}
@@ -254,6 +270,8 @@ function DataCellImpl({
       <td
         className={cellClassName}
         style={cellStyle}
+        data-row-id={row.id}
+        data-column-id={column.id}
         onMouseDown={onSelect}
         onMouseEnter={onExtend}
         onContextMenu={onContextMenu}
@@ -289,12 +307,15 @@ function DataCellImpl({
               onChange={(e) => updateCell(row.id, column.id, combineDateTime(datePart, e.target.value))}
             />
           )}
-          {column.isNextActionDate && datePart && (
+          {column.isNextActionDate && datePart && (() => {
+            const tagMeta = getNextActionTagMeta(row.nextActionTag);
+            const titleParts = [tagMeta?.label, row.nextActionNote].filter(Boolean);
+            return (
             <button
               ref={noteBtnRef}
               type="button"
-              className={`date-cell-note-btn ${row.nextActionNote ? 'date-cell-note-set' : ''}`}
-              title={row.nextActionNote ? `Užrašas: ${row.nextActionNote}` : 'Pridėti užrašą apie šį skambutį'}
+              className={`date-cell-note-btn ${row.nextActionNote || tagMeta ? 'date-cell-note-set' : ''}`}
+              title={titleParts.length > 0 ? titleParts.join(': ') : 'Pridėti užrašą apie šį skambutį'}
               // TableView's handleCellMouseDown clears dateCellPopover on
               // *every* cell mousedown (mirroring how it already clears
               // expandedCell) — necessary so clicking away actually closes
@@ -314,8 +335,10 @@ function DataCellImpl({
               }}
             >
               <FileText className="icon" size={14} />
+              {tagMeta && <span className="date-cell-tag-dot" style={{ backgroundColor: tagMeta.color }} />}
             </button>
-          )}
+            );
+          })()}
           {column.isNextActionDate &&
             datePart &&
             (() => {
@@ -359,6 +382,7 @@ function DataCellImpl({
                 setTimeExpanded(false);
                 if (column.isNextActionDate && row.linkedContactId) setLinkedContact(row.id, null);
                 if (column.isNextActionDate && row.nextActionNote) setNextActionNote(row.id, null);
+                if (column.isNextActionDate && row.nextActionTag) setNextActionTag(row.id, null);
               }}
             >
               <X className="icon" size={14} />
@@ -368,6 +392,30 @@ function DataCellImpl({
         {isNoteOpen && noteBtnRef.current && (
           <Popover anchor={noteBtnRef.current} width={260}>
             <div className="popover-field">
+              {/* Quick-tags — on explicit request, so the type of this
+                  next action (a call, a message, a meeting) shows as a
+                  real colored tag in the calendar/task-list, not just
+                  buried in free text. Single-select: clicking the
+                  already-active tag clears it (same toggle convention as
+                  every other single-value picker in this app), clicking a
+                  different one switches. Independent of the note text
+                  below — a row can carry both, or either alone. */}
+              <div className="date-cell-tag-row">
+                {NEXT_ACTION_TAGS.map((tag) => {
+                  const active = row.nextActionTag === tag.value;
+                  return (
+                    <button
+                      key={tag.value}
+                      type="button"
+                      className={`date-cell-tag-btn ${active ? 'date-cell-tag-btn-active' : ''}`}
+                      style={active ? { backgroundColor: tag.color, borderColor: tag.color } : { color: tag.color, borderColor: tag.color }}
+                      onClick={() => setNextActionTag(row.id, active ? null : tag.value)}
+                    >
+                      {tag.label}
+                    </button>
+                  );
+                })}
+              </div>
               <span>Užrašas apie šį skambutį</span>
               <textarea
                 autoFocus
@@ -452,13 +500,6 @@ function DataCellImpl({
       <td
         className={cellClassName}
         style={cellStyle}
-        // Only note/contact cells need these — they're the one place
-        // something outside the normal click flow (the Calls tab's "find
-        // this caller in my contacts" jump) needs to locate a specific
-        // cell's real DOM node to use as CellHoverEditor's popup anchor,
-        // for a row that may not even be mounted yet (virtualized) at the
-        // time the jump is requested. See TableView.tsx's focusContact
-        // effect for the query that reads these back.
         data-row-id={row.id}
         data-column-id={column.id}
         onMouseDown={onSelect}
@@ -495,7 +536,7 @@ function DataCellImpl({
   // the table's scroll container.
   if (editable && !isAppendOnlyLocked) {
     return (
-      <td className={cellClassName} style={cellStyle}>
+      <td className={cellClassName} style={cellStyle} data-row-id={row.id} data-column-id={column.id}>
         <input
           type={column.type === 'phone' ? 'tel' : column.type === 'link' ? 'url' : 'text'}
           autoFocus
@@ -532,7 +573,15 @@ function DataCellImpl({
   if (column.type === 'link') {
     const href = storedValue ? ensureProtocol(storedValue) : null;
     return (
-      <td className={cellClassName} style={cellStyle} onMouseDown={onSelect} onMouseEnter={onExtend} onContextMenu={onContextMenu}>
+      <td
+        className={cellClassName}
+        style={cellStyle}
+        data-row-id={row.id}
+        data-column-id={column.id}
+        onMouseDown={onSelect}
+        onMouseEnter={onExtend}
+        onContextMenu={onContextMenu}
+      >
         <div className="cell-link-inner">
           <button
             type="button"
@@ -577,7 +626,15 @@ function DataCellImpl({
     const query = storedValue.trim();
     const searchHref = query ? `https://www.google.com/search?q=${encodeURIComponent(query)}` : null;
     return (
-      <td className={cellClassName} style={cellStyle} onMouseDown={onSelect} onMouseEnter={onExtend} onContextMenu={onContextMenu}>
+      <td
+        className={cellClassName}
+        style={cellStyle}
+        data-row-id={row.id}
+        data-column-id={column.id}
+        onMouseDown={onSelect}
+        onMouseEnter={onExtend}
+        onContextMenu={onContextMenu}
+      >
         <div className="cell-company-inner">
           <button
             type="button"
@@ -606,7 +663,15 @@ function DataCellImpl({
   }
 
   return (
-    <td className={cellClassName} style={cellStyle} onMouseDown={onSelect} onMouseEnter={onExtend} onContextMenu={onContextMenu}>
+    <td
+      className={cellClassName}
+      style={cellStyle}
+      data-row-id={row.id}
+      data-column-id={column.id}
+      onMouseDown={onSelect}
+      onMouseEnter={onExtend}
+      onContextMenu={onContextMenu}
+    >
       <button
         type="button"
         className={`cell-preview ${color ? '' : 'cell-preview-hoverable'}`}

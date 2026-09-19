@@ -1,7 +1,17 @@
 import { create } from 'zustand';
 import type { Column, ColumnType, Row } from '../types';
 import { clampToLimit } from '../utils/cellLimit';
-import { deleteRowsDB, getTable, importRows, loadRowsForTable, saveRow, saveRows, updateTableColumns } from '../db/db';
+import {
+  countRowsForTable,
+  deleteRowsDB,
+  getTable,
+  importRows,
+  loadRowsForTable,
+  loadRowsUpdatedSince,
+  saveRow,
+  saveRows,
+  updateTableColumns,
+} from '../db/db';
 import { randomUUID } from '../utils/uuid';
 import { addNoteEntry } from '../utils/noteHistory';
 import { useAuthStore } from './useAuthStore';
@@ -106,9 +116,25 @@ interface TableState {
    * useWorkspaceStore's own `initError` field/fix exactly — same class of
    * bug, same shape of fix, just never applied here too at the time. */
   loadError: string | null;
-  /** Always re-fetches the table fresh from IndexedDB rather than trusting a
-   * cached copy from useWorkspaceStore — see CLAUDE.md for why. */
+  /** Never trusts useWorkspaceStore's own cached `TableMeta.columns` — see
+   * CLAUDE.md for why (two stores independently caching the same table's
+   * columns can drift). This DOES now check its OWN small in-memory
+   * cache of the last few tables actually opened in this store (see
+   * tableCache inside the store body below) — a real, measured
+   * performance fix: reopening a table you already had loaded used to
+   * re-pay the full multi-MB fetch every single time, even seconds
+   * later. A cache hit paints instantly and then silently revalidates in
+   * the background via a small delta query, so this is never "trust
+   * possibly-stale data forever," just "don't make the user wait to see
+   * data you already have while you double-check it." */
   loadTable: (tableId: string) => Promise<void>;
+  /** Fire-and-forget: warms the table cache above for a table the user
+   * hasn't opened yet but plausibly is about to (hovering a table card /
+   * a dashboard drill-down's "Atverti" button) — see WorkspaceView.tsx's
+   * onMouseEnter. Never touches `columns`/`rows`/`tableId` state; a
+   * no-op if the table is already the active one, already cached, or
+   * already being preloaded. */
+  preloadTable: (tableId: string) => void;
   unload: () => void;
   /** Live-sync patches from another session working on the SAME table —
    * see utils/tableRealtime.ts's own doc comment for the full design.
@@ -173,6 +199,9 @@ interface TableState {
   setLinkedContact: (rowId: string, contactId: string | null) => void;
   /** null/empty clears the note. See Row.nextActionNote in types.ts. */
   setNextActionNote: (rowId: string, note: string | null) => void;
+  /** null clears the tag; setting the SAME tag again also clears it
+   * (single-select toggle) — see DataCell.tsx's quick-tag buttons. */
+  setNextActionTag: (rowId: string, tag: string | null) => void;
   /** Mirrors setColumnsHidden above, for rows — see Row.hidden in
    * types.ts. RowHeaderMenu's "Slėpti eilutę"/"Rodyti eilutę" call this. */
   setRowsHidden: (ids: string[], hidden: boolean) => void;
@@ -273,6 +302,74 @@ export const useTableStore = create<TableState>((set, get) => {
    * completion for a client that already left. */
   let currentLoadController: AbortController | null = null;
 
+  /** In-memory cache of the last few tables this store has actually held —
+   * a real, measured fix (this session's own performance audit): opening
+   * a table always re-fetched everything, even seconds after leaving it.
+   * Capacity 3 per explicit request ("держать в памяти последние 2–3
+   * открытые таблицы") — a full-table-in-memory cache is fine at this
+   * size but would be a real problem at "every table in the workspace"
+   * scale, which this deliberately never grows into. Map's own insertion
+   * order is reused as LRU order: touching an entry deletes+reinserts it
+   * so the oldest untouched entry is always the first key, evicted when
+   * the cache grows past capacity. Lives in this closure (like
+   * latestRequestedTableId/currentLoadController above), not in the
+   * reactive Zustand state — components never need to read it directly,
+   * only loadTable/preloadTable below do. */
+  const CACHE_CAPACITY = 3;
+  const tableCache = new Map<string, { columns: Column[]; rows: Row[] }>();
+  const cacheTable = (id: string, columns: Column[], rows: Row[]) => {
+    tableCache.delete(id);
+    tableCache.set(id, { columns, rows });
+    while (tableCache.size > CACHE_CAPACITY) {
+      const oldest = tableCache.keys().next().value;
+      if (oldest === undefined) break;
+      tableCache.delete(oldest);
+    }
+  };
+  /** Dedupes concurrent preloadTable() calls for the same id — hovering a
+   * table card fires onMouseEnter once, but a trackpad/imprecise mouse
+   * can re-enter the same element more than once in a row before the
+   * first preload finishes. */
+  const preloadInFlight = new Set<string>();
+
+  const fetchFreshTable = async (tableId: string, signal?: AbortSignal) => {
+    const [table, rows] = await Promise.all([getTable(tableId, signal), loadRowsForTable(tableId, signal)]);
+    return { table, rows };
+  };
+
+  /** Brings a cached table's rows up to date via the small `/rows/since`
+   * delta query (same endpoint the SSE reconnect catch-up already uses —
+   * see loadRowsUpdatedSince's own doc comment) instead of a full reload.
+   * A plain upsert-only delta can't see a row someone else DELETED while
+   * this table wasn't the active one (no tombstone is returned), so the
+   * merged result's length is cross-checked against the server's real,
+   * authoritative count; a mismatch falls back to exactly one full
+   * loadRowsForTable() reload rather than risk silently resurrecting a
+   * deleted row. Returns null when the table itself is gone/inaccessible
+   * (deleted, or access revoked, since it was cached). */
+  const revalidateCachedTable = async (
+    tableId: string,
+    cached: { columns: Column[]; rows: Row[] },
+    signal?: AbortSignal,
+  ): Promise<{ columns: Column[]; rows: Row[] } | null> => {
+    let sinceTs = 0;
+    for (const row of cached.rows) if (row.updatedAt > sinceTs) sinceTs = row.updatedAt;
+    const [table, deltaRows, freshCount] = await Promise.all([
+      getTable(tableId, signal),
+      loadRowsUpdatedSince(tableId, sinceTs, signal),
+      countRowsForTable(tableId),
+    ]);
+    if (!table) return null;
+    const byId = new Map(cached.rows.map((r) => [r.id, r]));
+    for (const row of deltaRows) byId.set(row.id, row);
+    let mergedRows = [...byId.values()];
+    if (mergedRows.length !== freshCount) {
+      mergedRows = await loadRowsForTable(tableId, signal);
+    }
+    mergedRows.sort((a, b) => a.order - b.order);
+    return { columns: table.columns, rows: mergedRows };
+  };
+
   /** Push the state as it was *before* the mutation about to run onto the
    * undo stack, and drop the redo stack (a fresh action invalidates "future"
    * history). Every action below always creates new `columns`/`rows`
@@ -348,16 +445,48 @@ export const useTableStore = create<TableState>((set, get) => {
     importProgress: null,
 
     loadTable: async (tableId) => {
+      // Snapshot the table being LEFT into the cache using its current,
+      // live in-memory state — not a re-fetch of it — so it already
+      // reflects local edits and any SSE patches applied while it was
+      // open. This is what makes "leave, come back" show exactly what
+      // was left, instantly, on the next loadTable() for this id.
+      const leaving = get();
+      if (leaving.tableId && leaving.tableId !== tableId) {
+        cacheTable(leaving.tableId, leaving.columns, leaving.rows);
+      }
+
       latestRequestedTableId = tableId;
       currentLoadController?.abort();
       const controller = new AbortController();
       currentLoadController = controller;
+
+      const cached = tableCache.get(tableId);
+      if (cached) {
+        // Cache hit — paint instantly, never show a loading state for
+        // this open at all, then silently revalidate in the background.
+        set({ tableId, columns: cached.columns, rows: cached.rows, ready: true, loadError: null, undoStack: [], redoStack: [] });
+        try {
+          const fresh = await revalidateCachedTable(tableId, cached, controller.signal);
+          if (latestRequestedTableId !== tableId) return;
+          if (fresh) {
+            cacheTable(tableId, fresh.columns, fresh.rows);
+            set({ columns: fresh.columns, rows: fresh.rows });
+          }
+          // fresh === null (table deleted/access revoked since caching):
+          // leave the cached snapshot on screen rather than yanking it
+          // away with no explanation — the next real navigation sorts it
+          // out via the normal not-found path below.
+        } catch {
+          // A failed revalidation leaves the still-perfectly-usable
+          // cached snapshot showing, rather than surfacing loadError for
+          // what the user already experienced as a successful open.
+        }
+        return;
+      }
+
       set({ ready: false, loadError: null });
       try {
-        const [table, rows] = await Promise.all([
-          getTable(tableId, controller.signal),
-          loadRowsForTable(tableId, controller.signal),
-        ]);
+        const { table, rows } = await fetchFreshTable(tableId, controller.signal);
         // A newer loadTable() call has since started (the user switched
         // tables again before this one finished) — applying this result
         // now would overwrite whatever that newer call already loaded (or
@@ -369,6 +498,7 @@ export const useTableStore = create<TableState>((set, get) => {
         }
         rows.sort((a, b) => a.order - b.order);
         set({ tableId: table.id, columns: table.columns, rows, ready: true, loadError: null, undoStack: [], redoStack: [] });
+        cacheTable(tableId, table.columns, rows);
       } catch (err) {
         if (latestRequestedTableId !== tableId) return;
         set({
@@ -377,10 +507,32 @@ export const useTableStore = create<TableState>((set, get) => {
       }
     },
 
+    preloadTable: (tableId) => {
+      if (get().tableId === tableId) return;
+      if (tableCache.has(tableId)) return;
+      if (preloadInFlight.has(tableId)) return;
+      preloadInFlight.add(tableId);
+      fetchFreshTable(tableId)
+        .then(({ table, rows }) => {
+          if (!table) return;
+          rows.sort((a, b) => a.order - b.order);
+          cacheTable(tableId, table.columns, rows);
+        })
+        .catch(() => {
+          // Best-effort only — a failed preload just means the eventual
+          // real click pays the normal full-load cost, same as today.
+        })
+        .finally(() => {
+          preloadInFlight.delete(tableId);
+        });
+    },
+
     unload: () => {
       // Also invalidates AND actually cancels any loadTable() still in
       // flight for the table being left — see latestRequestedTableId's
       // and currentLoadController's own doc comments above.
+      const leaving = get();
+      if (leaving.tableId) cacheTable(leaving.tableId, leaving.columns, leaving.rows);
       latestRequestedTableId = null;
       currentLoadController?.abort();
       currentLoadController = null;
@@ -794,6 +946,18 @@ export const useTableStore = create<TableState>((set, get) => {
       const rows = get().rows.map((r) => {
         if (r.id !== rowId) return r;
         updatedRow = { ...r, nextActionNote: trimmed || undefined, updatedAt: Date.now() };
+        return updatedRow;
+      });
+      set({ rows });
+      if (updatedRow) persistRow(updatedRow);
+    },
+
+    setNextActionTag: (rowId, tag) => {
+      snapshot();
+      let updatedRow: Row | undefined;
+      const rows = get().rows.map((r) => {
+        if (r.id !== rowId) return r;
+        updatedRow = { ...r, nextActionTag: tag ?? undefined, updatedAt: Date.now() };
         return updatedRow;
       });
       set({ rows });

@@ -14,7 +14,7 @@ const DB_PATH = dataFilePath('dashboard-metrics.sqlite');
 
 let db: Database.Database | null = null;
 
-export type DashboardMetric = 'notes' | 'contacts' | 'companies_added' | 'linkedin_sent' | 'calls' | 'emails_sent' | 'email_replies';
+export type DashboardMetric = 'notes' | 'contacts' | 'companies_added' | 'linkedin_sent' | 'calls' | 'emails_sent' | 'email_replies' | 'positive_replies';
 
 /** Sources this app can sync into daily_metrics — kept as an open string
  * union (not restricted to a DB CHECK) since new external providers get

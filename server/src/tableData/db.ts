@@ -38,12 +38,25 @@ function migrate(database: Database.Database): void {
       order_num INTEGER NOT NULL,
       linked_contact_id TEXT,
       next_action_note TEXT,
+      next_action_tag TEXT,
       height INTEGER,
       hidden INTEGER,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS rows_by_table ON rows(table_id);
+    -- Covers loadRowsForTable's actual query shape exactly (WHERE table_id
+    -- = ? AND company_id = ? ORDER BY order_num) — this session's own
+    -- performance audit found SQLite was choosing the plain rows_by_company
+    -- index instead of rows_by_table for this query (company_id being far
+    -- less selective than table_id in a company with several large
+    -- tables), AND still needing a separate temp B-tree sort for
+    -- ORDER BY afterward either way. This composite index lets it satisfy
+    -- the filter AND the sort from one index scan, with no separate sort
+    -- step. Confirmed cheap at today's data size (26ms even with the old
+    -- plan) — added as the audit's own recommended "hygiene" fix, not
+    -- because it was today's actual bottleneck.
+    CREATE INDEX IF NOT EXISTS rows_by_table_order ON rows(table_id, company_id, order_num);
 
     -- SheetTabs grouping buckets ("PL", "SE energy", ...) — purely an
     -- organizational label, no effect on table data. Created here (before
@@ -86,6 +99,15 @@ function migrate(database: Database.Database): void {
   // where the CREATE TABLE above already included the column.
   try {
     database.exec(`ALTER TABLE rows ADD COLUMN hidden INTEGER`);
+  } catch {
+    // Column already exists — nothing to do.
+  }
+  // Same additive-migration reasoning as `hidden` above, for the "Paskambinti
+  // / Parašyti / Susitikti" next-action quick-tag (see DataCell.tsx's date
+  // cell popover) — a plain row-level field, same one-per-row convention
+  // as linkedContactId/nextActionNote right next to it.
+  try {
+    database.exec(`ALTER TABLE rows ADD COLUMN next_action_tag TEXT`);
   } catch {
     // Column already exists — nothing to do.
   }
@@ -591,6 +613,13 @@ export interface Row {
   order: number;
   linkedContactId?: string;
   nextActionNote?: string;
+  /** "Paskambinti" / "Parašyti" / "Susitikti" — an optional quick-tag on
+   * the next-action date, same one-per-row convention as
+   * linkedContactId/nextActionNote right above (opaque string here, same
+   * "server doesn't know column semantics" stance as Row.cells itself;
+   * the fixed value set lives client-side in utils/row.ts's
+   * NEXT_ACTION_TAGS). */
+  nextActionTag?: string;
   height?: number;
   hidden?: boolean;
   createdAt: number;
@@ -605,6 +634,7 @@ interface RowRow {
   order_num: number;
   linked_contact_id: string | null;
   next_action_note: string | null;
+  next_action_tag: string | null;
   height: number | null;
   hidden: number | null;
   created_at: number;
@@ -620,6 +650,7 @@ function rowFromRow(r: RowRow): Row {
     order: r.order_num,
     linkedContactId: r.linked_contact_id ?? undefined,
     nextActionNote: r.next_action_note ?? undefined,
+    nextActionTag: r.next_action_tag ?? undefined,
     height: r.height ?? undefined,
     hidden: r.hidden === 1 ? true : undefined,
     createdAt: r.created_at,
@@ -989,12 +1020,17 @@ function logWorkerActions(
  * own activity feed originally needed this for. Bounded by
  * worker_actions_by_company's existing (company_id, created_at) index either
  * way, so a date-ranged call here is never a full-table scan regardless of
- * how large the audit log has grown. */
+ * how large the audit log has grown. `actionTypes` (added for the
+ * dashboard's own "Atverti" drill-down — a worker's "4 comments" total
+ * expanded into the exact 4 note_added rows, never mixed with their other
+ * activity) narrows to just those types; omitted, every type is returned,
+ * unchanged from this function's original behavior. */
 export function listWorkerActions(
   companyId: string,
   userId: string | undefined,
   limit: number,
   range?: { since?: number; until?: number },
+  actionTypes?: WorkerActionType[],
 ): WorkerActionLogEntry[] {
   const database = getDb();
   const clauses = ['company_id = ?'];
@@ -1010,6 +1046,10 @@ export function listWorkerActions(
   if (range?.until !== undefined) {
     clauses.push('created_at < ?');
     params.push(range.until);
+  }
+  if (actionTypes && actionTypes.length > 0) {
+    clauses.push(`action_type IN (${actionTypes.map(() => '?').join(', ')})`);
+    params.push(...actionTypes);
   }
   const rows = database
     .prepare(`SELECT * FROM worker_actions WHERE ${clauses.join(' AND ')} ORDER BY created_at DESC LIMIT ?`)
@@ -1150,14 +1190,15 @@ export function getTablesByIds(tableIds: string[], companyId: string): TableMeta
 }
 
 const UPSERT_ROW_SQL = `
-  INSERT INTO rows (id, table_id, cells_json, colors_json, order_num, linked_contact_id, next_action_note, height, hidden, company_id, created_at, updated_at)
-  VALUES (@id, @tableId, @cellsJson, @colorsJson, @order, @linkedContactId, @nextActionNote, @height, @hidden, @companyId, @createdAt, @updatedAt)
+  INSERT INTO rows (id, table_id, cells_json, colors_json, order_num, linked_contact_id, next_action_note, next_action_tag, height, hidden, company_id, created_at, updated_at)
+  VALUES (@id, @tableId, @cellsJson, @colorsJson, @order, @linkedContactId, @nextActionNote, @nextActionTag, @height, @hidden, @companyId, @createdAt, @updatedAt)
   ON CONFLICT(id) DO UPDATE SET
     cells_json = excluded.cells_json,
     colors_json = excluded.colors_json,
     order_num = excluded.order_num,
     linked_contact_id = excluded.linked_contact_id,
     next_action_note = excluded.next_action_note,
+    next_action_tag = excluded.next_action_tag,
     height = excluded.height,
     hidden = excluded.hidden,
     updated_at = excluded.updated_at
@@ -1173,6 +1214,7 @@ function rowToParams(row: Row, companyId: string) {
     order: row.order,
     linkedContactId: row.linkedContactId ?? null,
     nextActionNote: row.nextActionNote ?? null,
+    nextActionTag: row.nextActionTag ?? null,
     height: row.height ?? null,
     hidden: row.hidden ? 1 : null,
     companyId,

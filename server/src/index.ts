@@ -21,6 +21,7 @@ import {
   getCompanySuperAdmin,
   updateCompanySuperAdmin,
   getCompanyIntegrations,
+  getCompanyTimezone,
   upsertCompanyIntegrations,
   clearCompanyIntegrationField,
   type CompanyIntegrationsPatch,
@@ -123,7 +124,9 @@ import {
   type RowActionAttribution,
   type TableMeta,
   type TableAccessContext,
+  type WorkerActionType,
 } from './tableData/db.js';
+import { phoneMatchKey } from './phoneMatch.js';
 import {
   AuthError,
   checkCredentials,
@@ -141,7 +144,7 @@ import {
 import { subscribeToTable, broadcastToTable, subscribeToCompany, broadcastToCompany } from './realtime.js';
 import { can, effectivePermissions, companyCeiling } from './permissions/effective.js';
 import { ALL_PERMISSION_KEYS, isPermissionKey, PERMISSIONS, type PermissionKey } from './permissions/registry.js';
-import { buildExportRows, XLSX_MAX_ROWS, type ExportMode } from './export/buildExportRows.js';
+import { buildExportRows, XLSX_MAX_ROWS, XLSX_MAX_COLUMNS, type ExportMode, type ExportAxisOptions } from './export/buildExportRows.js';
 import { streamExportCsv, streamExportXlsx } from './export/streamWriters.js';
 import { ApolloApiError, searchPeople, searchCompanies, enrichPerson, pollWebhookResult, getCreditUsageStats } from './apollo.js';
 import {
@@ -255,6 +258,7 @@ import {
   isBackfillDone,
   markBackfillDone,
   getOccurrenceTableIds,
+  listSentEventsForWorker,
   type PlannerTask,
   type PlannerTaskStatus,
 } from './linkedinPlanner/db.js';
@@ -271,10 +275,12 @@ import {
   summarizeEmailStats,
   oldestSuccessfulSyncAt,
   getWorkerRows,
+  periodToUtcRange,
+  DASHBOARD_METRICS,
   type DashboardPeriod,
 } from './dashboard/aggregate.js';
-import { syncZadarmaCallsForCompany, syncInstantlyEmailStatsForCompany } from './dashboard/externalSync.js';
-import { getSyncLog as getDashboardSyncLog, getSyncState as getDashboardSyncState } from './dashboard/db.js';
+import { syncZadarmaCallsForCompany, syncInstantlyEmailStatsForCompany, zonedDateTimeStr } from './dashboard/externalSync.js';
+import { getSyncLog as getDashboardSyncLog, getSyncState as getDashboardSyncState, type DashboardMetric } from './dashboard/db.js';
 
 const PORT = Number(process.env.PORT) || 4000;
 // Binds 127.0.0.1 by default — deliberately not reachable from the local
@@ -2439,6 +2445,160 @@ app.get(
     const entry = getDashboardSyncLog(req.auth!.companyId, source);
     const state = getDashboardSyncState(req.auth!.companyId, source);
     res.json({ entry, lastError: state?.lastError ?? null });
+  }),
+);
+
+// A worker's own per-worker table total (e.g. "4 comments") is only a
+// trust-building number if it can be expanded into the exact underlying
+// events — the account owner's own explicit request ("я должен иметь
+// возможность проверить каждый коментарий"). Reuses the exact same
+// jump-to-row/jump-to-contact mechanism the Workers panel's own activity
+// feed already established (listWorkerActions), extended here to the two
+// metrics that feed never covered: LinkedIn sends (planner_task_history)
+// and calls (a live, per-worker-SIP Zadarma fetch — never persisted
+// individually, only the daily COUNT is, per this feature's own
+// external-metrics rule). `dashboard.view_own` lets a worker drill into
+// their OWN row; anyone else's requires `dashboard.view_team`, checked
+// inside the handler (not the route-level middleware) since the two
+// permissions gate different things here (own vs. team), same split
+// GET /api/dashboard/summary already makes.
+const DASHBOARD_DRILLDOWN_ACTION_TYPES: Partial<Record<DashboardMetric, WorkerActionType>> = {
+  notes: 'note_added',
+  contacts: 'contact_added',
+};
+
+/** Built fresh per request, not cached — this is a rare, admin-triggered
+ * action (opening one specific worker's calls for one specific period),
+ * not a hot path. Company-wide because the dashboard lives on the
+ * Workspace screen, before any table is open — unlike the Calls tab's own
+ * onJumpToRow, which only ever matches within whichever single table is
+ * currently loaded (App.tsx's own phoneToRow), this has no "current
+ * table" to lean on and has to scan every table's phone-type columns. */
+function buildCompanyPhoneIndex(companyId: string): Map<string, { tableId: string; rowId: string; tableName: string }> {
+  const index = new Map<string, { tableId: string; rowId: string; tableName: string }>();
+  for (const table of loadTables(companyId)) {
+    const phoneColumnIds = (table.columns as Array<{ id: string; type: string }>).filter((c) => c.type === 'phone').map((c) => c.id);
+    if (phoneColumnIds.length === 0) continue;
+    for (const row of loadRowsForTable(table.id, companyId)) {
+      for (const columnId of phoneColumnIds) {
+        const key = phoneMatchKey(row.cells[columnId] ?? '');
+        if (key && !index.has(key)) index.set(key, { tableId: table.id, rowId: row.id, tableName: table.name });
+      }
+    }
+  }
+  return index;
+}
+
+app.get(
+  '/api/dashboard/worker-detail',
+  requireDashboardPermission('dashboard.view_own'),
+  asyncHandler(async (req, res) => {
+    const companyId = req.auth!.companyId;
+    const viewer = effectiveUser(req);
+    if (!viewer) {
+      res.status(401).json({ error: 'Neautentifikuota' });
+      return;
+    }
+    const { workerId, metric } = req.query;
+    if (typeof workerId !== 'string' || typeof metric !== 'string' || !(DASHBOARD_METRICS as string[]).includes(metric)) {
+      res.status(400).json({ error: 'Trūksta workerId/metric arba jie neteisingi' });
+      return;
+    }
+    if (workerId !== viewer.id && !effectivePermissions(viewer).has('dashboard.view_team')) {
+      res.status(403).json({ error: 'Neturite teisės atlikti šio veiksmo', permission: 'dashboard.view_team' });
+      return;
+    }
+    const { period, custom } = parseDashboardPeriod(req);
+    const range = resolvePeriodRange(companyId, period, custom);
+    const typedMetric = metric as DashboardMetric;
+
+    if (typedMetric === 'notes' || typedMetric === 'contacts') {
+      const { since, until } = periodToUtcRange(companyId, range);
+      const actionType = DASHBOARD_DRILLDOWN_ACTION_TYPES[typedMetric]!;
+      const actions = listWorkerActions(companyId, workerId, 200, { since, until }, [actionType]);
+      res.json({
+        metric: typedMetric,
+        items: actions.map((a) => ({
+          kind: 'action' as const,
+          id: a.id,
+          createdAt: a.createdAt,
+          detail: a.detail,
+          tableId: a.tableId,
+          tableName: a.tableName,
+          rowId: a.rowId,
+          columnId: a.columnId,
+          contactId: a.contactId,
+        })),
+      });
+      return;
+    }
+
+    if (typedMetric === 'linkedin_sent') {
+      const { since, until } = periodToUtcRange(companyId, range);
+      const events = listSentEventsForWorker(companyId, workerId, { since, until }, 200);
+      res.json({
+        metric: typedMetric,
+        items: events.map((e) => ({
+          kind: 'linkedin' as const,
+          id: e.id,
+          createdAt: e.changedAt,
+          detail: e.note || e.linkedinUrl,
+          tableId: e.tableId,
+          rowId: e.rowId,
+          columnId: e.columnId,
+          contactId: e.contactId,
+        })),
+      });
+      return;
+    }
+
+    // calls — live, per-worker fetch, never persisted individually (only
+    // the daily aggregate count is — see externalSync.ts's own doc
+    // comment on why external metrics only ever sync as background
+    // counts, not raw logs). Resolves the TARGET worker's own SIP, never
+    // the viewer's — cross-worker access is already gated above.
+    const integrations = getCompanyIntegrations(companyId);
+    if (!integrations?.zadarmaApiKey || !integrations?.zadarmaApiSecret) {
+      res.json({ metric: typedMetric, items: [] });
+      return;
+    }
+    const admin = getCompanySuperAdmin(companyId);
+    const sip = workerId === admin?.id ? admin?.zadarmaSip : listWorkers(companyId).find((w) => w.id === workerId)?.zadarmaSip;
+    if (!sip) {
+      res.json({ metric: typedMetric, items: [] });
+      return;
+    }
+    const tz = getCompanyTimezone(companyId);
+    const today = todayDateStrForCompany(companyId);
+    const start = `${range.from} 00:00:00`;
+    const end = range.to >= today ? zonedDateTimeStr(tz, new Date()) : `${range.to} 23:59:59`;
+    try {
+      const { stats } = await getStatistics({ start, end, sip }, { key: integrations.zadarmaApiKey, secret: integrations.zadarmaApiSecret });
+      // A jump target needs a live, cross-table phone match — this
+      // dashboard has no "currently open table" the way the Calls tab
+      // does, so it's built fresh here, company-wide (see
+      // buildCompanyPhoneIndex's own doc comment).
+      const phoneIndex = buildCompanyPhoneIndex(companyId);
+      res.json({
+        metric: typedMetric,
+        items: stats.map((c) => {
+          const key = phoneMatchKey(c.otherParty);
+          const match = key ? phoneIndex.get(key) : undefined;
+          return {
+            kind: 'call' as const,
+            id: c.call_id,
+            createdAt: Date.parse(c.callstart.replace(' ', 'T')),
+            detail: `${c.otherParty} · ${c.seconds}s · ${c.disposition}`,
+            otherParty: c.otherParty,
+            tableId: match?.tableId,
+            rowId: match?.rowId,
+            tableName: match?.tableName,
+          };
+        }),
+      });
+    } catch (err) {
+      res.status(502).json({ error: err instanceof ZadarmaApiError ? err.message : 'Nepavyko gauti skambučių' });
+    }
   }),
 );
 
@@ -5424,7 +5584,7 @@ app.post(
       columns?: unknown;
       includeCompaniesWithoutContacts?: unknown;
       onlyContactsWithEmail?: unknown;
-      prettyNotes?: unknown;
+      axis?: unknown;
       filename?: unknown;
     };
     const mode: ExportMode = body.mode === 'with_contacts' ? 'with_contacts' : 'companies_only';
@@ -5439,17 +5599,51 @@ app.post(
     );
     const includeCompaniesWithoutContacts = !!body.includeCompaniesWithoutContacts;
     const onlyContactsWithEmail = !!body.onlyContactsWithEmail;
-    const prettyNotes = !!body.prettyNotes;
 
-    // export.contacts is separately, server-side gated — a worker with
-    // only export.execute must be rejected here even if they never see the
-    // "Companies with contacts" option in the dialog at all.
-    if (mode === 'with_contacts') {
-      const user = getUserById(req.auth!.userId);
-      if (!user || !can(user, 'export.contacts')) {
-        res.status(403).json({ error: 'Neturite teisės eksportuoti su kontaktais', permission: 'export.contacts' });
-        return;
-      }
+    // Every boolean/number here is re-validated from scratch, never
+    // trusted as the shape the dialog would actually send — same "the
+    // client is just a suggestion" discipline as mode/format above.
+    // MAX_AXIS_LIMIT caps a client-supplied limit from being used to force
+    // an absurd number of generated columns (a client bug or a deliberately
+    // hostile request alike).
+    const MAX_AXIS_LIMIT = 500;
+    const rawAxis = (body.axis ?? {}) as Record<string, unknown>;
+    const clampLimit = (v: unknown): number => {
+      const n = typeof v === 'number' && Number.isFinite(v) ? Math.floor(v) : 10;
+      return Math.min(MAX_AXIS_LIMIT, Math.max(1, n));
+    };
+    const rawLimits = (rawAxis.limits ?? {}) as Record<string, unknown>;
+    const axis: ExportAxisOptions = {
+      contactsCell: mode === 'companies_only' && !!rawAxis.contactsCell,
+      contactsColumns: mode === 'companies_only' && !!rawAxis.contactsColumns,
+      notesCell: !!rawAxis.notesCell,
+      notesColumns: !!rawAxis.notesColumns,
+      repliesCell: !!rawAxis.repliesCell,
+      repliesColumns: !!rawAxis.repliesColumns,
+      limits: { contacts: clampLimit(rawLimits.contacts), notes: clampLimit(rawLimits.notes), replies: clampLimit(rawLimits.replies) },
+      prettyFormat: !!rawAxis.prettyFormat,
+    };
+
+    // export.contacts/export.replies are separately, server-side gated —
+    // a worker with only export.execute must be rejected here even if
+    // they never see the corresponding option in the dialog at all. The
+    // contacts check covers BOTH the original "Companies with contacts"
+    // row mode AND the new contactsCell/contactsColumns axis (companies_
+    // only mode) — both expose the exact same contact/email data, just
+    // laid out differently, so both need the identical gate; checking
+    // only `mode === 'with_contacts'` would have left a real bypass for a
+    // worker who has export.execute but not export.contacts to get the
+    // same data via the new axis instead.
+    const user = getUserById(req.auth!.userId);
+    const wantsContacts = mode === 'with_contacts' || axis.contactsCell || axis.contactsColumns;
+    if (wantsContacts && (!user || !can(user, 'export.contacts'))) {
+      res.status(403).json({ error: 'Neturite teisės eksportuoti su kontaktais', permission: 'export.contacts' });
+      return;
+    }
+    const wantsReplies = axis.repliesCell || axis.repliesColumns;
+    if (wantsReplies && (!user || !can(user, 'export.replies'))) {
+      res.status(403).json({ error: 'Neturite teisės eksportuoti atsakymų istorijos', permission: 'export.replies' });
+      return;
     }
 
     // SECURITY: the client resolves which rows are currently visible/
@@ -5462,13 +5656,13 @@ app.post(
     const requestedIds = new Set<string>((body.rowIds as unknown[]).filter((id): id is string => typeof id === 'string'));
     const rowsToExport = allRows.filter((r) => requestedIds.has(r.id));
 
-    const { headerRow, dataRows } = buildExportRows({
+    const { headerRow, dataRows, overflow } = buildExportRows({
       columns,
       rows: rowsToExport,
       mode,
       includeCompaniesWithoutContacts,
       onlyContactsWithEmail,
-      prettyNotes,
+      axis,
     });
 
     if (format === 'xlsx' && dataRows.length + 1 > XLSX_MAX_ROWS) {
@@ -5480,6 +5674,15 @@ app.post(
       });
       return;
     }
+    if (format === 'xlsx' && headerRow.length > XLSX_MAX_COLUMNS) {
+      res.status(422).json({
+        error: `Per daug stulpelių XLSX formatui (${headerRow.length} > ${XLSX_MAX_COLUMNS}). Naudokite CSV formatą arba sumažinkite ašių limitus.`,
+        code: 'column_limit_exceeded',
+        columnCount: headerRow.length,
+        limit: XLSX_MAX_COLUMNS,
+      });
+      return;
+    }
 
     appendAuditLog({
       actorUserId: req.auth!.userId,
@@ -5488,7 +5691,16 @@ app.post(
       action: 'export.run',
       targetType: 'table',
       targetId: req.params.id,
-      detail: { mode, format, rowCount: dataRows.length, includeCompaniesWithoutContacts, onlyContactsWithEmail, prettyNotes },
+      detail: {
+        mode,
+        format,
+        rowCount: dataRows.length,
+        columnCount: headerRow.length,
+        includeCompaniesWithoutContacts,
+        onlyContactsWithEmail,
+        axis,
+        overflow,
+      },
     });
 
     const safeName = sanitizeExportFilename(typeof body.filename === 'string' ? body.filename : `irms_export.${format}`);
@@ -6108,6 +6320,7 @@ backfillSmsInboxCompanyId(firstCompanyId);
 // migratePermissionsIfNeeded, which is a strict one-time snapshot).
 backfillNewPermissionKeyForExistingCompanies('export.execute');
 backfillNewPermissionKeyForExistingCompanies('export.contacts');
+backfillNewPermissionKeyForExistingCompanies('export.replies');
 backfillNewPermissionKeyForExistingCompanies('linkedin_planner.view');
 backfillNewPermissionKeyForExistingCompanies('linkedin_planner.execute');
 backfillNewPermissionKeyForExistingCompanies('linkedin_planner.view_all');

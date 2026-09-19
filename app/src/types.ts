@@ -107,6 +107,14 @@ export interface Row {
    * Set via the date cell's 📝 button (DataCell.tsx); shown in the
    * calendar/task-list views, never in the table itself. */
   nextActionNote?: string;
+  /** Optional quick-tag for this row's next-action date — "Paskambinti" /
+   * "Parašyti" / "Susitikti" (see utils/row.ts's NEXT_ACTION_TAGS for the
+   * fixed value set). Row-level, same one-per-row convention as
+   * linkedContactId/nextActionNote right above — independent of the free-
+   * text note (a row can carry both, or either alone). Set via the date
+   * cell's 📝 popover (DataCell.tsx); shown as a colored badge in the
+   * calendar/task-list views, never in the table itself. */
+  nextActionTag?: string;
   /** Row height in pixels; falls back to a default when unset. */
   height?: number;
   /** Hidden from the grid but its data is untouched — still included in

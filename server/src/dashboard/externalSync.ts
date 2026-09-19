@@ -14,7 +14,7 @@ import { todayDateStrForCompany, addCalendarDays } from './aggregate.js';
  * already has today (a browser's own local date input isn't necessarily
  * the Zadarma ACCOUNT's own configured timezone either), not something
  * newly introduced by this sync job. */
-function zonedDateTimeStr(timeZone: string, instant: Date): string {
+export function zonedDateTimeStr(timeZone: string, instant: Date): string {
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone,
     year: 'numeric',
@@ -113,7 +113,7 @@ export async function syncInstantlyEmailStatsForCompany(companyId: string): Prom
     // returned for the identical request, not just trust it blind.
     setSyncLog(companyId, 'instantly', params, days);
 
-    const entries: { companyId: string; workerId: null; metric: 'emails_sent' | 'email_replies'; date: string; value: number }[] = [];
+    const entries: { companyId: string; workerId: null; metric: 'emails_sent' | 'email_replies' | 'positive_replies'; date: string; value: number }[] = [];
     for (const day of days) {
       entries.push({ companyId, workerId: null, metric: 'emails_sent', date: day.date, value: day.sent });
       // unique_replies (distinct leads who replied), not the raw `replies`
@@ -121,6 +121,15 @@ export async function syncInstantlyEmailStatsForCompany(companyId: string): Prom
       // I emailed wrote back," not be inflated by one lead replying twice
       // in the same thread.
       entries.push({ companyId, workerId: null, metric: 'email_replies', date: day.date, value: day.unique_replies });
+      // The account owner's own explicit "positive reply rate" request —
+      // Instantly's daily analytics has no dedicated "positive reply"
+      // count, so `opportunities` (a lead whose interest crossed into
+      // Interested/Meeting-booked/Won territory in this workspace's own
+      // CRM) is the closest per-day-bucketed proxy this API exposes,
+      // reusing the SAME call as sent/replies above rather than a second,
+      // heavier per-lead scan. Surfaced honestly, not as an exact count —
+      // see EmailStats.positiveReplies' own doc comment.
+      entries.push({ companyId, workerId: null, metric: 'positive_replies', date: day.date, value: day.opportunities ?? 0 });
     }
     upsertDailyMetrics(entries);
     setSyncState(companyId, 'instantly', { ok: true });

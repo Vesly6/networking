@@ -241,6 +241,24 @@ export async function loadRowsForTable(tableId: string, signal?: AbortSignal): P
   return rows;
 }
 
+/** Only rows changed since `since` (epoch ms) — the same endpoint
+ * utils/tableRealtime.ts already uses to catch up after an SSE reconnect,
+ * reused here by useTableStore's table cache to revalidate a table it's
+ * re-showing from memory: a tiny delta query instead of re-fetching the
+ * whole table (which for a large table is several MB) just to confirm
+ * nothing changed while it wasn't the active table. DEMO_MODE has no
+ * server and no possibility of remote drift (every "other viewer" write
+ * that could cause it doesn't exist in demo), so it always returns empty
+ * rather than pointing at a route that isn't there. */
+export async function loadRowsUpdatedSince(tableId: string, since: number, signal?: AbortSignal): Promise<Row[]> {
+  if (DEMO_MODE) return [];
+  const { rows } = await localApiRequest<{ rows: Row[] }>(
+    `/api/tables/${encodeURIComponent(tableId)}/rows/since?since=${since}`,
+    { signal },
+  );
+  return rows;
+}
+
 export async function saveRow(row: Row): Promise<void> {
   if (DEMO_MODE) return demoData.saveRow(row);
   await localApiRequest(`/api/rows/${encodeURIComponent(row.id)}`, {

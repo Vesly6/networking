@@ -1,6 +1,25 @@
 import type { Column, Row } from '../types';
 import { parseContacts, contactTextToFields, extractPhoneNumber } from './contacts';
 
+/** The three next-action quick-tags (Row.nextActionTag) — on explicit
+ * request, so a call/write/meet action shows as a real colored tag in the
+ * calendar/task-list, not just plain free-text buried in the note. Fixed
+ * hex colors (not theme tokens), same "stays the same distinct color in
+ * both themes" convention this app already uses for the hot-lead flag and
+ * the LinkedIn badge — a tag's color is part of its identity, it
+ * shouldn't shift with light/dark mode. */
+export const NEXT_ACTION_TAGS = [
+  { value: 'call', label: 'Paskambinti', color: '#e08a2c' },
+  { value: 'write', label: 'Parašyti', color: '#2f6fed' },
+  { value: 'meet', label: 'Susitikti', color: '#1a9e6b' },
+] as const;
+
+export type NextActionTagValue = (typeof NEXT_ACTION_TAGS)[number]['value'];
+
+export function getNextActionTagMeta(tag: string | null | undefined): { label: string; color: string } | null {
+  return NEXT_ACTION_TAGS.find((t) => t.value === tag) ?? null;
+}
+
 export function getPrimaryLabel(row: Row, columns: Column[]): string {
   // Prefer a dedicated Company column if one exists; older tables without
   // one fall back to whatever's in the first column, as before.

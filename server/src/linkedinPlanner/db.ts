@@ -734,6 +734,68 @@ export function countSentGroupedByWorker(companyId: string, range: { since: numb
   return rows.map((r) => ({ workerId: r.worker_id, count: r.n }));
 }
 
+export interface SentEventEntry {
+  id: string;
+  taskId: string;
+  changedAt: number;
+  note: string | null;
+  linkedinUrl: string;
+  tableId: string;
+  rowId: string;
+  columnId?: string;
+  contactId?: string;
+}
+
+/** Team Activity Dashboard's "Atverti" drill-down for the LinkedIn metric —
+ * one row per real 'sent' status change (same to_status = 'sent' filter as
+ * countSentSince/countSentGroupedByWorker above), carrying enough to jump
+ * straight to the lead's row: the task's own primary_table_id/row_id,
+ * joined against its still-active primary occurrence (if any) for a
+ * columnId/contactId pair so the jump can open the exact contact entry,
+ * not just the row — same two-level jump (row vs. contact) that
+ * tableData/db.ts's listWorkerActions already offers for notes/contacts.
+ * Falls back to the task's own primary_contact_id (no columnId) when that
+ * occurrence has since been deactivated — a plain row-level jump then,
+ * which is still strictly more useful than nothing. */
+export function listSentEventsForWorker(companyId: string, workerId: string, range: { since: number; until: number }, limit = 200): SentEventEntry[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT h.id, h.task_id, h.changed_at, h.note,
+              t.primary_table_id, t.primary_row_id, t.primary_contact_id, t.normalized_linkedin_url,
+              o.source_column_id
+       FROM planner_task_history h
+       JOIN planner_tasks t ON t.id = h.task_id
+       LEFT JOIN planner_task_occurrences o
+         ON o.task_id = h.task_id AND o.table_id = t.primary_table_id AND o.row_id = t.primary_row_id AND o.active = 1
+       WHERE h.company_id = ? AND h.changed_by_user_id = ? AND h.to_status = 'sent'
+         AND h.changed_at >= ? AND h.changed_at < ?
+       ORDER BY h.changed_at DESC
+       LIMIT ?`,
+    )
+    .all(companyId, workerId, range.since, range.until, limit) as {
+    id: string;
+    task_id: string;
+    changed_at: number;
+    note: string | null;
+    primary_table_id: string;
+    primary_row_id: string;
+    primary_contact_id: string | null;
+    normalized_linkedin_url: string;
+    source_column_id: string | null;
+  }[];
+  return rows.map((r) => ({
+    id: r.id,
+    taskId: r.task_id,
+    changedAt: r.changed_at,
+    note: r.note,
+    linkedinUrl: r.normalized_linkedin_url,
+    tableId: r.primary_table_id,
+    rowId: r.primary_row_id,
+    columnId: r.source_column_id ?? undefined,
+    contactId: r.primary_contact_id ?? undefined,
+  }));
+}
+
 export function getTaskHistory(taskId: string, companyId: string): PlannerTaskHistoryEntry[] {
   const rows = getDb()
     .prepare(`SELECT * FROM planner_task_history WHERE task_id = ? AND company_id = ? ORDER BY changed_at ASC`)

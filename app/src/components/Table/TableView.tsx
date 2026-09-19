@@ -410,6 +410,11 @@ export function TableView({
   // its own, more granular pair of keys).
   const canExportExecute = useAuthStore((s) => can(s.user?.permissionKeys, 'export.execute'));
   const canExportContacts = useAuthStore((s) => can(s.user?.permissionKeys, 'export.contacts'));
+  // A separate, independent permission from export.contacts — reply/email
+  // thread content is more sensitive than a plain contact list (the
+  // account owner's own explicit call, see permissions/registry.ts), so a
+  // worker who can export contacts doesn't automatically get replies too.
+  const canExportReplies = useAuthStore((s) => can(s.user?.permissionKeys, 'export.replies'));
   // Not a permissionKeys check (linkedin_planner.view has no checkbox
   // anywhere — see server/src/index.ts's requireLinkedInPlannerViewer doc
   // comment for why relying on it here would silently never fetch the
@@ -1139,23 +1144,54 @@ export function TableView({
           setColRangeFocus(index);
           setRangeFocus({ r: Math.max(0, filteredSortedRowsRef.current.length - 1), c: index });
         }
+      } else if (fillDragActiveRef.current) {
+        // A real, reported bug, root-caused by live testing rather than
+        // guessed: the fill handle sits exactly at a cell's bottom-RIGHT
+        // corner, so dragging straight down/right from it keeps the cursor
+        // hovering the shared pixel boundary between two adjacent cells —
+        // and mouseenter's hit-testing at an exact element boundary is
+        // flaky (some browsers/pointer speeds miss it entirely), which is
+        // exactly what handleCellMouseEnter relied on before this fix. It
+        // read as "sometimes doesn't insert evenly" — some rows silently
+        // never registered a mouseenter at all, and a virtualized row that
+        // scrolled off past the viewport edge never could either (dragging
+        // past the bottom of the visible table just... stopped extending).
+        // Same fix as row/column header drag-select above: derive the
+        // target cell directly from live cursor position + indexAtOffset,
+        // never from a specific element having to receive a mouse event.
+        const tbody = container.querySelector('tbody');
+        const gutter = container.querySelector('th.gutter-header');
+        if (tbody && gutter) {
+          const rowRect = tbody.getBoundingClientRect();
+          const colRect = gutter.getBoundingClientRect();
+          const rowCount = filteredSortedRowsRef.current.length;
+          const colCount = columnsRef.current.length;
+          const r = indexAtOffset(rowVirtualizer.measurementsCache, pos.y - rowRect.top, rowCount);
+          const c = indexAtOffset(columnOffsetsRef.current, pos.x - colRect.right, colCount);
+          setFillDragCurrent({ r, c });
+          setFillDragMousePos(pos);
+        }
       }
     };
 
     const tick = () => {
       dragScrollFrameRef.current = null;
-      if (!isRowRangeDraggingRef.current && !isColRangeDraggingRef.current) return;
+      if (!isRowRangeDraggingRef.current && !isColRangeDraggingRef.current && !fillDragActiveRef.current) return;
       const container = tableScrollRef.current;
       const pos = lastDragClientRef.current;
       if (container && pos) {
         const rect = container.getBoundingClientRect();
-        if (isRowRangeDraggingRef.current) {
+        // Fill-drag can extend in either axis (unlike row/column
+        // header drag-select, each locked to one), so it checks both
+        // scroll directions rather than picking one branch.
+        if (isRowRangeDraggingRef.current || fillDragActiveRef.current) {
           if (pos.y < rect.top + AUTO_SCROLL_MARGIN) {
             container.scrollTop -= Math.min(AUTO_SCROLL_MAX_SPEED, rect.top + AUTO_SCROLL_MARGIN - pos.y);
           } else if (pos.y > rect.bottom - AUTO_SCROLL_MARGIN) {
             container.scrollTop += Math.min(AUTO_SCROLL_MAX_SPEED, pos.y - (rect.bottom - AUTO_SCROLL_MARGIN));
           }
-        } else if (isColRangeDraggingRef.current) {
+        }
+        if (isColRangeDraggingRef.current || fillDragActiveRef.current) {
           if (pos.x < rect.left + AUTO_SCROLL_MARGIN) {
             container.scrollLeft -= Math.min(AUTO_SCROLL_MAX_SPEED, rect.left + AUTO_SCROLL_MARGIN - pos.x);
           } else if (pos.x > rect.right - AUTO_SCROLL_MARGIN) {
@@ -1168,9 +1204,14 @@ export function TableView({
     };
 
     const handleMouseMove = (e: MouseEvent) => {
-      if (!isRowRangeDraggingRef.current && !isColRangeDraggingRef.current) return;
+      if (!isRowRangeDraggingRef.current && !isColRangeDraggingRef.current && !fillDragActiveRef.current) return;
       lastDragClientRef.current = { x: e.clientX, y: e.clientY };
-      if (!hasDraggedPastThresholdRef.current) {
+      // The click-vs-drag pixel threshold below only applies to row/column
+      // header drag-select, which shares a plain click with "select just
+      // this one row/column" — fill-drag has no such ambiguity (it only
+      // ever starts from a dedicated mousedown on the tiny handle itself,
+      // see handleFillHandleMouseDown), so any movement counts immediately.
+      if (!fillDragActiveRef.current && !hasDraggedPastThresholdRef.current) {
         const start = dragStartClientRef.current;
         const dx = start ? e.clientX - start.x : 0;
         const dy = start ? e.clientY - start.y : 0;
@@ -1187,10 +1228,10 @@ export function TableView({
       if (dragScrollFrameRef.current !== null) cancelAnimationFrame(dragScrollFrameRef.current);
     };
     // Deliberately empty deps — everything read inside is a ref
-    // (filteredSortedRowsRef/columnsRef/columnOffsetsRef, the same
-    // always-current-ref pattern already used elsewhere in this file) or
-    // rowVirtualizer, which is stable across renders. This only needs to
-    // attach once.
+    // (filteredSortedRowsRef/columnsRef/columnOffsetsRef/fillDragActiveRef,
+    // the same always-current-ref pattern already used elsewhere in this
+    // file) or rowVirtualizer, which is stable across renders. This only
+    // needs to attach once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1555,17 +1596,28 @@ export function TableView({
   // Dashed preview rectangle shown while a fill drag is in progress —
   // pinned to the origin cell's own width/height on the axis that ISN'T
   // being extended (matching computeFillRange's own axis lock: a fill can
-  // only go straight down/up/left/right, never diagonal), with the other
-  // edge following the live cursor position. The origin cell is still
-  // `td.cell-selected` throughout the drag (fillDragActive suppresses the
-  // *handle*, not the selection itself), so the same query as above finds
-  // it.
+  // only go straight down/up/left/right, never diagonal). The origin cell
+  // is still `td.cell-selected` throughout the drag (fillDragActive
+  // suppresses the *handle*, not the selection itself), so the same query
+  // as above finds it.
+  //
+  // The moving edge snaps to the TARGET cell's own DOM rect (looked up by
+  // its row/column id, same `td[data-row-id][data-column-id]` selector
+  // TableView already uses elsewhere to find a specific cell without a
+  // ref-per-cell) — not the raw cursor position. A real, reported bug: it
+  // used to follow the mouse pixel-for-pixel, so the preview's edge sat
+  // wherever the cursor happened to be *inside* the target row/column
+  // instead of at that cell's actual boundary, cutting through the middle
+  // of it rather than covering it cleanly ("не идеально накладывается на
+  // ту ячейку"). Falls back to the cursor position only when the target
+  // cell isn't currently mounted (a very fast drag that outran the row
+  // virtualizer) — an approximation for that rare case, same as before.
   const [fillPreviewRect, setFillPreviewRect] = useState<{ top: number; left: number; width: number; height: number } | null>(
     null,
   );
   useLayoutEffect(() => {
     const scrollEl = tableScrollRef.current;
-    if (!scrollEl || !fillDragActive || !fillDragOrigin || !fillDragCurrent || !fillDragMousePos) {
+    if (!scrollEl || !fillDragActive || !fillDragOrigin || !fillDragCurrent) {
       setFillPreviewRect(null);
       return;
     }
@@ -1580,18 +1632,38 @@ export function TableView({
     const originLeft = cellRect.left - scrollRect.left + scrollEl.scrollLeft;
     const originBottom = originTop + cellRect.height;
     const originRight = originLeft + cellRect.width;
-    const mouseY = fillDragMousePos.y - scrollRect.top + scrollEl.scrollTop;
-    const mouseX = fillDragMousePos.x - scrollRect.left + scrollEl.scrollLeft;
+
+    const currentRow = filteredSortedRowsRef.current[fillDragCurrent.r];
+    const currentColumn = columnsRef.current[fillDragCurrent.c];
+    const targetCellEl =
+      currentRow && currentColumn
+        ? scrollEl.querySelector<HTMLElement>(`td[data-row-id="${currentRow.id}"][data-column-id="${currentColumn.id}"]`)
+        : null;
+    const targetRect = targetCellEl?.getBoundingClientRect() ?? null;
+    const targetTop = targetRect ? targetRect.top - scrollRect.top + scrollEl.scrollTop : null;
+    const targetLeft = targetRect ? targetRect.left - scrollRect.left + scrollEl.scrollLeft : null;
+    const mouseY = fillDragMousePos ? fillDragMousePos.y - scrollRect.top + scrollEl.scrollTop : null;
+    const mouseX = fillDragMousePos ? fillDragMousePos.x - scrollRect.left + scrollEl.scrollLeft : null;
 
     const dr = fillDragCurrent.r - fillDragOrigin.r;
     const dc = fillDragCurrent.c - fillDragOrigin.c;
     if (Math.abs(dr) >= Math.abs(dc)) {
-      const top = Math.min(originTop, mouseY);
-      const bottom = Math.max(originBottom, mouseY);
+      const edgeY = targetTop !== null && targetRect ? (dr >= 0 ? targetTop + targetRect.height : targetTop) : mouseY;
+      if (edgeY === null) {
+        setFillPreviewRect(null);
+        return;
+      }
+      const top = Math.min(originTop, edgeY);
+      const bottom = Math.max(originBottom, edgeY);
       setFillPreviewRect({ top, left: originLeft, width: cellRect.width, height: bottom - top });
     } else {
-      const left = Math.min(originLeft, mouseX);
-      const right = Math.max(originRight, mouseX);
+      const edgeX = targetLeft !== null && targetRect ? (dc >= 0 ? targetLeft + targetRect.width : targetLeft) : mouseX;
+      if (edgeX === null) {
+        setFillPreviewRect(null);
+        return;
+      }
+      const left = Math.min(originLeft, edgeX);
+      const right = Math.max(originRight, edgeX);
       setFillPreviewRect({ top: originTop, left, width: right - left, height: cellRect.height });
     }
   }, [fillDragActive, fillDragOrigin, fillDragCurrent, fillDragMousePos]);
@@ -1712,11 +1784,12 @@ export function TableView({
   // unaffected either way — it's a deliberate, keyboard-modified action,
   // not stray mouse movement.
   const handleCellMouseEnter = (r: number, c: number, e: ReactMouseEvent) => {
-    if (fillDragActiveRef.current) {
-      setFillDragCurrent({ r, c });
-      setFillDragMousePos({ x: e.clientX, y: e.clientY });
-      return;
-    }
+    // Fill-drag tracking no longer depends on this — see the global
+    // mousemove/indexAtOffset effect above (same fix as row/column header
+    // drag-select) for why per-cell mouseenter alone was unreliable right
+    // at the handle's own edge, exactly where a straight down/right drag
+    // naturally keeps the cursor.
+    if (fillDragActiveRef.current) return;
     if (!isRangeDraggingRef.current || !rangeAnchorRef.current) return;
     const start = dragStartPosRef.current;
     if (start && Math.hypot(e.clientX - start.x, e.clientY - start.y) < DRAG_SELECT_THRESHOLD_PX) return;
@@ -3182,6 +3255,7 @@ export function TableView({
               Object.values(replyStatusFilters).some((v) => v.length > 0)
             }
             canExportContacts={canExportContacts}
+            canExportReplies={canExportReplies}
             onClose={() => setExportDialogOpen(false)}
           />
         )}

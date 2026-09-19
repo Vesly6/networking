@@ -24,6 +24,7 @@ import { PlatformImpersonationBanner } from './components/PlatformImpersonationB
 import { Toast } from './components/Toast';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { TypeToConfirmDialog } from './components/TypeToConfirmDialog';
+import { EmployeeTasksPanel } from './components/Dashboard/EmployeeTasksPanel';
 import { Softphone } from './components/Softphone';
 import { ThemeToggle } from './components/ThemeToggle';
 import { SheetTabs } from './components/SheetTabs';
@@ -547,9 +548,22 @@ function App() {
       <PlatformImpersonationBanner />
       <ConfirmDialog />
       <TypeToConfirmDialog />
-      {!activeTable ? (
-        <div className="app">
-          {workspaceScreen !== 'tables' ? (
+      {/* Same "mounted once, fixed tree position" reasoning as Softphone
+          above — the employee tasks panel has to survive exactly the
+          Workspace ↔ Table jump it exists to make cheap (see
+          useEmployeeTasksPanelStore's own doc comment), so it can't live
+          inside either branch below. The wrapping flex div is the only
+          layout change this required: a real side-by-side reflow (the
+          panel pushes content over, it doesn't float on top of it) rather
+          than a fixed-position overlay, while adding nothing when the
+          panel is closed (EmployeeTasksPanel renders null, leaving this
+          div's single remaining child to fill it exactly as before). */}
+      <div className="app-with-side-panel">
+        <EmployeeTasksPanel onJumpToRow={jumpToTableRow} onJumpToContact={jumpToTableContact} />
+        <div className="app-main-content">
+          {!activeTable ? (
+            <div className="app">
+              {workspaceScreen !== 'tables' ? (
             <div className="workspace-view">
               <div className="workspace-header">
                 <div className="brand">
@@ -930,6 +944,8 @@ function App() {
           <Toast />
         </div>
       )}
+        </div>
+      </div>
     </>
   );
 }

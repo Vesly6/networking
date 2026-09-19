@@ -1,9 +1,31 @@
 import { useEffect, useState } from 'react';
-import { FileText, Users, Phone, Send, Mail, MailCheck, Percent, RefreshCw, ArrowUp, ArrowDown, ChevronDown, ChevronUp, ChevronRight } from 'lucide-react';
+import {
+  FileText,
+  Users,
+  Phone,
+  Send,
+  Mail,
+  MailCheck,
+  Percent,
+  RefreshCw,
+  ArrowUp,
+  ArrowDown,
+  ChevronDown,
+  ChevronUp,
+  ChevronRight,
+  Sparkles,
+} from 'lucide-react';
 import { useDashboardStore } from '../../store/useDashboardStore';
+import { useEmployeeTasksPanelStore } from '../../store/useEmployeeTasksPanelStore';
 import { useAuthStore } from '../../store/useAuthStore';
 import { can } from '../../utils/permissions';
-import { DASHBOARD_METRICS, fetchDashboardSyncLog, type DashboardMetric, type DashboardPeriod, type DashboardSyncLogEntry } from '../../utils/dashboardApi';
+import {
+  DASHBOARD_METRICS,
+  fetchDashboardSyncLog,
+  type DashboardMetric,
+  type DashboardPeriod,
+  type DashboardSyncLogEntry,
+} from '../../utils/dashboardApi';
 
 // 'Komentarai', not 'Pastabos' — matches this app's own already-established
 // term for the note-type column everywhere else (permissions.ts's
@@ -264,6 +286,12 @@ export function ActivityDashboard() {
     if (from && to) setPeriod('custom', { from, to });
   };
 
+  // "Atverti" opens the pinned EmployeeTasksPanel (mounted once at
+  // App.tsx's root — see its own doc comment) instead of a per-click
+  // modal, so checking a worker's 30 comments one at a time no longer
+  // means 30 separate open/close cycles.
+  const openTasksPanel = useEmployeeTasksPanelStore((s) => s.open);
+
 // Reused by every branch below (loading/error/loaded) so the collapse
   // toggle is always there regardless of load state — collapsing shouldn't
   // require the data to have finished loading first.
@@ -378,6 +406,12 @@ export function ActivityDashboard() {
                       label="Atsakymų rodiklis"
                       value={summary.email!.sent > 0 ? `${Math.round((summary.email!.replies / summary.email!.sent) * 1000) / 10}%` : '—'}
                     />
+                    <MetricCard
+                      icon={Sparkles}
+                      color={EMAIL_CARD_COLOR}
+                      label="Pozityvių atsakymų dalis"
+                      value={summary.email!.replies > 0 ? `${Math.round((summary.email!.positiveReplies / summary.email!.replies) * 1000) / 10}%` : '—'}
+                    />
                   </div>
                   {canDiagnose && <SourceLogToggle source="instantly" />}
                 </div>
@@ -403,7 +437,23 @@ export function ActivityDashboard() {
                       <tr key={w.workerId}>
                         <td>{w.workerName}</td>
                         {DASHBOARD_METRICS.map((m) => (
-                          <td key={m}>{w.metrics[m]}</td>
+                          <td key={m}>
+                            <span className="activity-dashboard-table-cell">
+                              <span>{w.metrics[m]}</span>
+                              {/* Only when there's something to actually open —
+                                  a zero-value cell has no underlying events to
+                                  drill into. */}
+                              {w.metrics[m] > 0 && (
+                                <button
+                                  type="button"
+                                  className="activity-dashboard-open-btn"
+                                  onClick={() => openTasksPanel(w.workerId, w.workerName, m)}
+                                >
+                                  Atverti
+                                </button>
+                              )}
+                            </span>
+                          </td>
                         ))}
                       </tr>
                     ))}
