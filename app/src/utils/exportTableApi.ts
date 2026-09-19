@@ -9,7 +9,7 @@
 import { LOCAL_API_BASE } from './localApi';
 import { getAuthToken, notifyUnauthorized } from './authToken';
 import { downloadBlob } from './csv';
-import type { ExportMode } from './exportFlatten';
+import type { ExportAxisOptions, ExportMode } from './exportFlatten';
 
 export interface RunExportParams {
   tableId: string;
@@ -19,7 +19,7 @@ export interface RunExportParams {
   columns: { id: string; name: string; type: string }[];
   includeCompaniesWithoutContacts: boolean;
   onlyContactsWithEmail: boolean;
-  prettyNotes: boolean;
+  axis: ExportAxisOptions;
   filename: string;
 }
 

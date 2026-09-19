@@ -1,10 +1,9 @@
 // Server-side twin of app/src/utils/exportNoteFields.ts — splits a
-// note-type column's raw JSON into two readable export columns (comments
-// vs. Instantly-reply-sourced entries). This app has no module shared
-// across the frontend/backend boundary (same constraint documented
-// throughout server/src/export/), so the parsing logic (mirrors
-// app/src/utils/noteHistory.ts's parseNoteHistory) and the reply field
-// list (mirrors app/src/utils/replyHistoryFormat.ts's
+// note-type column's raw JSON into structured comment/reply entry lists.
+// This app has no module shared across the frontend/backend boundary (same
+// constraint documented throughout server/src/export/), so the parsing
+// logic (mirrors app/src/utils/noteHistory.ts's parseNoteHistory) and the
+// reply field list (mirrors app/src/utils/replyHistoryFormat.ts's
 // REPLY_HEADER_FIELD_ORDER) are both ported here by hand — keep both
 // copies in sync if either ever changes.
 
@@ -59,14 +58,20 @@ function formatExportTimestamp(ms: number): string {
   return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
 }
 
-function formatCommentEntry(e: ParsedNoteEntry): string {
+/** `pretty=true` decorates with date/author (comments) or a labeled
+ * metadata block (replies) — see the client twin's own doc comment for why
+ * this flag no longer decides WHETHER entries get extracted, only how each
+ * one is rendered. */
+export function formatCommentEntry(e: ParsedNoteEntry, pretty: boolean): string {
+  if (!pretty) return e.text;
   const date = formatExportTimestamp(e.createdAt);
   const author = e.authorName ? ` (${e.authorName})` : '';
   const prefix = date ? `${date}${author}: ` : '';
   return `${prefix}${e.text}`;
 }
 
-function formatReplyEntry(e: ParsedNoteEntry): string {
+export function formatReplyEntry(e: ParsedNoteEntry, pretty: boolean): string {
+  if (!pretty) return e.text;
   const fields = e.replyFields ?? {};
   const statusLine = fields.lead_status ? `Statusas: ${fields.lead_status}` : null;
   const headerLines = REPLY_HEADER_FIELD_ORDER.map((key) => (fields[key] ? `${REPLY_FIELD_LABELS[key]}: ${fields[key]}` : null)).filter(
@@ -75,14 +80,16 @@ function formatReplyEntry(e: ParsedNoteEntry): string {
   return [...(statusLine ? [statusLine] : []), ...headerLines, '', e.text].join('\n');
 }
 
-export function splitNoteEntries(raw: string): { comments: string; replies: string } {
+export interface ExtractedNoteEntries {
+  comments: ParsedNoteEntry[];
+  replies: ParsedNoteEntry[];
+}
+
+export function extractNoteEntries(raw: string): ExtractedNoteEntries {
   const entries = parseNoteEntries(raw);
   const comments = entries.filter((e) => !e.replyFields);
   const replies = entries
     .filter((e) => e.replyFields)
     .sort((a, b) => (b.replyFields?.received_at ?? '').localeCompare(a.replyFields?.received_at ?? ''));
-  return {
-    comments: comments.map(formatCommentEntry).join('\n\n'),
-    replies: replies.map(formatReplyEntry).join('\n\n---\n\n'),
-  };
+  return { comments, replies };
 }

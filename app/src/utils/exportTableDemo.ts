@@ -15,7 +15,7 @@
 import Papa from 'papaparse';
 import type { Column, Row } from '../types';
 import { downloadCsv } from './csv';
-import { buildExportRows, type ExportMode } from './exportFlatten';
+import { buildExportRows, type ExportAxisOptions, type ExportMode } from './exportFlatten';
 
 export interface RunDemoExportParams {
   mode: ExportMode;
@@ -25,7 +25,7 @@ export interface RunDemoExportParams {
   contactColumnId: string | null;
   includeCompaniesWithoutContacts: boolean;
   onlyContactsWithEmail: boolean;
-  prettyNotes: boolean;
+  axis: ExportAxisOptions;
   filename: string;
 }
 
@@ -37,7 +37,7 @@ export async function runDemoExport(params: RunDemoExportParams): Promise<void> 
     contactColumnId: params.contactColumnId,
     includeCompaniesWithoutContacts: params.includeCompaniesWithoutContacts,
     onlyContactsWithEmail: params.onlyContactsWithEmail,
-    prettyNotes: params.prettyNotes,
+    axis: params.axis,
   });
 
   if (params.format === 'csv') {

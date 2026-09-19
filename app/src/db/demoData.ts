@@ -90,11 +90,17 @@ function relativeDate(offsetDays: number): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-function serializeContacts(entries: { id: string; text: string }[]): string {
+// Loosely typed (not ContactEntry/NoteEntry) since this is throwaway
+// demo-seed JSON, not real app state — some rows below attach extra
+// fields (sentCount/senders/replyFields) the base {id,text}/
+// {id,text,createdAt} shape doesn't carry, specifically to exercise the
+// export dialog's contact-sender and replies axes in demo mode (see this
+// function's own call sites below).
+function serializeContacts(entries: Record<string, unknown>[]): string {
   return JSON.stringify(entries);
 }
 
-function serializeNoteHistory(entries: { id: string; text: string; createdAt: number }[]): string {
+function serializeNoteHistory(entries: Record<string, unknown>[]): string {
   return JSON.stringify(entries);
 }
 
@@ -134,21 +140,58 @@ function buildCompaniesTable(): { table: TableMeta; rows: Row[] } {
     const p1 = personName(i);
     const p2 = personName(i + 41);
     const contact1Id = randomUUID();
-    const contacts = serializeContacts([
+    const daysAgo = (n: number) => now - n * 24 * 60 * 60 * 1000;
+    // Deliberately uneven contact counts (0 / 1 / 2 / 5+), not always
+    // exactly 2 — on explicit request, so the Export dialog's "Contact
+    // N columns" limit+overflow behavior has something real to show in
+    // demo mode instead of a uniform, unrealistic-looking count everywhere.
+    const contactCountBucket = i % 10;
+    const baseContacts: Record<string, unknown>[] = [
       {
         id: contact1Id,
         text: `${p1.first} ${p1.last}, ${pick(TITLES, i)}, ${p1.first.toLowerCase()}.${p1.last.toLowerCase()}@${domain(i)}, +370 6${(10000000 + i * 37) % 90000000}`,
+        // Populated on a handful of rows only — exercises the "with
+        // contacts" export's own dynamic Siuntėjas-N columns in demo mode.
+        ...(i % 6 === 0 ? { sentCount: 2, senders: [{ email: 'sales@irms.io', date: '2026.08.20' }, { email: 'outreach@irms.io', date: '2026.07.02' }] } : {}),
       },
-      {
-        id: randomUUID(),
-        text: `${p2.first} ${p2.last}, ${pick(TITLES, i + 5)}, ${p2.first.toLowerCase()}.${p2.last.toLowerCase()}@${domain(i)}`,
-      },
-    ]);
-    const daysAgo = (n: number) => now - n * 24 * 60 * 60 * 1000;
-    const noteEntries = [
+      { id: randomUUID(), text: `${p2.first} ${p2.last}, ${pick(TITLES, i + 5)}, ${p2.first.toLowerCase()}.${p2.last.toLowerCase()}@${domain(i)}` },
+    ];
+    const extraContacts: Record<string, unknown>[] = contactCountBucket === 7
+      ? Array.from({ length: 4 }, (_, j) => {
+          const p = personName(i + 100 + j);
+          return { id: randomUUID(), text: `${p.first} ${p.last}, ${pick(TITLES, i + j)}, ${p.first.toLowerCase()}@${domain(i)}` };
+        })
+      : [];
+    const contactsForRow =
+      contactCountBucket === 0 ? [] : contactCountBucket === 1 ? baseContacts.slice(0, 1) : [...baseContacts, ...extraContacts];
+    const contacts = serializeContacts(contactsForRow);
+    const noteEntries: Record<string, unknown>[] = [
       { id: randomUUID(), text: pick(CALL_NOTE_TEMPLATES, i), createdAt: daysAgo(1 + (i % 10)) },
       ...(i % 3 === 0 ? [{ id: randomUUID(), text: `Call ${p1.first} ${p1.last}`, createdAt: daysAgo(2 + (i % 14)) }] : []),
       ...(i % 5 === 0 ? [{ id: randomUUID(), text: `${p2.first} ${p2.last} Didn't answer`, createdAt: daysAgo(3 + (i % 9)) }] : []),
+      // A handful of rows get an Instantly-reply-shaped entry too — the
+      // only way the Export dialog's "Atsakymų istorija" axis has
+      // anything real to extract in demo mode (see exportNoteFields.ts's
+      // own replyFields-presence check).
+      ...(i % 7 === 0
+        ? [
+            {
+              id: randomUUID(),
+              text: 'Thanks for reaching out, this looks interesting — can we set up a call next week?',
+              createdAt: daysAgo(i % 6),
+              replyFields: {
+                campaign_name: 'Q3 Outreach',
+                sender_email: 'sales@irms.io',
+                received_at: relativeDate(-(i % 6)),
+                reply_subject: 'Re: Quick question',
+                first_name: p1.first,
+                company_name: companyName(i),
+                lead_email: `${p1.first.toLowerCase()}.${p1.last.toLowerCase()}@${domain(i)}`,
+                lead_status: 'Interested',
+              },
+            },
+          ]
+        : []),
     ];
     const hasNextCall = i % 3 === 0;
     const nextCallOffset = i < 6 ? i - 2 : ((i * 5 + 2) % 40) - 15;
